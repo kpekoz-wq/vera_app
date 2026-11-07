@@ -1,4 +1,5 @@
 import com.android.build.api.dsl.ApplicationExtension
+import com.google.firebase.appdistribution.gradle.firebaseAppDistribution
 import java.io.FileInputStream
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -8,6 +9,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.firebase.appdistribution)
 }
 
 extensions.configure<ApplicationExtension> {
@@ -43,6 +45,16 @@ extensions.configure<ApplicationExtension> {
     }
 
     buildTypes {
+        getByName("debug") {
+            firebaseAppDistribution {
+                appId = "1:123456789012:android:0123456789abcdef" // Replace with your Firebase App ID
+                testers = "tester1@example.com, tester2@example.com"
+                groups = "qa-team, internal-testers"
+                releaseNotes = "Automated test build from Gradle"
+                artifactType = "APK"
+            }
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(
