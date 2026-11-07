@@ -530,6 +530,39 @@ class BluetoothObdManager {
         _vehicleVin.value = vinStr
         _vehicleDetails.value = vehicleDetailsStr
 
+        if (demoPreset == DemoVehiclePreset.DIRTY_ECU) {
+            val dirtyDtcs = listOf("P0305", "P0171")
+            _metrics.value = _metrics.value.copy(
+                dtcs = dirtyDtcs,
+                rpm = 740,
+                coolantTemp = 98,
+                fuelTrim = 14,
+                engineLoad = 32
+            )
+            _mode06Results.value = listOf(
+                Mode06TestResult("A1", "Misfire", "General / Total Misfires", 18.0, 0.0, 10.0, "misfires", Mode06Status.FAIL, "General / Total Misfires: 18 detected misfires (FAIL)"),
+                Mode06TestResult("A2", "Misfire", "Cylinder 1 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 1 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A3", "Misfire", "Cylinder 2 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 2 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A4", "Misfire", "Cylinder 3 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 3 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A5", "Misfire", "Cylinder 4 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 4 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A6", "Misfire", "Cylinder 5 Misfires", 14.0, 0.0, 10.0, "misfires", Mode06Status.FAIL, "Cylinder 5 Misfires: 14 detected misfires (FAIL)"),
+                Mode06TestResult("A7", "Misfire", "Cylinder 6 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 6 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A8", "Misfire", "Cylinder 7 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 7 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A9", "Misfire", "Cylinder 8 Misfires", 0.0, 0.0, 10.0, "misfires", Mode06Status.PASS, "Cylinder 8 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("21", "Catalyst", "Catalyst Efficiency Bank 1", 1.85, 0.8, 2.0, "counts", Mode06Status.WARNING, "Catalyst Efficiency Bank 1: Measured 2 (Min: 0 | Max: 2) - Near Limit"),
+                Mode06TestResult("39", "EVAP System", "EVAP Leak Monitor (0.150\")", 12.0, 0.0, 500.0, "Pa", Mode06Status.PASS, "EVAP Leak Monitor: Measured 12 Pa (Min: 0 | Max: 500)")
+            )
+        } else {
+            _metrics.value = _metrics.value.copy(
+                dtcs = emptyList(),
+                rpm = 780,
+                coolantTemp = 90,
+                fuelTrim = 1,
+                engineLoad = 22
+            )
+            _mode06Results.value = emptyList()
+        }
+
         // Trigger OBDb Signalset Loader for Demo Vehicle (Ford F-150 2007)
         ioScope.launch {
             loadObdbForVehicle("Ford", "F-150", 2007)
@@ -599,14 +632,18 @@ class BluetoothObdManager {
 
                 val rpmVal = currentList.find { it.pid.pidHex == "0C" }?.rawValue?.toInt() ?: 780
                 val coolantVal = currentList.find { it.pid.pidHex == "05" }?.rawValue?.toInt() ?: 90
+                val fuelTrimVal = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 14 else 1
+                val engineLoadVal = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 32 else 22
+                val currentDtcs = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) listOf("P0305", "P0171") else emptyList()
                 _metrics.value = _metrics.value.copy(
                     rpm = rpmVal,
                     coolantTemp = coolantVal,
                     speed = 0,
-                    engineLoad = 22,
-                    fuelTrim = 1,
+                    engineLoad = engineLoadVal,
+                    fuelTrim = fuelTrimVal,
                     maf = 4.2,
-                    throttlePosition = 14
+                    throttlePosition = 14,
+                    dtcs = currentDtcs
                 )
 
                 delay(250)
