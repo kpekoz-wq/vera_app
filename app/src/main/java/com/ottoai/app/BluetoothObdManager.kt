@@ -43,6 +43,7 @@ fun formatValueWithUnit(rawValue: Double, pid: ObdPidDefinition, unitSystem: Uni
                 "km/h" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue * 0.621371), "mph")
                 "°C" -> Pair(String.format(java.util.Locale.US, "%.0f", (rawValue * 1.8) + 32), "°F")
                 "kPa" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue * 0.145038), "psi")
+                "bar" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue * 14.5038), "psi")
                 "Pa" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue / 6894.76), "psi")
                 "km" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue * 0.621371), "miles")
                 "L/h" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue * 0.264172), "GPH")
@@ -51,7 +52,13 @@ fun formatValueWithUnit(rawValue: Double, pid: ObdPidDefinition, unitSystem: Uni
                 "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "%")
                 "A/F" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "A/F")
                 "V" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "V")
-                "ratio" -> Pair(String.format(java.util.Locale.US, "%.3f", rawValue), "ratio")
+                "ratio", "Ratio" -> Pair(String.format(java.util.Locale.US, "%.3f", rawValue), "ratio")
+                "Nm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue * 0.737562), "lb-ft")
+                "mm" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue * 0.0393701), "in")
+                "Gear" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Gear")
+                "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "counts")
+                "ppm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "ppm")
+                "mg/stroke" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "mg/stroke")
                 else -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), pid.unit)
             }
         }
@@ -60,6 +67,7 @@ fun formatValueWithUnit(rawValue: Double, pid: ObdPidDefinition, unitSystem: Uni
                 "km/h" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "km/h")
                 "°C" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "°C")
                 "kPa" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "kPa")
+                "bar" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "bar")
                 "Pa" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Pa")
                 "km" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "km")
                 "L/h" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "L/h")
@@ -67,6 +75,12 @@ fun formatValueWithUnit(rawValue: Double, pid: ObdPidDefinition, unitSystem: Uni
                 "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "%")
                 "A/F" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "A/F")
                 "V" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "V")
+                "Nm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Nm")
+                "mm" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "mm")
+                "Gear" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Gear")
+                "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "counts")
+                "ppm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "ppm")
+                "mg/stroke" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "mg/stroke")
                 else -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), pid.unit)
             }
         }
@@ -82,7 +96,7 @@ data class LiveStreamData(
     val lastUpdated: Long = System.currentTimeMillis()
 )
 
-// Master Registry of Known OBD-II Mode 01 PIDs
+// Master Registry of Known OBD-II Mode 01 PIDs (SAE J1979 Comprehensive)
 object ObdPidRegistry {
     val KNOWN_PIDS = mapOf(
         "01" to ObdPidDefinition("01", "0101", "DTC Status", "codes", "Monitors & DTC Count", 4) { a -> (a[0] and 0x7F).toDouble() },
@@ -142,12 +156,40 @@ object ObdPidRegistry {
         "4C" to ObdPidDefinition("4C", "014C", "Commanded Throttle Actuator", "%", "Commanded Throttle Actuator Position", 1) { a -> (a[0] * 100) / 255.0 },
         "4D" to ObdPidDefinition("4D", "014D", "Time Run MIL On", "min", "Engine Run Time with MIL On", 2) { a -> ((a[0] * 256) + a[1]).toDouble() },
         "4E" to ObdPidDefinition("4E", "014E", "Time Since Cleared", "min", "Engine Run Time Since DTCs Cleared", 2) { a -> ((a[0] * 256) + a[1]).toDouble() },
+        "51" to ObdPidDefinition("51", "0151", "Fuel Type", "", "Fuel Type Vehicle Runs On", 1) { a -> a[0].toDouble() },
         "52" to ObdPidDefinition("52", "0152", "Ethanol Fuel Level", "%", "Ethanol Fuel Percentage", 1) { a -> (a[0] * 100) / 255.0 },
         "53" to ObdPidDefinition("53", "0153", "Abs EVAP Vapor Pressure", "kPa", "Absolute EVAP System Vapor Pressure", 2) { a -> ((a[0] * 256) + a[1]) / 200.0 },
+        "54" to ObdPidDefinition("54", "0154", "EVAP Vapor Pressure (Alt)", "Pa", "Evap System Vapor Pressure (Alt)", 2) { a -> (((a[0] shl 8) or a[1]).toShort().toDouble()) - 32767.0 },
         "59" to ObdPidDefinition("59", "0159", "Absolute Fuel Rail Pressure", "kPa", "Absolute Fuel Rail Pressure", 2) { a -> ((a[0] * 256) + a[1]) * 10.0 },
         "5A" to ObdPidDefinition("5A", "015A", "Relative Pedal Position", "%", "Relative Accelerator Pedal Position", 1) { a -> (a[0] * 100) / 255.0 },
+        "5B" to ObdPidDefinition("5B", "015B", "Hybrid Battery Remaining", "%", "Hybrid Battery Pack Remaining Life", 1) { a -> (a[0] * 100) / 255.0 },
         "5C" to ObdPidDefinition("5C", "015C", "Engine Oil Temp", "°C", "Engine Oil Temperature", 1) { a -> (a[0] - 40).toDouble() },
-        "5E" to ObdPidDefinition("5E", "015E", "Engine Fuel Rate", "L/h", "Engine Fuel Rate", 2) { a -> ((a[0] * 256) + a[1]) / 20.0 }
+        "5D" to ObdPidDefinition("5D", "015D", "Fuel Injection Timing", "°", "Fuel Injection Timing", 2) { a -> (((a[0] * 256) + a[1]) - 26880) / 128.0 },
+        "5E" to ObdPidDefinition("5E", "015E", "Engine Fuel Rate", "L/h", "Engine Fuel Rate", 2) { a -> ((a[0] * 256) + a[1]) / 20.0 },
+        "61" to ObdPidDefinition("61", "0161", "Driver Demand Torque", "%", "Driver's Demand Engine Percent Torque", 1) { a -> (a[0] - 125).toDouble() },
+        "62" to ObdPidDefinition("62", "0162", "Actual Engine Torque", "%", "Actual Engine Percent Torque", 1) { a -> (a[0] - 125).toDouble() },
+        "63" to ObdPidDefinition("63", "0163", "Reference Torque", "Nm", "Engine Reference Torque", 2) { a -> ((a[0] * 256) + a[1]).toDouble() },
+        "67" to ObdPidDefinition("67", "0167", "Coolant Temp Sensor 1", "°C", "Engine Coolant Temperature Sensor 1", 1) { a -> (a[0] - 40).toDouble() },
+        "68" to ObdPidDefinition("68", "0168", "Intake Air Temp B1S1", "°C", "Intake Air Temperature Bank 1 Sensor 1", 1) { a -> (a[0] - 40).toDouble() },
+        "6F" to ObdPidDefinition("6F", "016F", "Turbo Inlet Pressure", "kPa", "Turbocharger Compressor Inlet Pressure", 1) { a -> a[0].toDouble() },
+        "70" to ObdPidDefinition("70", "0170", "Boost Pressure Control", "kPa", "Boost Pressure Control Target", 2) { a -> ((a[0] * 256) + a[1]) / 32.0 },
+        "71" to ObdPidDefinition("71", "0171", "VGT Turbo Control", "%", "Variable Geometry Turbocharger (VGT) Control", 1) { a -> (a[0] * 100) / 255.0 },
+        "72" to ObdPidDefinition("72", "0172", "Wastegate Control", "%", "Wastegate Position Control", 1) { a -> (a[0] * 100) / 255.0 },
+        "73" to ObdPidDefinition("73", "0173", "Exhaust Pressure", "kPa", "Exhaust Pressure Gauge", 2) { a -> ((a[0] * 256) + a[1]) / 10.0 },
+        "74" to ObdPidDefinition("74", "0174", "Turbocharger RPM", "RPM", "Turbocharger Shaft Speed", 2) { a -> ((a[0] * 256) + a[1]).toDouble() },
+        "75" to ObdPidDefinition("75", "0175", "Turbo Temp 1", "°C", "Turbocharger Compressor Temperature", 1) { a -> (a[0] - 40).toDouble() },
+        "77" to ObdPidDefinition("77", "0177", "Charge Air Cooler Temp", "°C", "Charge Air Cooler Temperature (CACT)", 1) { a -> (a[0] - 40).toDouble() },
+        "78" to ObdPidDefinition("78", "0178", "Exhaust Gas Temp B1S1", "°C", "Exhaust Gas Temperature (EGT) Bank 1 Sensor 1", 2) { a -> (((a[0] * 256) + a[1]) / 10.0) - 40.0 },
+        "79" to ObdPidDefinition("79", "0179", "Exhaust Gas Temp B2S1", "°C", "Exhaust Gas Temperature (EGT) Bank 2 Sensor 1", 2) { a -> (((a[0] * 256) + a[1]) / 10.0) - 40.0 },
+        "7A" to ObdPidDefinition("7A", "017A", "DPF Differential Press", "kPa", "Diesel Particulate Filter Differential Pressure", 2) { a -> ((a[0] * 256) + a[1]) / 100.0 },
+        "7C" to ObdPidDefinition("7C", "017C", "DPF Temperature", "°C", "Diesel Particulate Filter Temperature", 2) { a -> (((a[0] * 256) + a[1]) / 10.0) - 40.0 },
+        "85" to ObdPidDefinition("85", "0185", "Fuel Rail Pressure Direct", "kPa", "High Pressure Common Rail Fuel Direct Injection", 2) { a -> ((a[0] * 256) + a[1]) * 10.0 },
+        "86" to ObdPidDefinition("86", "0186", "NOx Concentration", "ppm", "NOx Sensor Concentration", 2) { a -> ((a[0] * 256) + a[1]).toDouble() },
+        "87" to ObdPidDefinition("87", "0187", "DEF Tank Temp", "°C", "SCR Diesel Exhaust Fluid (DEF) Tank Temperature", 1) { a -> (a[0] - 40).toDouble() },
+        "A1" to ObdPidDefinition("A1", "01A1", "DEF Tank Level", "%", "Diesel Exhaust Fluid (DEF) / AdBlue Tank Level", 1) { a -> (a[0] * 100) / 255.0 },
+        "A2" to ObdPidDefinition("A2", "01A2", "Cylinder Fuel Rate", "mg/stroke", "Cylinder Fuel Rate", 2) { a -> ((a[0] * 256) + a[1]) / 32.0 },
+        "A4" to ObdPidDefinition("A4", "01A4", "Transmission Actual Gear", "Gear", "Transmission Actual Commanded Gear", 1) { a -> (a[0] and 0x0F).toDouble() },
+        "A6" to ObdPidDefinition("A6", "01A6", "Universal Odometer", "km", "Vehicle Total Odometer (Universal 2019+)", 4) { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else 0.0 }
     )
 
     val DEFAULT_PIDS = listOf(
@@ -259,8 +301,8 @@ data class Mode22StreamData(
 object Mode22Registry {
     val KNOWN_PIDS = listOf(
         // Ford / Lincoln / Mercury
-        Mode22PidDefinition("1E1C", "Transmission Temp", "Transmission", "°C", "Ford Transmission Fluid Temp", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 16.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1E01", "Transmission Temp Alt", "Transmission", "°C", "Ford Automatic Transmission Temp", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1E1C", "Transmission Temp", "Transmission", "°C", "Ford Transmission Fluid Temp (5R55/6R80/4R75)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 16.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1E01", "Transmission Temp Alt", "Transmission", "°C", "Ford Automatic Transmission Temp (5R110)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("0931", "Transmission Temp Alt 2", "Transmission", "°C", "Ford Transmission Temp 6R80/10R80", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 16.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1674", "Cylinder Head Temp", "Engine", "°C", "Ford Cylinder Head Temperature (CHT)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 64.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) },
         Mode22PidDefinition("1672", "Cylinder Head Temp Raw", "Engine", "°C", "Ford Cylinder Head Temperature Raw", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
@@ -269,34 +311,63 @@ object Mode22Registry {
         Mode22PidDefinition("056D", "Engine Oil Switch", "Engine Oil", "psi", "Ford Engine Oil Pressure Switch", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.5 },
         Mode22PidDefinition("1310", "Engine Oil Temp", "Engine Oil", "°C", "Ford Engine Oil Temperature", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("0483", "EcoBoost Turbo Pressure", "Engine Boost", "psi", "Ford EcoBoost Turbocharger Gauge Pressure", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) * 0.03625) - 14.7 else 0.0 },
+        Mode22PidDefinition("0484", "EcoBoost Turbo Compressor", "Engine Boost", "psi", "Ford EcoBoost Compressor Outlet Pressure", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) * 0.03625) - 14.7 else 0.0 },
         Mode22PidDefinition("162B", "Torque Converter Slip", "Transmission", "RPM", "Ford Torque Converter Lockup Slip Speed", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 4.0 else 0.0 },
         Mode22PidDefinition("092A", "Torque Converter Slip Alt", "Transmission", "RPM", "Ford Torque Converter Lockup Slip", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 4.0 else 0.0 },
         Mode22PidDefinition("162C", "Transmission Gear Ratio", "Transmission", "Ratio", "Ford Transmission Gear Ratio", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
+        Mode22PidDefinition("11B3", "Transmission Commanded Gear", "Transmission", "Gear", "Ford Transmission Commanded Gear", "Ford") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
         Mode22PidDefinition("160E", "A/C Pressure Voltage", "Climate", "V", "Ford A/C Pressure Sensor Voltage", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1023.0 * 5.0 else 0.0 },
         Mode22PidDefinition("0322", "A/C Pressure Gauge", "Climate", "psi", "Ford A/C Refrigerant Pressure", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.145 else 0.0 },
         Mode22PidDefinition("11B6", "Fuel Rail High Pressure", "Fuel System", "kPa", "Ford Direct Injection High Pressure System", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 10.0 else 0.0 },
+        Mode22PidDefinition("11B7", "Fuel Pump Commanded", "Fuel System", "kPa", "Ford High Pressure Fuel Pump Commanded", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 10.0 else 0.0 },
         Mode22PidDefinition("054B", "Engine Oil Life", "Maintenance", "%", "Ford Engine Oil Life Remaining Index", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("1801", "AWD Clutch Duty", "Drivetrain", "%", "Ford AWD Transfer Case Torque Split Duty Cycle", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("404C", "Cluster Odometer", "Maintenance", "km", "Ford Instrument Cluster Total Odometer (2004-2008 F-150)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() * 0.1 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() * 0.1 else 0.0 },
-        Mode22PidDefinition("DD01", "Vehicle Odometer", "Maintenance", "km", "Ford Total Vehicle Odometer", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("404C", "Cluster Odometer", "Maintenance", "km", "Ford Instrument Cluster Total Odometer (2004-2008 F-150 / HEC)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() * 0.1 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() * 0.1 else 0.0 },
+        Mode22PidDefinition("DD01", "Vehicle Odometer", "Maintenance", "km", "Ford Total Vehicle Odometer (IPC / BCM)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("042F", "Battery State of Charge", "Electrical", "%", "Ford 12V Battery State of Charge (BMS)", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("042C", "Battery Voltage (BCM)", "Electrical", "V", "Ford Battery Terminal Voltage (BCM)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("11A2", "DPF Soot Load", "Emissions", "%", "Ford Diesel Particulate Filter Soot Load", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("11A3", "Exhaust Gas Temp 1", "Emissions", "°C", "Ford Exhaust Gas Temperature EGT1", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
+        Mode22PidDefinition("11A4", "Exhaust Gas Temp 2", "Emissions", "°C", "Ford Exhaust Gas Temperature EGT2", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
+        Mode22PidDefinition("03B6", "Charge Air Cooler Temp", "Engine", "°C", "Ford Charge Air Cooler Temp (CAC)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("11A6", "Knock Retard Cyl 1", "Engine", "°", "Ford Knock Retard Cylinder 1", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
 
-        // GM / Chevrolet / GMC / Buick / Cadillac
-        Mode22PidDefinition("1940", "Transmission Temp", "Transmission", "°C", "GM Transmission Fluid Temp", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        // GM / Chevrolet / GMC / Buick / Cadillac / Pontiac / Saturn
+        Mode22PidDefinition("1940", "Transmission Temp", "Transmission", "°C", "GM Transmission Fluid Temp (4L60E/4L80E)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1942", "Transmission Temp Alt", "Transmission", "°C", "GM Transmission Fluid Temp (6L80/8L90/10L90)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1943", "Torque Converter Slip", "Transmission", "RPM", "GM Torque Converter Clutch Slip", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
+        Mode22PidDefinition("1999", "Transmission Current Gear", "Transmission", "Gear", "GM Transmission Commanded Gear", "GM") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
         Mode22PidDefinition("1154", "Engine Oil Temp", "Engine Oil", "°C", "GM Engine Oil Temperature", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1150", "Engine Oil Pressure", "Engine Oil", "kPa", "GM Engine Oil Pressure", "GM") { a -> (a.getOrNull(0) ?: 0) * 4.0 },
         Mode22PidDefinition("1162", "Knock Retard", "Engine", "°", "GM Knock Retard Total", "GM") { a -> (a.getOrNull(0) ?: 0) * 0.3515 },
+        Mode22PidDefinition("1163", "Knock Retard Cyl 1", "Engine", "°", "GM Knock Retard Cylinder 1", "GM") { a -> (a.getOrNull(0) ?: 0) * 0.3515 },
         Mode22PidDefinition("11A1", "Fuel Rail High Pressure", "Fuel System", "kPa", "GM Direct Injection Fuel Pressure", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.1 else 0.0 },
         Mode22PidDefinition("115A", "Engine Oil Life", "Maintenance", "%", "GM Oil Life Remaining Percentage", "GM") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("115C", "Vehicle Odometer", "Maintenance", "km", "GM Total Distance Odometer", "GM") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 64.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("1141", "Ethanol Alcohol Percent", "Fuel System", "%", "GM FlexFuel Alcohol Content Sensor", "GM") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("1153", "Boost Pressure Sensor", "Engine Boost", "kPa", "GM Turbocharger / Supercharger Boost", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.05 else 0.0 },
+        Mode22PidDefinition("11B4", "Exhaust Gas Temp 1", "Emissions", "°C", "GM Duramax Exhaust Gas Temp 1", "GM") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
+        Mode22PidDefinition("11BD", "DPF Soot Mass", "Emissions", "g", "GM Duramax DPF Soot Accumulation Mass", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("1165", "Camshaft Retard Offset", "Engine", "°", "GM CMP Camshaft Retard Offset", "GM") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
 
         // Toyota / Lexus / Scion
         Mode22PidDefinition("1620", "Transmission Pan Temp", "Transmission", "°C", "Toyota Transmission Fluid Temp Pan", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1621", "Transmission Outlet Temp", "Transmission", "°C", "Toyota Torque Converter Outlet Temp", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1624", "ATF Degradation Index", "Transmission", "counts", "Toyota Automatic Transmission Fluid Degradation", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
         Mode22PidDefinition("1101", "Engine Oil Temp", "Engine Oil", "°C", "Toyota Engine Oil Temperature", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1625", "Hybrid HV Battery SoC", "Battery", "%", "Toyota High Voltage Battery State of Charge", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0) ?: 0) * 0.5 },
         Mode22PidDefinition("1630", "Hybrid HV Battery Voltage", "Battery", "V", "Toyota High Voltage Battery Voltage", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.1 else 0.0 },
         Mode22PidDefinition("1635", "HV Battery Cell Delta", "Hybrid Battery", "V", "Toyota High Voltage Battery Cell Max-Min Delta", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
+        Mode22PidDefinition("1628", "Hybrid MG1 Inverter Temp", "Hybrid Battery", "°C", "Toyota Hybrid Motor Generator 1 Inverter Temp", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1629", "Hybrid MG2 Inverter Temp", "Hybrid Battery", "°C", "Toyota Hybrid Motor Generator 2 Inverter Temp", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1638", "Hybrid MG1 RPM", "Hybrid Battery", "RPM", "Toyota Hybrid Motor Generator 1 Speed", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
+        Mode22PidDefinition("1639", "Hybrid MG2 RPM", "Hybrid Battery", "RPM", "Toyota Hybrid Motor Generator 2 Speed", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
+        Mode22PidDefinition("1631", "Auxiliary 12V Voltage", "Electrical", "V", "Toyota 12V Auxiliary Battery Voltage", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
         Mode22PidDefinition("1626", "Vehicle Odometer", "Maintenance", "km", "Toyota Vehicle Total Odometer", "Toyota", servicePrefix = "21") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("1681", "Tire Pressure FL", "Chassis", "psi", "Toyota TPMS Front Left Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
+        Mode22PidDefinition("1682", "Tire Pressure FR", "Chassis", "psi", "Toyota TPMS Front Right Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
+        Mode22PidDefinition("1683", "Tire Pressure RL", "Chassis", "psi", "Toyota TPMS Rear Left Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
+        Mode22PidDefinition("1684", "Tire Pressure RR", "Chassis", "psi", "Toyota TPMS Rear Right Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
         Mode22PidDefinition("1620", "Transmission Pan Temp Alt", "Transmission", "°C", "Toyota Transmission Fluid Temp Pan", "Toyota", servicePrefix = "22") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1621", "Transmission Outlet Temp Alt", "Transmission", "°C", "Toyota Torque Converter Outlet Temp", "Toyota", servicePrefix = "22") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1101", "Engine Oil Temp Alt", "Engine Oil", "°C", "Toyota Engine Oil Temperature", "Toyota", servicePrefix = "22") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
@@ -305,38 +376,89 @@ object Mode22Registry {
         Mode22PidDefinition("2201", "Transmission Temp", "Transmission", "°C", "Honda Automatic Transmission Temp", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("2205", "Engine Oil Temp", "Engine Oil", "°C", "Honda Engine Oil Temperature", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("2210", "VTEC Solenoid Pressure", "Engine", "kPa", "Honda VTEC Pressure Solenoid", "Honda") { a -> (a.getOrNull(0) ?: 0) * 2.5 },
+        Mode22PidDefinition("2208", "Knock Retard", "Engine", "°", "Honda Knock Retard", "Honda") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
+        Mode22PidDefinition("2209", "CVT Pulley Ratio", "Transmission", "Ratio", "Honda CVT Pulley Speed Ratio", "Honda") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
+        Mode22PidDefinition("2220", "Hybrid IMA Battery SoC", "Battery", "%", "Honda IMA Hybrid Battery State of Charge", "Honda") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("2221", "Hybrid IMA Motor Temp", "Battery", "°C", "Honda IMA Hybrid Electric Motor Temp", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("2202", "Vehicle Odometer", "Maintenance", "km", "Honda Vehicle Total Odometer", "Honda") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("2203", "Fuel Tank Level (Liters)", "Fuel System", "L", "Honda Fuel Remaining in Tank", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.5 },
 
-        // Chrysler / Dodge / Jeep / Ram
+        // Chrysler / Dodge / Jeep / Ram / Fiat
         Mode22PidDefinition("111E", "Transmission Temp", "Transmission", "°C", "Chrysler Transmission Fluid Temp", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("2101", "Transmission Temp Alt", "Transmission", "°C", "Chrysler Transmission Temp (Nag1/8HP70)", "Chrysler", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("111D", "Engine Oil Temp", "Engine Oil", "°C", "Chrysler Engine Oil Temperature", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1122", "Engine Oil Pressure", "Engine Oil", "psi", "Chrysler Engine Oil Pressure", "Chrysler") { a -> (a.getOrNull(0) ?: 0) * 1.0 },
+        Mode22PidDefinition("1120", "Torque Converter Slip", "Transmission", "RPM", "Chrysler Torque Converter Lockup Slip", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
+        Mode22PidDefinition("1130", "Cummins Fuel Rail Pressure", "Fuel System", "psi", "Chrysler Cummins Diesel Fuel Rail Pressure", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 1.0 else 0.0 },
+        Mode22PidDefinition("1131", "Cummins Turbo Boost", "Engine Boost", "psi", "Chrysler Cummins Turbocharger Boost Pressure", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.05 else 0.0 },
+        Mode22PidDefinition("1132", "Cummins Pre-Turbo EGT", "Emissions", "°C", "Chrysler Cummins Exhaust Gas Temp Pre-Turbo", "Chrysler") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
+        Mode22PidDefinition("1133", "Cummins DPF Soot Load", "Emissions", "%", "Chrysler Cummins DPF Soot Percentage", "Chrysler") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("01B4", "Vehicle Odometer", "Maintenance", "km", "Chrysler Total Vehicle Mileage", "Chrysler") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("1140", "Tire Pressure FL", "Chassis", "psi", "Chrysler TPMS Front Left Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
+        Mode22PidDefinition("1141", "Tire Pressure FR", "Chassis", "psi", "Chrysler TPMS Front Right Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
+        Mode22PidDefinition("1142", "Tire Pressure RL", "Chassis", "psi", "Chrysler TPMS Rear Left Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
+        Mode22PidDefinition("1143", "Tire Pressure RR", "Chassis", "psi", "Chrysler TPMS Rear Right Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
 
         // Nissan / Infiniti
-        Mode22PidDefinition("0005", "CVT Fluid Temp", "Transmission", "°C", "Nissan CVT Fluid Temperature", "Nissan") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0008", "CVT Degradation Count", "Transmission", "counts", "Nissan CVT Fluid Degradation Index", "Nissan") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
-        Mode22PidDefinition("0009", "Vehicle Odometer", "Maintenance", "km", "Nissan Vehicle Total Distance", "Nissan") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("0005", "CVT Fluid Temp", "Transmission", "°C", "Nissan CVT Fluid Temperature", "Nissan", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0008", "CVT Degradation Count", "Transmission", "counts", "Nissan CVT Fluid Degradation Index", "Nissan", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
+        Mode22PidDefinition("0006", "Engine Oil Temp", "Engine Oil", "°C", "Nissan Engine Oil Temperature", "Nissan", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0007", "Engine Oil Pressure", "Engine Oil", "kPa", "Nissan Engine Oil Pressure", "Nissan", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 2.0 },
+        Mode22PidDefinition("0009", "Vehicle Odometer", "Maintenance", "km", "Nissan Vehicle Total Distance", "Nissan", servicePrefix = "21") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("000B", "Fuel Tank Level", "Fuel System", "%", "Nissan Fuel Level Sensor", "Nissan", servicePrefix = "21") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("0015", "Steering Angle Sensor", "Chassis", "°", "Nissan Steering Wheel Angle Position", "Nissan", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] shl 8) or a[1]).toShort() * 0.1 else 0.0 },
 
-        // Volkswagen / Audi / SEAT / Skoda (VAG)
+        // Volkswagen / Audi / SEAT / Skoda / Porsche (VAG)
         Mode22PidDefinition("0101", "DSG Transmission Temp", "Transmission", "°C", "VW/Audi DSG Transmission Temp", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1001", "Transmission Temp Alt", "Transmission", "°C", "VW/Audi S-Tronic / Tiptronic Transmission Temp", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("0105", "Engine Oil Temp", "Engine Oil", "°C", "VW/Audi Engine Oil Temperature", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0108", "Turbo Boost Actual", "Engine", "kPa", "VW/Audi Turbocharger Actual Boost Pressure", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("2005", "Engine Oil Temp (UDS)", "Engine Oil", "°C", "VW/Audi UDS Engine Oil Temperature", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0108", "Turbo Boost Actual", "Engine Boost", "kPa", "VW/Audi Turbocharger Actual Boost Pressure", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("0109", "Turbo Boost Specified", "Engine Boost", "kPa", "VW/Audi Commanded Boost Pressure", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("010A", "Total Misfires", "Engine", "counts", "VW/Audi Total Cylinder Misfire Counter", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
+        Mode22PidDefinition("0115", "DPF Soot Mass", "Emissions", "g", "VW/Audi TDI Diesel Particulate Filter Soot Mass", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("0120", "Haldex AWD Coupling Temp", "Drivetrain", "°C", "VW/Audi 4Motion / Quattro Haldex Oil Temp", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("0102", "Vehicle Odometer", "Maintenance", "km", "VW/Audi Vehicle Total Odometer", "Volkswagen") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
 
         // Subaru
-        Mode22PidDefinition("1121", "CVT Fluid Temp", "Transmission", "°C", "Subaru CVT Fluid Temperature", "Subaru") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1121", "CVT Fluid Temp", "Transmission", "°C", "Subaru Lineartronic CVT Fluid Temperature", "Subaru") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1125", "Engine Oil Temp", "Engine Oil", "°C", "Subaru Engine Oil Temperature", "Subaru") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1126", "Knock Learning FLKC", "Engine", "°", "Subaru Fine Learning Knock Correction", "Subaru") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.3515 },
+        Mode22PidDefinition("1127", "Turbo Boost Gauge", "Engine Boost", "psi", "Subaru Turbocharger Boost Pressure", "Subaru") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) * 0.0193) - 14.7 else 0.0 },
+        Mode22PidDefinition("1128", "VVT Intake Angle Left", "Engine", "°", "Subaru Variable Valve Timing Left", "Subaru") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
+        Mode22PidDefinition("1129", "VVT Intake Angle Right", "Engine", "°", "Subaru Variable Valve Timing Right", "Subaru") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
+        Mode22PidDefinition("112A", "CVT Oil Degradation", "Transmission", "counts", "Subaru Lineartronic Fluid Degradation Index", "Subaru") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
 
         // BMW / Mini
-        Mode22PidDefinition("1001", "Transmission Temp", "Transmission", "°C", "BMW Automatic Transmission Temp", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1001", "Transmission Temp", "Transmission", "°C", "BMW ZF 6HP/8HP Automatic Transmission Temp", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1002", "Engine Oil Temp", "Engine Oil", "°C", "BMW Engine Oil Temperature", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1003", "Engine Oil Pressure", "Engine Oil", "kPa", "BMW Engine Oil Pressure", "BMW") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.1 else 0.0 },
+        Mode22PidDefinition("1004", "Radiator Outlet Temp", "Cooling", "°C", "BMW Radiator Coolant Outlet Temperature", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1005", "VANOS Intake Position", "Engine", "°", "BMW VANOS Camshaft Intake Position", "BMW") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
+        Mode22PidDefinition("1008", "Electric Coolant Pump", "Cooling", "%", "BMW Electric Water Pump Speed", "BMW") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
 
-        // Hyundai / Kia
-        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Hyundai/Kia Transmission Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0102", "Engine Oil Temp", "Engine Oil", "°C", "Hyundai/Kia Engine Oil Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        // Hyundai / Kia / Genesis
+        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Hyundai/Kia Automatic Transmission Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0102", "Engine Oil Temp", "Engine Oil", "°C", "Hyundai/Kia Engine Oil Temperature", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0103", "DCT Clutch Temp", "Transmission", "°C", "Hyundai/Kia Dual-Clutch Gearbox Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0106", "EV/HV Battery SoC", "Battery", "%", "Hyundai/Kia EV High Voltage Battery State of Charge", "Hyundai") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("0107", "EV Battery Max Cell Volt", "Battery", "V", "Hyundai/Kia EV Maximum Battery Cell Voltage", "Hyundai") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
+        Mode22PidDefinition("0108", "EV Battery Min Cell Volt", "Battery", "V", "Hyundai/Kia EV Minimum Battery Cell Voltage", "Hyundai") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
+        Mode22PidDefinition("0109", "EV Battery Pack Temp", "Battery", "°C", "Hyundai/Kia EV High Voltage Battery Pack Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
 
-        // Universal Fallback & Obscure Sub-System PIDs
+        // Mazda
+        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Mazda SkyActiv-Drive Automatic Transmission Temp", "Mazda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0105", "Engine Oil Temp", "Engine Oil", "°C", "Mazda SkyActiv Engine Oil Temperature", "Mazda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0104", "Transmission Current Gear", "Transmission", "Gear", "Mazda Commanded Gear Position", "Mazda") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
+        Mode22PidDefinition("0109", "DPF Soot Accumulation", "Emissions", "%", "Mazda SkyActiv-D Diesel DPF Soot Load", "Mazda") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+
+        // Mercedes-Benz / Smart
+        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Mercedes-Benz 7G/9G-Tronic Transmission Temp", "Mercedes") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0102", "Engine Oil Temp", "Engine Oil", "°C", "Mercedes-Benz Engine Oil Temperature", "Mercedes") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0103", "Engine Oil Level", "Engine Oil", "mm", "Mercedes-Benz Electronic Oil Level Indicator", "Mercedes") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
+        Mode22PidDefinition("0104", "EGT Pre-Catalyst", "Emissions", "°C", "Mercedes-Benz Exhaust Gas Temp Before Catalytic Converter", "Mercedes") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
+
+        // Universal Fallback & Multi-Vehicle Sub-System PIDs
         Mode22PidDefinition("0052", "Ethanol Content", "Fuel System", "%", "E85 Flex-Fuel Ethanol Concentration", "Universal") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("11AF", "DPF Soot Mass", "Emissions", "%", "Diesel Particulate Filter Soot Load Accumulation", "Universal") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("11B2", "Steering Angle", "Chassis", "°", "Steering Wheel Angle Position", "Universal") { a -> if (a.size >= 2) ((a[0] shl 8) or a[1]).toShort() * 0.1 else 0.0 },
@@ -353,17 +475,28 @@ object Mode22Registry {
         val isFord = m.contains("FORD") || m.contains("LINCOLN") || m.contains("MERCURY") ||
                      wmi.startsWith("1F") || wmi.startsWith("2F") || wmi.startsWith("3F") || wmi.startsWith("1L") || wmi.startsWith("2L")
 
-        val isGm = m.contains("GM") || m.contains("CHEVROLET") || m.contains("CHEVY") || m.contains("GMC") || m.contains("BUICK") || m.contains("CADILLAC") ||
+        val isGm = m.contains("GM") || m.contains("CHEVROLET") || m.contains("CHEVY") || m.contains("GMC") || m.contains("BUICK") || m.contains("CADILLAC") || m.contains("PONTIAC") || m.contains("SATURN") ||
                    wmi.startsWith("1G") || wmi.startsWith("2G") || wmi.startsWith("3G")
 
         val isToyota = m.contains("TOYOTA") || m.contains("LEXUS") || m.contains("SCION") ||
                        wmi.startsWith("JT") || wmi.startsWith("2T") || wmi.startsWith("4T") || wmi.startsWith("5T") || wmi.startsWith("3TM")
 
-        val isChrysler = m.contains("CHRYSLER") || m.contains("DODGE") || m.contains("JEEP") || m.contains("RAM") ||
+        val isChrysler = m.contains("CHRYSLER") || m.contains("DODGE") || m.contains("JEEP") || m.contains("RAM") || m.contains("FIAT") ||
                          wmi.startsWith("1C") || wmi.startsWith("2C") || wmi.startsWith("3C") || wmi.startsWith("1J") || wmi.startsWith("1D") || wmi.startsWith("2D") || wmi.startsWith("3D") || wmi.startsWith("1B") || wmi.startsWith("3B")
 
         val isHonda = m.contains("HONDA") || m.contains("ACURA") || wmi.startsWith("1H") || wmi.startsWith("2H") || wmi.startsWith("JH") || wmi.startsWith("5J")
         val isNissan = m.contains("NISSAN") || m.contains("INFINITI") || wmi.startsWith("JN") || wmi.startsWith("1N") || wmi.startsWith("5N")
+
+        val isVag = m.contains("VOLKSWAGEN") || m.contains("VW") || m.contains("AUDI") || m.contains("PORSCHE") || m.contains("SEAT") || m.contains("SKODA") ||
+                    wmi.startsWith("WV") || wmi.startsWith("WA") || wmi.startsWith("WP") || wmi.startsWith("3V") || wmi.startsWith("1V")
+
+        val isSubaru = m.contains("SUBARU") || wmi.startsWith("JF") || wmi.startsWith("4S")
+        val isBmw = m.contains("BMW") || m.contains("MINI") || wmi.startsWith("WB") || wmi.startsWith("4U") || wmi.startsWith("5U") || wmi.startsWith("WM")
+        val isHyundai = m.contains("HYUNDAI") || m.contains("KIA") || m.contains("GENESIS") ||
+                        wmi.startsWith("KM") || wmi.startsWith("KN") || wmi.startsWith("5N") || wmi.startsWith("5X")
+        val isMazda = m.contains("MAZDA") || wmi.startsWith("JM") || wmi.startsWith("1Y") || wmi.startsWith("4F")
+        val isMercedes = m.contains("MERCEDES") || m.contains("BENZ") || m.contains("SMART") ||
+                         wmi.startsWith("WD") || wmi.startsWith("4J") || wmi.startsWith("55")
 
         val match = KNOWN_PIDS.filter { pid ->
             val pM = pid.manufacturer.uppercase()
@@ -373,6 +506,12 @@ object Mode22Registry {
             (isChrysler && pM == "CHRYSLER") ||
             (isHonda && pM == "HONDA") ||
             (isNissan && pM == "NISSAN") ||
+            (isVag && (pM == "VOLKSWAGEN" || pM == "VAG")) ||
+            (isSubaru && pM == "SUBARU") ||
+            (isBmw && pM == "BMW") ||
+            (isHyundai && pM == "HYUNDAI") ||
+            (isMazda && pM == "MAZDA") ||
+            (isMercedes && pM == "MERCEDES") ||
             pid.manufacturer == "Universal"
         }
 
@@ -1918,11 +2057,11 @@ class BluetoothObdManager {
      */
     suspend fun scanMode22Pids(): List<Mode22StreamData> {
         if (isDemoMode) {
-            val demoPids = listOf(
-                Mode22StreamData(Mode22Registry.KNOWN_PIDS[0], "85.0 °C", 85.0),  // Transmission Temp
-                Mode22StreamData(Mode22Registry.KNOWN_PIDS[2], "92.0 °C", 92.0),  // Cylinder Head Temp
-                Mode22StreamData(Mode22Registry.KNOWN_PIDS[5], "42.5 psi", 42.5), // Engine Oil Pressure
-                Mode22StreamData(Mode22Registry.KNOWN_PIDS[6], "0.0 RPM", 0.0)    // Torque Converter Slip
+            val demoPids = listOfNotNull(
+                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "1E1C" }?.let { Mode22StreamData(it, "85.0 °C", 85.0) },
+                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "1674" }?.let { Mode22StreamData(it, "92.0 °C", 92.0) },
+                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "1304" }?.let { Mode22StreamData(it, "42.5 psi", 42.5) },
+                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "162B" }?.let { Mode22StreamData(it, "0.0 RPM", 0.0) }
             )
             _mode22Streams.value = demoPids
             return demoPids
@@ -2036,13 +2175,21 @@ class BluetoothObdManager {
                                 // Validate rawVal physical bounds to filter out unsupported/uninitialized ECU responses
                                 val isBogus = when (pidDef.unit) {
                                     "kPa" -> rawVal > 50000.0 || rawVal < 0.0
-                                    "°C" -> rawVal > 220.0 || rawVal < -50.0
-                                    "psi" -> rawVal > 5000.0 || rawVal < -10.0
+                                    "bar" -> rawVal > 500.0 || rawVal < 0.0
+                                    "°C" -> rawVal > 300.0 || rawVal < -50.0
+                                    "psi" -> rawVal > 5000.0 || rawVal < -15.0
                                     "%" -> rawVal > 100.0 || rawVal < 0.0
-                                    "RPM" -> rawVal > 10000.0 || rawVal < 0.0
-                                    "Ratio" -> rawVal > 20.0 || rawVal < 0.0
-                                    "V" -> rawVal > 30.0 || rawVal < 0.0
+                                    "RPM" -> rawVal > 10000.0 || rawVal < -1000.0
+                                    "Ratio" -> rawVal > 25.0 || rawVal < 0.0
+                                    "V" -> rawVal > 500.0 || rawVal < 0.0
                                     "km" -> rawVal > 2000000.0 || rawVal < 0.0
+                                    "Nm" -> rawVal > 2500.0 || rawVal < -500.0
+                                    "counts" -> rawVal > 10_000_000.0 || rawVal < 0.0
+                                    "mm" -> rawVal > 500.0 || rawVal < 0.0
+                                    "Gear" -> rawVal > 15.0 || rawVal < 0.0
+                                    "ppm" -> rawVal > 50000.0 || rawVal < 0.0
+                                    "mg/stroke" -> rawVal > 500.0 || rawVal < 0.0
+                                    "°" -> rawVal > 360.0 || rawVal < -360.0
                                     else -> false
                                 }
 

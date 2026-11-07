@@ -390,6 +390,14 @@ fun formatMode22ValueWithUnit(
                 Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "kPa")
             }
         }
+        "bar" -> {
+            if (unitSystem == UnitSystem.SAE) {
+                val psi = rawValue * 14.5038
+                Pair(String.format(java.util.Locale.US, "%.1f", psi), "psi")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "bar")
+            }
+        }
         "psi" -> {
             if (unitSystem == UnitSystem.METRIC) {
                 val kpa = rawValue * 6.89476
@@ -430,12 +438,31 @@ fun formatMode22ValueWithUnit(
                 Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "mph")
             }
         }
+        "Nm" -> {
+            if (unitSystem == UnitSystem.SAE) {
+                val lbft = rawValue * 0.737562
+                Pair(String.format(java.util.Locale.US, "%.0f", lbft), "lb-ft")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Nm")
+            }
+        }
+        "mm" -> {
+            if (unitSystem == UnitSystem.SAE) {
+                val inches = rawValue * 0.0393701
+                Pair(String.format(java.util.Locale.US, "%.2f", inches), "in")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "mm")
+            }
+        }
         "RPM" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "RPM")
         "V" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "V")
         "Ratio" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "Ratio")
         "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "%")
         "°" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "°")
+        "Gear" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Gear")
         "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "counts")
+        "ppm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "ppm")
+        "mg/stroke" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "mg/stroke")
         else -> {
             Pair(String.format(java.util.Locale.US, "%.1f", rawValue), if (pid.unit.isBlank()) "value" else pid.unit)
         }
