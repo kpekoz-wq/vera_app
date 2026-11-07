@@ -429,6 +429,10 @@ class BluetoothObdManager {
     private val _vehicleDetails = MutableStateFlow<String?>(null)
     val vehicleDetails: StateFlow<String?> = _vehicleDetails.asStateFlow()
 
+    // Reactive StateFlow exposing total vehicle odometer in kilometers
+    private val _vehicleOdometerKm = MutableStateFlow<Double?>(null)
+    val vehicleOdometerKm: StateFlow<Double?> = _vehicleOdometerKm.asStateFlow()
+
     fun updateVehicleDetails(details: String) {
         _vehicleDetails.value = details
     }
@@ -562,6 +566,9 @@ class BluetoothObdManager {
             )
             _mode06Results.value = emptyList()
         }
+
+        val demoOdoKm = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 184290.0 else 67450.0
+        _vehicleOdometerKm.value = demoOdoKm
 
         // Trigger OBDb Signalset Loader for Demo Vehicle (Ford F-150 2007)
         ioScope.launch {
@@ -726,6 +733,9 @@ class BluetoothObdManager {
 
                 // Query and decode 17-character VIN via Mode 09 PID 02 to verify active ECU communication
                 fetchVehicleVin()
+
+                // Query vehicle odometer reading via standard Mode 01 PID A6 or Mode 22 enhanced manufacturer PID
+                fetchVehicleOdometer()
 
                 _connectionState.value = ConnectionState.Connected(device.name ?: "OBD Device")
 
@@ -913,6 +923,178 @@ class BluetoothObdManager {
             }
         }
         return _vehicleVin.value
+    }
+
+    /**
+     * Queries the vehicle's total odometer reading in kilometers using a smart dual-stage strategy:
+     * 1. SAE J1979 Mode 01 PID A6 (Standard for modern vehicles 2019+)
+     * 2. Enhanced Manufacturer Mode 22 / Mode 21 fallback based on decoded vehicle make / VIN (Ford, GM, Toyota, Honda, Chrysler, VW, Nissan)
+     */
+    suspend fun fetchVehicleOdometer(): Double? {
+        if (isDemoMode) {
+            val demoKm = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 184290.0 else 67450.0
+            _vehicleOdometerKm.value = demoKm
+            return demoKm
+        }
+
+        val wasPolling = pollingJob?.isActive == true
+        isPollingPaused = true
+        pollingJob?.cancel()
+
+        return try {
+            if (wasPolling) delay(200)
+
+            // Step 1: Standard SAE J1979 Mode 01 PID A6 (Modern vehicles 2019+)
+            sendAtCommand("AT SH 7DF", 80)
+            val resp01A6 = sendAtCommand("01A6", 400)
+            val payloads01A6 = ObdParser.extractPayloads(resp01A6)
+            val data01A6 = ObdParser.findResponse(payloads01A6, 0x41, 0xA6)
+            if (data01A6 != null && data01A6.size >= 4) {
+                val rawKm = ((data01A6[0].toLong() shl 24) or (data01A6[1].toLong() shl 16) or (data01A6[2].toLong() shl 8) or data01A6[3].toLong()).toDouble() / 10.0
+                if (rawKm in 1.0..1_500_000.0) {
+                    Log.i(TAG, "Decoded Odometer via SAE J1979 Mode 01 PID A6: $rawKm km")
+                    _vehicleOdometerKm.value = rawKm
+                    return rawKm
+                }
+            }
+
+            // Step 2: Enhanced Manufacturer Mode 22 / Mode 21 fallback
+            val make = _vehicleDetails.value?.uppercase() ?: ""
+            val vin = _vehicleVin.value?.uppercase() ?: ""
+            val wmi = if (vin.length >= 3) vin.substring(0, 3) else ""
+
+            val isFord = make.contains("FORD") || make.contains("LINCOLN") || make.contains("MERCURY") ||
+                    wmi.startsWith("1F") || wmi.startsWith("2F") || wmi.startsWith("3F")
+            val isGm = make.contains("GM") || make.contains("CHEVROLET") || make.contains("CHEVY") || make.contains("GMC") || make.contains("BUICK") || make.contains("CADILLAC") ||
+                    wmi.startsWith("1G") || wmi.startsWith("2G") || wmi.startsWith("3G")
+            val isToyota = make.contains("TOYOTA") || make.contains("LEXUS") || make.contains("SCION") ||
+                    wmi.startsWith("JT") || wmi.startsWith("2T") || wmi.startsWith("4T")
+            val isHonda = make.contains("HONDA") || make.contains("ACURA") || wmi.startsWith("1H") || wmi.startsWith("2H") || wmi.startsWith("JH")
+            val isChrysler = make.contains("CHRYSLER") || make.contains("DODGE") || make.contains("JEEP") || make.contains("RAM") ||
+                    wmi.startsWith("1C") || wmi.startsWith("2C") || wmi.startsWith("3C")
+            val isNissan = make.contains("NISSAN") || make.contains("INFINITI") || wmi.startsWith("JN") || wmi.startsWith("1N")
+            val isVag = make.contains("VOLKSWAGEN") || make.contains("AUDI") || make.contains("VW") || wmi.startsWith("WV") || wmi.startsWith("WA")
+
+            var decodedKm: Double? = null
+
+            when {
+                isFord -> {
+                    // Try PCM header 7E0 first, then IPC header 720
+                    for (header in listOf("7E0", "720")) {
+                        sendAtCommand("AT SH $header", 100)
+                        val resp = sendAtCommand("22DD01", 350)
+                        val pList = ObdParser.extractPayloads(resp)
+                        val data = ObdParser.findResponse(pList, 0x62, 0xDD, 0x01)
+                        if (data != null) {
+                            if (data.size >= 4) {
+                                val km = ((data[0].toLong() shl 24) or (data[1].toLong() shl 16) or (data[2].toLong() shl 8) or data[3].toLong()).toDouble() / 10.0
+                                if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                            } else if (data.size >= 3) {
+                                val km = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                                if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                            }
+                        }
+                    }
+                }
+                isGm -> {
+                    for (header in listOf("7E0", "7E2")) {
+                        sendAtCommand("AT SH $header", 100)
+                        val resp = sendAtCommand("22115C", 350)
+                        val pList = ObdParser.extractPayloads(resp)
+                        val data = ObdParser.findResponse(pList, 0x62, 0x11, 0x5C)
+                        if (data != null && data.size >= 4) {
+                            val km = ((data[0].toLong() shl 24) or (data[1].toLong() shl 16) or (data[2].toLong() shl 8) or data[3].toLong()).toDouble() / 64.0
+                            if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                        }
+                    }
+                }
+                isToyota -> {
+                    sendAtCommand("AT SH 7E0", 100)
+                    for (cmd in listOf("211626", "220200")) {
+                        val resp = sendAtCommand(cmd, 350)
+                        val pList = ObdParser.extractPayloads(resp)
+                        val data = if (cmd.startsWith("21")) ObdParser.findResponse(pList, 0x61, 0x16, 0x26) else ObdParser.findResponse(pList, 0x62, 0x02, 0x00)
+                        if (data != null && data.size >= 3) {
+                            val km = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                            if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                        }
+                    }
+                }
+                isHonda -> {
+                    sendAtCommand("AT SH 7E0", 100)
+                    val resp = sendAtCommand("222202", 350)
+                    val pList = ObdParser.extractPayloads(resp)
+                    val data = ObdParser.findResponse(pList, 0x62, 0x22, 0x02)
+                    if (data != null && data.size >= 3) {
+                        val km = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                        if (km in 1.0..1_500_000.0) decodedKm = km
+                    }
+                }
+                isChrysler -> {
+                    for (header in listOf("7E0", "7B0")) {
+                        sendAtCommand("AT SH $header", 100)
+                        val resp = sendAtCommand("2201B4", 350)
+                        val pList = ObdParser.extractPayloads(resp)
+                        val data = ObdParser.findResponse(pList, 0x62, 0x01, 0xB4)
+                        if (data != null) {
+                            if (data.size >= 4) {
+                                val km = ((data[0].toLong() shl 24) or (data[1].toLong() shl 16) or (data[2].toLong() shl 8) or data[3].toLong()).toDouble() / 10.0
+                                if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                            } else if (data.size >= 3) {
+                                val km = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                                if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                            }
+                        }
+                    }
+                }
+                isVag -> {
+                    for (header in listOf("7E0", "714")) {
+                        sendAtCommand("AT SH $header", 100)
+                        val resp = sendAtCommand("220102", 350)
+                        val pList = ObdParser.extractPayloads(resp)
+                        val data = ObdParser.findResponse(pList, 0x62, 0x01, 0x02)
+                        if (data != null) {
+                            val km = if (data.size >= 4) {
+                                ((data[0].toLong() shl 24) or (data[1].toLong() shl 16) or (data[2].toLong() shl 8) or data[3].toLong()).toDouble()
+                            } else if (data.size >= 3) {
+                                ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                            } else 0.0
+                            if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                        }
+                    }
+                }
+                isNissan -> {
+                    sendAtCommand("AT SH 7E0", 100)
+                    val resp = sendAtCommand("210009", 350)
+                    val pList = ObdParser.extractPayloads(resp)
+                    val data = ObdParser.findResponse(pList, 0x61, 0x00, 0x09)
+                    if (data != null && data.size >= 3) {
+                        val km = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                        if (km in 1.0..1_500_000.0) decodedKm = km
+                    }
+                }
+            }
+
+            // Restore Functional Broadcast Header for regular PID polling
+            sendAtCommand("AT SH 7DF", 80)
+
+            if (decodedKm != null) {
+                Log.i(TAG, "Decoded Odometer via Enhanced Mode 22: $decodedKm km")
+                _vehicleOdometerKm.value = decodedKm
+            } else {
+                Log.i(TAG, "Vehicle Odometer reading not available across standard or Mode 22 PIDs.")
+            }
+            decodedKm
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching vehicle odometer", e)
+            try { sendAtCommand("AT SH 7DF", 80) } catch (_: Exception) {}
+            null
+        } finally {
+            if (wasPolling) {
+                isPollingPaused = false
+                startPollingLoop()
+            }
+        }
     }
 
     fun initObdbRepository(context: android.content.Context) {
@@ -1945,6 +2127,7 @@ class BluetoothObdManager {
             _mode22Streams.value = emptyList()
             _vehicleVin.value = null
             _vehicleDetails.value = null
+            _vehicleOdometerKm.value = null
             _connectionState.value = ConnectionState.Disconnected
             Log.i(TAG, "Disconnected successfully.")
         }
@@ -2068,6 +2251,7 @@ class BluetoothObdManager {
             initializeElm327()
             discoverSupportedPids()
             fetchVehicleVin()
+            fetchVehicleOdometer()
 
             val devName = device.manufacturerName ?: "Vgate vLinker FS USB"
             _connectionState.value = ConnectionState.Connected("🔌 $devName")

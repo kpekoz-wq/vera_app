@@ -126,7 +126,8 @@ class MainActivity : ComponentActivity() {
 fun generateChatTranscriptText(
     messages: List<ChatMessage>,
     vehicleDetails: String?,
-    vin: String?
+    vin: String?,
+    odometer: String? = null
 ): String {
     val timeFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
     val timestamp = timeFormat.format(java.util.Date())
@@ -138,6 +139,9 @@ fun generateChatTranscriptText(
     sb.appendLine("Generated: $timestamp")
     sb.appendLine("Vehicle Details: ${vehicleDetails ?: "Unknown Vehicle"}")
     sb.appendLine("VIN: ${vin ?: "N/A"}")
+    if (!odometer.isNullOrBlank()) {
+        sb.appendLine("Odometer: $odometer")
+    }
     sb.appendLine("==================================================")
     sb.appendLine()
 
@@ -1336,6 +1340,7 @@ fun OttoMainScreen(
     val supportedStreams by viewModel.supportedStreams.collectAsState()
     val vehicleDetails by viewModel.vehicleDetails.collectAsState()
     val vehicleVin by viewModel.vehicleVin.collectAsState()
+    val vehicleOdometerKm by viewModel.vehicleOdometerKm.collectAsState()
     val troubleCodes by viewModel.troubleCodes.collectAsState()
     val dtcDetails by viewModel.dtcDetails.collectAsState()
     val mode06Results by viewModel.mode06Results.collectAsState()
@@ -1343,6 +1348,17 @@ fun OttoMainScreen(
     val unitSystem by viewModel.unitSystem.collectAsState()
     val obdbLoadedResult by viewModel.obdbLoadedResult.collectAsState()
     val obdbSignalResults by viewModel.obdbSignalResults.collectAsState()
+
+    val odoFormatted = remember(vehicleOdometerKm, unitSystem) {
+        vehicleOdometerKm?.let { km ->
+            if (unitSystem == UnitSystem.SAE) {
+                val miles = (km * 0.621371).toInt()
+                "%,d mi".format(miles)
+            } else {
+                "%,d km".format(km.toInt())
+            }
+        }
+    }
 
     val isConnecting by viewModel.isConnecting.collectAsState()
     val isScanningDtcs by viewModel.isScanningDtcs.collectAsState()
@@ -1431,7 +1447,7 @@ fun OttoMainScreen(
     ) { uri ->
         if (uri != null) {
             try {
-                val transcript = generateChatTranscriptText(viewModel.messages, vehicleDetails, vehicleVin)
+                val transcript = generateChatTranscriptText(viewModel.messages, vehicleDetails, vehicleVin, odoFormatted)
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     outputStream.write(transcript.toByteArray(Charsets.UTF_8))
                 }
@@ -1662,7 +1678,7 @@ fun OttoMainScreen(
     }
 
     fun shareChatTranscript() {
-        val transcript = generateChatTranscriptText(viewModel.messages, vehicleDetails, vehicleVin)
+        val transcript = generateChatTranscriptText(viewModel.messages, vehicleDetails, vehicleVin, odoFormatted)
         val sendIntent = Intent().apply {
             action = Intent.ACTION_SEND
             putExtra(Intent.EXTRA_TEXT, transcript)
@@ -1750,17 +1766,18 @@ fun OttoMainScreen(
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                if (isConnected && !vehicleDetails.isNullOrBlank()) {
-                    val parts = vehicleDetails!!.split("•").map { it.trim() }
+                if (isConnected && (!vehicleDetails.isNullOrBlank() || !odoFormatted.isNullOrBlank())) {
+                    val rawDetails = vehicleDetails ?: "Connected Vehicle"
+                    val parts = rawDetails.split("•").map { it.trim() }
                     val (makeModelYearText, vinText) = if (parts.size >= 2) {
                         val lastPart = parts.last()
                         if (lastPart.startsWith("VIN:", ignoreCase = true)) {
                             Pair(parts.dropLast(1).joinToString(" • "), lastPart)
                         } else {
-                            Pair(vehicleDetails!!, "")
+                            Pair(rawDetails, "")
                         }
                     } else {
-                        Pair(vehicleDetails!!, "")
+                        Pair(rawDetails, "")
                     }
 
                     Text(
@@ -1769,9 +1786,14 @@ fun OttoMainScreen(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    if (vinText.isNotBlank()) {
+                    val subDetails = buildList {
+                        if (vinText.isNotBlank()) add(vinText)
+                        if (!odoFormatted.isNullOrBlank()) add("ODO: $odoFormatted")
+                    }.joinToString(" • ")
+
+                    if (subDetails.isNotBlank()) {
                         Text(
-                            text = vinText,
+                            text = subDetails,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

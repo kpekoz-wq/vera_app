@@ -493,8 +493,9 @@ class GeminiAgentViewModel : ViewModel() {
              * Healthy vehicle: "Everything is purring smoothly and your temperatures are right where they should be. Let me know if you feel or hear anything unusual."
              * Issue detected: "I'm catching a few misfires on cylinder three. Nothing catastrophic right now, but once we're parked we should inspect the spark plug and ignition coil."
         2. MANDATORY REAL-TIME TELEMETRY RETRIEVAL:
-           - Vehicle telemetry (RPM, coolant temperature, speed, fuel trims, error codes) changes dynamically every second while driving.
-           - Whenever the driver asks about their engine, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_live_data`, `get_dtcs`, `get_mode06_results`, `get_vehicle_info`) BEFORE GIVING YOUR ANSWER.
+           - Vehicle telemetry (RPM, coolant temperature, speed, fuel trims, error codes, odometer mileage) changes dynamically while driving.
+           - Whenever the driver asks about their engine, mileage, odometer, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_vehicle_info`, `get_live_data`, `get_dtcs`, `get_mode06_results`) BEFORE GIVING YOUR ANSWER.
+           - When asked about mileage or odometer, speak the reading naturally in miles (e.g. "You're at one hundred fourteen thousand miles") unless the driver specifies kilometers.
            - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info`.
         3. SAFETY FIRST:
            - The driver is operating a vehicle. Never give instructions that require them to look away from the road while driving.
@@ -508,17 +509,22 @@ class GeminiAgentViewModel : ViewModel() {
         val vehicle = obdManager.vehicleDetails.value ?: "Vehicle"
         val m06 = obdManager.mode06Results.value
         val streams = obdManager.supportedStreams.value
+        val odoKm = obdManager.vehicleOdometerKm.value
 
         val streamsText = if (streams.isNotEmpty()) {
             streams.take(15).joinToString(", ") { "${it.pid.name}: ${it.formattedValue}" }
         } else "RPM: ${metrics.rpm}, Speed: ${metrics.speed} km/h, Coolant: ${metrics.coolantTemp}°C"
 
+        val odoText = if (odoKm != null && odoKm > 0) {
+            String.format(java.util.Locale.US, "%,.0f mi (%,.0f km)", odoKm * 0.621371, odoKm)
+        } else "Not detected"
         val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
         val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
         val connStatus = if (isConnected) "Connected & Polling ECU" else "Adapter in negotiation (invoke get_live_data or get_vehicle_info for live status)"
 
         return """
             Vehicle: $vehicle (VIN: $vin)
+            Odometer: $odoText
             OBD2 Connection: $connStatus
             Active DTCs: $dtcText
             Latest Telemetry: $streamsText
@@ -551,6 +557,11 @@ class GeminiAgentViewModel : ViewModel() {
                         put("fuel_trim_percent", metrics.fuelTrim)
                         put("mass_air_flow_gs", metrics.maf)
                         put("vehicle", obdManager.vehicleDetails.value ?: "Vehicle")
+                        val odoKm = obdManager.vehicleOdometerKm.value
+                        if (odoKm != null && odoKm > 0) {
+                            put("odometer_miles", (odoKm * 0.621371).toInt())
+                            put("odometer_km", odoKm.toInt())
+                        }
                         if (streams.isNotEmpty()) {
                             val streamsArr = JSONArray()
                             for (s in streams) {
@@ -600,9 +611,17 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
                 "get_vehicle_info" -> {
+                    val odoKm = obdManager.vehicleOdometerKm.value
                     JSONObject().apply {
                         put("vin", obdManager.vehicleVin.value ?: "Not available")
                         put("vehicle_details", obdManager.vehicleDetails.value ?: "Not available")
+                        if (odoKm != null && odoKm > 0) {
+                            put("odometer_miles", (odoKm * 0.621371).toInt())
+                            put("odometer_km", odoKm.toInt())
+                            put("odometer_formatted", String.format(java.util.Locale.US, "%,.0f miles (%,.0f km)", odoKm * 0.621371, odoKm))
+                        } else {
+                            put("odometer", "Unavailable")
+                        }
                         put("connection_status", connectionStatus.value)
                     }
                 }
@@ -632,6 +651,8 @@ class GeminiAgentViewModel : ViewModel() {
 
     val liveVoiceName: StateFlow<String>
         get() = liveStreamManager?.voiceName ?: MutableStateFlow("Aoede").asStateFlow()
+
+    val vehicleOdometerKm: StateFlow<Double?> = obdManager.vehicleOdometerKm
 
     fun setLiveVoiceName(voiceName: String) {
         liveStreamManager?.setVoice(voiceName)

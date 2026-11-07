@@ -42,6 +42,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         private const val SAMPLE_RATE_IN = 16000
         private const val SAMPLE_RATE_OUT = 24000
         private const val LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest"
+        val SUPPORTED_LIVE_VOICES = setOf("Aoede", "Charon", "Fenrir", "Kore", "Puck")
     }
 
     private val client = OkHttpClient.Builder()
@@ -79,7 +80,12 @@ class GeminiLiveStreamManager(private val context: Context) {
     val voiceName: StateFlow<String> = _voiceName.asStateFlow()
 
     fun setVoice(name: String) {
-        _voiceName.value = name
+        if (name in SUPPORTED_LIVE_VOICES) {
+            _voiceName.value = name
+        } else {
+            Log.w(TAG, "Voice '$name' is not supported by Gemini Multimodal Live API (supported: $SUPPORTED_LIVE_VOICES). Falling back to 'Aoede'.")
+            _voiceName.value = "Aoede"
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -212,11 +218,11 @@ class GeminiLiveStreamManager(private val context: Context) {
                     })
                     put(JSONObject().apply {
                         put("name", "get_vehicle_info")
-                        put("description", "Returns vehicle identification number (VIN) and decoded make, model, year, and adapter connection status.")
+                        put("description", "Returns vehicle identification number (VIN), decoded make, model, year, total odometer mileage reading (in miles and km), and adapter connection status.")
                         put("parameters", JSONObject().apply {
                             put("type", "OBJECT")
                             put("properties", JSONObject().apply {
-                                put("info_type", stringParam("Information requested, e.g. 'vin', 'specs', 'status'"))
+                                put("info_type", stringParam("Information requested, e.g. 'odometer', 'mileage', 'vin', 'specs', 'status'"))
                             })
                         })
                     })
@@ -234,6 +240,7 @@ class GeminiLiveStreamManager(private val context: Context) {
             })
         }
 
+        val effectiveVoice = if (selectedVoice in SUPPORTED_LIVE_VOICES) selectedVoice else "Aoede"
         val setupObj = JSONObject().apply {
             put("setup", JSONObject().apply {
                 put("model", LIVE_MODEL)
@@ -252,7 +259,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                     put("speechConfig", JSONObject().apply {
                         put("voiceConfig", JSONObject().apply {
                             put("prebuiltVoiceConfig", JSONObject().apply {
-                                put("voiceName", selectedVoice)
+                                put("voiceName", effectiveVoice)
                             })
                         })
                     })
@@ -263,7 +270,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         }
 
         ws.send(setupObj.toString())
-        Log.i(TAG, "Sent Gemini Live Setup frame using model $LIVE_MODEL (Voice: $selectedVoice, transcription enabled).")
+        Log.i(TAG, "Sent Gemini Live Setup frame using model $LIVE_MODEL (Voice: $effectiveVoice, transcription enabled).")
     }
 
     private fun sendInitialGreetingTrigger(ws: WebSocket) {
