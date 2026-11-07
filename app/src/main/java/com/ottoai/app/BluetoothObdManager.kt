@@ -277,6 +277,7 @@ object Mode22Registry {
         Mode22PidDefinition("11B6", "Fuel Rail High Pressure", "Fuel System", "kPa", "Ford Direct Injection High Pressure System", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 10.0 else 0.0 },
         Mode22PidDefinition("054B", "Engine Oil Life", "Maintenance", "%", "Ford Engine Oil Life Remaining Index", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("1801", "AWD Clutch Duty", "Drivetrain", "%", "Ford AWD Transfer Case Torque Split Duty Cycle", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("404C", "Cluster Odometer", "Maintenance", "km", "Ford Instrument Cluster Total Odometer (2004-2008 F-150)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() * 0.1 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() * 0.1 else 0.0 },
         Mode22PidDefinition("DD01", "Vehicle Odometer", "Maintenance", "km", "Ford Total Vehicle Odometer", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
 
         // GM / Chevrolet / GMC / Buick / Cadillac
@@ -341,8 +342,7 @@ object Mode22Registry {
         Mode22PidDefinition("11B2", "Steering Angle", "Chassis", "°", "Steering Wheel Angle Position", "Universal") { a -> if (a.size >= 2) ((a[0] shl 8) or a[1]).toShort() * 0.1 else 0.0 },
         Mode22PidDefinition("1610", "A/C Evaporator Temp", "Climate", "°C", "A/C Evaporator Core Temp (Anti-Freeze Guard)", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1001", "Transmission Temp (Univ)", "Transmission", "°C", "Universal Transmission Fluid Temp", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1002", "Engine Oil Temp (Univ)", "Engine Oil", "°C", "Universal Engine Oil Temp", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0001", "Vehicle Odometer (Univ)", "Maintenance", "km", "Universal Vehicle Total Odometer", "Universal") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 }
+        Mode22PidDefinition("1002", "Engine Oil Temp (Univ)", "Engine Oil", "°C", "Universal Engine Oil Temp", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 }
     )
 
     fun getPidsForManufacturer(manufacturer: String): List<Mode22PidDefinition> {
@@ -979,19 +979,38 @@ class BluetoothObdManager {
 
             when {
                 isFord -> {
-                    // Try PCM header 7E0 first, then IPC header 720
-                    for (header in listOf("7E0", "720")) {
+                    // On Ford (including 2004-2008 F-150 and newer models), the master odometer is stored in the
+                    // Instrument Cluster (IC / HEC) accessed via CAN header 720 (Mode 22 PIDs 404C, DD01).
+                    // We query the cluster (720) first, then fallback to PCM (7E0).
+                    val fordOdoQueries = listOf(
+                        Pair("720", "22404C"), // 2004-2008 F-150 HEC cluster odometer (0.1 km)
+                        Pair("720", "22DD01"), // 2009+ Ford IPC cluster odometer
+                        Pair("7E0", "22DD01"), // Ford PCM odometer
+                        Pair("7E0", "22404C")
+                    )
+
+                    for ((header, cmd) in fordOdoQueries) {
                         sendAtCommand("AT SH $header", 100)
-                        val resp = sendAtCommand("22DD01", 350)
+                        val resp = sendAtCommand(cmd, 350)
                         val pList = ObdParser.extractPayloads(resp)
-                        val data = ObdParser.findResponse(pList, 0x62, 0xDD, 0x01)
-                        if (data != null) {
-                            if (data.size >= 4) {
-                                val km = ((data[0].toLong() shl 24) or (data[1].toLong() shl 16) or (data[2].toLong() shl 8) or data[3].toLong()).toDouble() / 10.0
-                                if (km in 1.0..1_500_000.0) { decodedKm = km; break }
-                            } else if (data.size >= 3) {
-                                val km = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
-                                if (km in 1.0..1_500_000.0) { decodedKm = km; break }
+                        val pBytes = cmd.substring(2).chunked(2).map { it.toInt(16) }
+                        val data = ObdParser.findResponse(pList, 0x62, pBytes[0], pBytes[1])
+                        if (data != null && data.isNotEmpty()) {
+                            val km = when {
+                                data.size >= 4 -> {
+                                    val raw = ((data[0].toLong() shl 24) or (data[1].toLong() shl 16) or (data[2].toLong() shl 8) or data[3].toLong()).toDouble()
+                                    if (cmd.endsWith("404C")) raw * 0.1 else if (raw > 1_500_000.0) raw * 0.1 else raw
+                                }
+                                data.size >= 3 -> {
+                                    val raw = ((data[0].toLong() shl 16) or (data[1].toLong() shl 8) or data[2].toLong()).toDouble()
+                                    if (cmd.endsWith("404C")) raw * 0.1 else raw
+                                }
+                                else -> 0.0
+                            }
+                            if (km in 10.0..1_500_000.0) {
+                                decodedKm = km
+                                Log.i(TAG, "Decoded Ford Odometer via Header $header $cmd: $km km (${(km * 0.621371).toInt()} miles)")
+                                break
                             }
                         }
                     }
@@ -1961,7 +1980,19 @@ class BluetoothObdManager {
                     sendAtCommand("AT SH 7E0", 80)
                 }
 
-                // Fallback 3: Try Ford MS-CAN Multiplexer (AT SP B) on 726 / 720
+                // Fallback 3: Try Instrument Cluster Header (720) on HS-CAN (e.g. Ford F-150 cluster odometer 404C, DD01)
+                if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
+                    sendAtCommand("AT SH 720", 80)
+                    response = sendAtCommand(cmd1, 150)
+                    payloads = ObdParser.extractPayloads(response)
+                    if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
+                        response = sendAtCommand(cmd2, 150)
+                        payloads = ObdParser.extractPayloads(response)
+                    }
+                    sendAtCommand("AT SH 7E0", 80)
+                }
+
+                // Fallback 4: Try Ford MS-CAN Multiplexer (AT SP B) on 726 / 720
                 if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
                     sendAtCommand("AT SP B", 80)
                     sendAtCommand("AT SH 726", 60)
@@ -2024,6 +2055,10 @@ class BluetoothObdManager {
                                             rawValue = rawVal
                                         )
                                     )
+                                    if ((pidDef.pidHex.equals("404C", ignoreCase = true) || pidDef.pidHex.equals("DD01", ignoreCase = true) || pidDef.pidHex.equals("115C", ignoreCase = true)) && rawVal in 10.0..1_500_000.0) {
+                                        _vehicleOdometerKm.value = rawVal
+                                        Log.i(TAG, "Mode 22 scan updated vehicle odometer: $rawVal km (${(rawVal * 0.621371).toInt()} miles)")
+                                    }
                                     Log.i(TAG, "Mode 21/22 RX: ${pidDef.name} = $formatted")
                                     break
                                 }

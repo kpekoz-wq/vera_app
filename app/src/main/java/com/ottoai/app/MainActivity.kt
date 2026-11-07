@@ -374,6 +374,14 @@ fun formatMode22ValueWithUnit(
                 Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "°C")
             }
         }
+        "°F" -> {
+            if (unitSystem == UnitSystem.METRIC) {
+                val c = (rawValue - 32.0) / 1.8
+                Pair(String.format(java.util.Locale.US, "%.1f", c), "°C")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "°F")
+            }
+        }
         "kPa" -> {
             if (unitSystem == UnitSystem.SAE) {
                 val psi = rawValue * 0.145038
@@ -390,12 +398,6 @@ fun formatMode22ValueWithUnit(
                 Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "psi")
             }
         }
-        "RPM" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "RPM")
-        "V" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "V")
-        "Ratio" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "Ratio")
-        "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "%")
-        "°" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "°")
-        "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "counts")
         "km" -> {
             if (unitSystem == UnitSystem.SAE) {
                 val miles = rawValue * 0.621371
@@ -404,6 +406,36 @@ fun formatMode22ValueWithUnit(
                 Pair(String.format(java.util.Locale.US, "%,.0f", rawValue), "km")
             }
         }
+        "miles", "mi" -> {
+            if (unitSystem == UnitSystem.METRIC) {
+                val km = rawValue * 1.60934
+                Pair(String.format(java.util.Locale.US, "%,.0f", km), "km")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%,.0f", rawValue), "miles")
+            }
+        }
+        "km/h" -> {
+            if (unitSystem == UnitSystem.SAE) {
+                val mph = rawValue * 0.621371
+                Pair(String.format(java.util.Locale.US, "%.0f", mph), "mph")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "km/h")
+            }
+        }
+        "mph" -> {
+            if (unitSystem == UnitSystem.METRIC) {
+                val kmh = rawValue * 1.60934
+                Pair(String.format(java.util.Locale.US, "%.0f", kmh), "km/h")
+            } else {
+                Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "mph")
+            }
+        }
+        "RPM" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "RPM")
+        "V" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "V")
+        "Ratio" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "Ratio")
+        "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "%")
+        "°" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "°")
+        "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "counts")
         else -> {
             Pair(String.format(java.util.Locale.US, "%.1f", rawValue), if (pid.unit.isBlank()) "value" else pid.unit)
         }
@@ -441,12 +473,28 @@ fun formatObdbValueWithUnit(
                     Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "°C")
                 }
             }
+            "fahrenheit", "°f" -> {
+                if (unitSystem == UnitSystem.METRIC) {
+                    val c = (rawVal - 32.0) / 1.8
+                    Pair(String.format(java.util.Locale.US, "%.1f", c), "°C")
+                } else {
+                    Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "°F")
+                }
+            }
             "kilometers", "km" -> {
                 if (unitSystem == UnitSystem.SAE) {
                     val miles = rawVal * 0.621371
-                    Pair(String.format(java.util.Locale.US, "%.0f", miles), "miles")
+                    Pair(String.format(java.util.Locale.US, "%,.0f", miles), "miles")
                 } else {
-                    Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "km")
+                    Pair(String.format(java.util.Locale.US, "%,.0f", rawVal), "km")
+                }
+            }
+            "miles", "mi" -> {
+                if (unitSystem == UnitSystem.METRIC) {
+                    val km = rawVal * 1.60934
+                    Pair(String.format(java.util.Locale.US, "%,.0f", km), "km")
+                } else {
+                    Pair(String.format(java.util.Locale.US, "%,.0f", rawVal), "miles")
                 }
             }
             "kilometersperhour", "km/h" -> {
@@ -455,6 +503,14 @@ fun formatObdbValueWithUnit(
                     Pair(String.format(java.util.Locale.US, "%.0f", mph), "mph")
                 } else {
                     Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "km/h")
+                }
+            }
+            "milesperhour", "mph" -> {
+                if (unitSystem == UnitSystem.METRIC) {
+                    val kmh = rawVal * 1.60934
+                    Pair(String.format(java.util.Locale.US, "%.0f", kmh), "km/h")
+                } else {
+                    Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "mph")
                 }
             }
             "kilopascal", "kpa" -> {

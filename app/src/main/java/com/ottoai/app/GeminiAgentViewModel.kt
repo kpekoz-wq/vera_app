@@ -501,7 +501,7 @@ class GeminiAgentViewModel : ViewModel() {
 
         mgr.startLiveSession(
             apiKey = geminiApiKey,
-            systemInstruction = liveSystemPromptText,
+            systemInstruction = buildLiveSystemInstruction(),
             telemetrySummary = summary,
             conversationHistory = historyContext,
             onMessageReceived = { text ->
@@ -599,27 +599,54 @@ class GeminiAgentViewModel : ViewModel() {
         }
     }
 
-    private val liveSystemPromptText = """
-        You are VERA, an elite automotive master technician and seasoned mechanic riding shotgun with the driver.
+    private fun buildLiveSystemInstruction(): String {
+        val isMetric = unitSystem.value == UnitSystem.METRIC
+        val unitRules = if (isMetric) {
+            """
+            UNITS SYSTEM IN EFFECT: METRIC (SI).
+            The driver has explicitly selected METRIC units.
+            - You MUST speak all speeds in km/h (kilometers per hour).
+            - You MUST speak all temperatures in degrees Celsius (°C).
+            - You MUST speak all pressures in kPa (kilopascals).
+            - You MUST speak all distances and odometer readings in kilometers (km).
+            - DO NOT speak in miles, Fahrenheit, or psi unless the driver explicitly asks for an imperial conversion.
+            """.trimIndent()
+        } else {
+            """
+            UNITS SYSTEM IN EFFECT: SAE (US IMPERIAL).
+            The driver has explicitly selected SAE units.
+            - You MUST speak all speeds in mph (miles per hour).
+            - You MUST speak all temperatures in degrees Fahrenheit (°F).
+            - You MUST speak all pressures in psi (pounds per square inch).
+            - You MUST speak all distances and odometer readings in miles.
+            - DO NOT speak in kilometers, Celsius, or kPa unless the driver explicitly asks for a metric conversion.
+            """.trimIndent()
+        }
 
-        You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
+        return """
+            You are VERA, an elite automotive master technician and seasoned mechanic riding shotgun with the driver.
 
-        CRITICAL DRIVING & VOICE RULES:
-        1. NATURAL HUMAN MECHANIC VOICE & CONVERSATION:
-           - Speak naturally and conversationally, like a knowledgeable friend and master mechanic sitting in the passenger seat.
-           - Keep answers concise (1 to 3 sentences) so the driver can remain focused on the road.
-           - NEVER recite raw PIDs, sensor codes, raw voltages, or test IDs out loud unless the driver explicitly asks for them.
-           - Give clear plain-English verdicts:
-             * Healthy vehicle: "Everything is purring smoothly and your temperatures are right where they should be. Let me know if you feel or hear anything unusual."
-             * Issue detected: "I'm catching a few misfires on cylinder three. Nothing catastrophic right now, but once we're parked we should inspect the spark plug and ignition coil."
-        2. MANDATORY REAL-TIME TELEMETRY RETRIEVAL:
-           - Vehicle telemetry (RPM, coolant temperature, speed, fuel trims, error codes, odometer mileage) changes dynamically while driving.
-           - Whenever the driver asks about their engine, mileage, odometer, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_vehicle_info`, `get_live_data`, `get_dtcs`, `get_mode06_results`) BEFORE GIVING YOUR ANSWER.
-           - When asked about mileage or odometer, speak the reading naturally in miles (e.g. "You're at one hundred fourteen thousand miles") unless the driver specifies kilometers.
-           - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info`.
-        3. SAFETY FIRST:
-           - The driver is operating a vehicle. Never give instructions that require them to look away from the road while driving.
-    """.trimIndent()
+            You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
+
+            $unitRules
+
+            CRITICAL DRIVING & VOICE RULES:
+            1. NATURAL HUMAN MECHANIC VOICE & CONVERSATION:
+               - Speak naturally and conversationally, like a knowledgeable friend and master mechanic sitting in the passenger seat.
+               - Keep answers concise (1 to 3 sentences) so the driver can remain focused on the road.
+               - NEVER recite raw PIDs, sensor codes, raw voltages, or test IDs out loud unless the driver explicitly asks for them.
+               - Give clear plain-English verdicts:
+                 * Healthy vehicle: "Everything is purring smoothly and your temperatures are right where they should be."
+                 * Issue detected: "I'm catching a few misfires on cylinder three. Nothing catastrophic right now, but once we're parked we should inspect the spark plug and ignition coil."
+            2. MANDATORY REAL-TIME TELEMETRY RETRIEVAL:
+               - Vehicle telemetry (RPM, coolant temperature, speed, fuel trims, error codes, odometer mileage) changes dynamically while driving.
+               - Whenever the driver asks about their engine, mileage, odometer, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_vehicle_info`, `get_live_data`, `get_dtcs`, `get_mode06_results`, `get_obdb_signals`) BEFORE GIVING YOUR ANSWER.
+               - ALWAYS obey the active unit system ($unitRules) when speaking numbers out loud!
+               - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info`.
+            3. SAFETY FIRST:
+               - The driver is operating a vehicle. Never give instructions that require them to look away from the road while driving.
+        """.trimIndent()
+    }
 
     private fun buildTelemetrySnapshotForLive(): String {
         val isConnected = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
@@ -630,13 +657,23 @@ class GeminiAgentViewModel : ViewModel() {
         val m06 = obdManager.mode06Results.value
         val streams = obdManager.supportedStreams.value
         val odoKm = obdManager.vehicleOdometerKm.value
+        val currentUnit = unitSystem.value
+        val isMetric = currentUnit == UnitSystem.METRIC
 
         val streamsText = if (streams.isNotEmpty()) {
-            streams.take(15).joinToString(", ") { "${it.pid.name}: ${it.formattedValue}" }
-        } else "RPM: ${metrics.rpm}, Speed: ${metrics.speed} km/h, Coolant: ${metrics.coolantTemp}°C"
+            streams.take(15).joinToString(", ") { s ->
+                val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
+                "${s.pid.name}: $fmtVal $fmtUnit"
+            }
+        } else {
+            val spd = if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"
+            val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
+            "RPM: ${metrics.rpm}, Speed: $spd, Coolant: $temp"
+        }
 
         val odoText = if (odoKm != null && odoKm > 0) {
-            String.format(java.util.Locale.US, "%,.0f mi (%,.0f km)", odoKm * 0.621371, odoKm)
+            if (isMetric) String.format(java.util.Locale.US, "%,.0f km", odoKm)
+            else String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371)
         } else "Not detected"
         val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
         val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
@@ -645,6 +682,7 @@ class GeminiAgentViewModel : ViewModel() {
         return """
             Vehicle: $vehicle (VIN: $vin)
             Odometer: $odoText
+            Unit System Preference: ${if (isMetric) "METRIC (km/h, °C, kPa, km)" else "SAE (mph, °F, psi, miles)"}
             OBD2 Connection: $connStatus
             Active DTCs: $dtcText
             Latest Telemetry: $streamsText
@@ -661,15 +699,27 @@ class GeminiAgentViewModel : ViewModel() {
                     val streams = obdManager.supportedStreams.value
                     val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
                     val voltage = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
+                    val currentUnit = unitSystem.value
+                    val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
                         put("connected", isConn)
+                        put("driver_unit_system", if (isMetric) "METRIC (State speeds in km/h, temps in °C, pressures in kPa, distances in km)" else "SAE (State speeds in mph, temps in °F, pressures in psi, distances in miles)")
                         put("rpm", metrics.rpm)
                         put("is_engine_running", metrics.rpm > 300)
+                        if (isMetric) {
+                            put("speed", "${metrics.speed} km/h")
+                            put("coolant_temp", "${metrics.coolantTemp} °C")
+                            put("intake_air_temp", "${metrics.intakeAirTemp} °C")
+                        } else {
+                            put("speed", "${(metrics.speed * 0.621371).toInt()} mph")
+                            put("coolant_temp", "${(metrics.coolantTemp * 1.8 + 32).toInt()} °F")
+                            put("intake_air_temp", "${(metrics.intakeAirTemp * 1.8 + 32).toInt()} °F")
+                        }
                         put("speed_mph", (metrics.speed * 0.621371).toInt())
                         put("speed_kmh", metrics.speed)
-                        put("coolant_temp_f", (metrics.coolantTemp * 9 / 5) + 32)
+                        put("coolant_temp_f", (metrics.coolantTemp * 1.8) + 32)
                         put("coolant_temp_c", metrics.coolantTemp)
-                        put("intake_air_temp_f", (metrics.intakeAirTemp * 9 / 5) + 32)
+                        put("intake_air_temp_f", (metrics.intakeAirTemp * 1.8) + 32)
                         put("intake_air_temp_c", metrics.intakeAirTemp)
                         put("battery_voltage", voltage)
                         put("engine_load_percent", metrics.engineLoad)
@@ -679,15 +729,21 @@ class GeminiAgentViewModel : ViewModel() {
                         put("vehicle", obdManager.vehicleDetails.value ?: "Vehicle")
                         val odoKm = obdManager.vehicleOdometerKm.value
                         if (odoKm != null && odoKm > 0) {
-                            put("odometer_miles", (odoKm * 0.621371).toInt())
-                            put("odometer_km", odoKm.toInt())
+                            if (isMetric) {
+                                put("odometer", String.format(java.util.Locale.US, "%,.0f km", odoKm))
+                                put("odometer_km", odoKm.toInt())
+                            } else {
+                                put("odometer", String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371))
+                                put("odometer_miles", (odoKm * 0.621371).toInt())
+                            }
                         }
                         if (streams.isNotEmpty()) {
                             val streamsArr = JSONArray()
                             for (s in streams) {
+                                val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
                                 streamsArr.put(JSONObject().apply {
                                     put("name", s.pid.name)
-                                    put("value", s.formattedValue)
+                                    put("value", "$fmtVal $fmtUnit".trim())
                                 })
                             }
                             put("supported_streams", streamsArr)
@@ -732,12 +788,20 @@ class GeminiAgentViewModel : ViewModel() {
                 }
                 "get_vehicle_info" -> {
                     val odoKm = obdManager.vehicleOdometerKm.value
+                    val currentUnit = unitSystem.value
+                    val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
                         put("vin", obdManager.vehicleVin.value ?: "Not available")
                         put("vehicle_details", obdManager.vehicleDetails.value ?: "Not available")
+                        put("driver_unit_system", if (isMetric) "METRIC (State distance in km)" else "SAE (State distance in miles)")
                         if (odoKm != null && odoKm > 0) {
-                            put("odometer_miles", (odoKm * 0.621371).toInt())
-                            put("odometer_km", odoKm.toInt())
+                            if (isMetric) {
+                                put("odometer", String.format(java.util.Locale.US, "%,.0f km", odoKm))
+                                put("odometer_km", odoKm.toInt())
+                            } else {
+                                put("odometer", String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371))
+                                put("odometer_miles", (odoKm * 0.621371).toInt())
+                            }
                             put("odometer_formatted", String.format(java.util.Locale.US, "%,.0f miles (%,.0f km)", odoKm * 0.621371, odoKm))
                         } else {
                             put("odometer", "Unavailable")
@@ -747,13 +811,17 @@ class GeminiAgentViewModel : ViewModel() {
                 }
                 "get_obdb_signals" -> {
                     val m22 = obdManager.mode22Streams.value
+                    val currentUnit = unitSystem.value
+                    val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
+                        put("driver_unit_system", if (isMetric) "METRIC (State temps in °C, pressures in kPa, distances in km)" else "SAE (State temps in °F, pressures in psi, distances in miles)")
                         val arr = JSONArray()
                         for (p in m22) {
+                            val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(p.rawValue, p.pid, currentUnit)
                             arr.put(JSONObject().apply {
                                 put("name", p.pid.name)
                                 put("category", p.pid.category)
-                                put("value", p.formattedValue)
+                                put("value", "$fmtVal $fmtUnit".trim())
                             })
                         }
                         put("custom_pids", arr)
@@ -1349,16 +1417,19 @@ class GeminiAgentViewModel : ViewModel() {
                 val m22Results = obdManager.scanMode22Pids()
                 val obdbResults = obdManager.readObdbSignals()
 
+                val currentUnit = unitSystem.value
                 val summaryList = mutableListOf<String>()
                 for (m22 in m22Results) {
-                    summaryList.add("• ${m22.pid.name}: ${m22.formattedValue}")
+                    val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m22.rawValue, m22.pid, currentUnit)
+                    summaryList.add("• ${m22.pid.name}: $fmtVal $fmtUnit".trim())
                 }
                 val loadedCmds = (obdbLoadedResult.value as? ObdbRepository.LoadResult.Loaded)?.commands ?: emptyList()
                 val allSignals = loadedCmds.flatMap { it.signals }.associateBy { it.id }
                 for ((sigId, valObj) in obdbResults) {
-                    val sigName = allSignals[sigId]?.name ?: sigId
-                    val unit = allSignals[sigId]?.unit ?: ""
-                    summaryList.add("• $sigName: $valObj $unit".trim())
+                    val sig = allSignals[sigId]
+                    val sigName = sig?.name ?: sigId
+                    val (formattedVal, formattedUnit) = formatObdbValueWithUnit(valObj, sig, sigId, currentUnit)
+                    summaryList.add("• $sigName: $formattedVal $formattedUnit".trim())
                 }
 
                 val summary = if (summaryList.isNotEmpty()) summaryList.joinToString("\n") else "No Custom PID responses received from vehicle."
@@ -1445,11 +1516,18 @@ class GeminiAgentViewModel : ViewModel() {
                     val m06Data = obdManager.mode06Results.value
                     val m22Data = obdManager.mode22Streams.value
 
+                    val currentUnit = unitSystem.value
+                    val isMetric = currentUnit == UnitSystem.METRIC
                     val streamsSummary = if (streams.isNotEmpty()) {
-                        streams.joinToString("\n") { "- ${it.pid.name} (${it.pid.description}): ${it.formattedValue}" }
+                        streams.joinToString("\n") { s ->
+                            val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
+                            "- ${s.pid.name} (${s.pid.description}): $fmtVal $fmtUnit"
+                        }
                     } else {
                         val metrics = obdManager.metrics.value
-                        "- Engine RPM: ${metrics.rpm} RPM\n- Coolant Temp: ${metrics.coolantTemp}°C\n- Vehicle Speed: ${metrics.speed} km/h"
+                        val spd = if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"
+                        val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
+                        "- Engine RPM: ${metrics.rpm} RPM\n- Coolant Temp: $temp\n- Vehicle Speed: $spd"
                     }
 
                     val m06Summary = if (m06Data.isNotEmpty()) {
@@ -1459,7 +1537,10 @@ class GeminiAgentViewModel : ViewModel() {
                     }
 
                     val m22Summary = if (m22Data.isNotEmpty()) {
-                        m22Data.joinToString("\n") { "  • ${it.pid.name} (${it.pid.category}): ${it.formattedValue}" }
+                        m22Data.joinToString("\n") { m ->
+                            val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m.rawValue, m.pid, currentUnit)
+                            "  • ${m.pid.name} (${m.pid.category}): $fmtVal $fmtUnit"
+                        }
                     } else {
                         "  • Mode 22 Proprietary Parameters: Unscanned / Not queried yet"
                     }

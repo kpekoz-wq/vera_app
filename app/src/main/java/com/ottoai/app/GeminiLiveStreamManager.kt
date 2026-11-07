@@ -80,12 +80,21 @@ class GeminiLiveStreamManager(private val context: Context) {
     val voiceName: StateFlow<String> = _voiceName.asStateFlow()
 
     fun setVoice(name: String) {
-        if (name in SUPPORTED_LIVE_VOICES) {
-            _voiceName.value = name
-        } else {
-            Log.w(TAG, "Voice '$name' is not supported by Gemini Multimodal Live API (supported: $SUPPORTED_LIVE_VOICES). Falling back to 'Aoede'.")
-            _voiceName.value = "Aoede"
+        val trimmed = name.trim()
+        val normalized = when (trimmed.lowercase()) {
+            "vega" -> "Aoede" // Maps consumer Gemini "Vega" (bright female voice) to Gemini Live API female voice Aoede
+            "aoede" -> "Aoede"
+            "charon" -> "Charon"
+            "fenrir" -> "Fenrir"
+            "kore" -> "Kore"
+            "puck" -> "Puck"
+            else -> {
+                Log.w(TAG, "Voice '$name' not recognized. Defaulting to 'Aoede'.")
+                "Aoede"
+            }
         }
+        _voiceName.value = normalized
+        Log.i(TAG, "Selected Gemini Live Voice: $normalized (requested: '$name')")
     }
 
     private var currentHasPriorHistory = false
