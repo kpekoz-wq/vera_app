@@ -47,9 +47,9 @@ extensions.configure<ApplicationExtension> {
     buildTypes {
         getByName("debug") {
             firebaseAppDistribution {
-                appId = "1:200348372358:android:26ca31f85e30e8ba57b007"
-                testers = "tester1@example.com, tester2@example.com"
-                groups = "qa-team, internal-testers"
+                appId = "1:200348372358:android:ed39b182e2c68cde57b007"
+                // Optional: testers = "email@example.com"
+                // Optional: groups = "testers"
                 releaseNotes = "Automated VERA test build from Gradle"
                 artifactType = "APK"
             }
