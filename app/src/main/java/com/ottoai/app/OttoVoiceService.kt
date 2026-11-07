@@ -122,7 +122,7 @@ class OttoVoiceService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "OttoAI Voice Assistant"
+            val name = "VERA Voice Assistant"
             val descriptionText = "Keeps voice conversation active while phone screen is off or asleep"
             val importance = NotificationManager.IMPORTANCE_LOW
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
@@ -156,7 +156,7 @@ class OttoVoiceService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("OttoAI Live Mechanic Active")
+            .setContentTitle("VERA Live Mechanic Active")
             .setContentText("Monitoring vehicle & listening hands-free in background...")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingIntent)

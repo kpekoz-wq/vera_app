@@ -79,8 +79,8 @@ class GeminiAgentViewModel : ViewModel() {
         if (messages.isEmpty()) {
             messages.add(
                 ChatMessage(
-                    sender = "OttoAI",
-                    text = "Hello! I am OttoAI, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
+                    sender = "VERA",
+                    text = "Hello! I am VERA, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
                 )
             )
         }
@@ -394,8 +394,8 @@ class GeminiAgentViewModel : ViewModel() {
         messages.clear()
         messages.add(
             ChatMessage(
-                sender = "OttoAI",
-                text = "Hello! I am OttoAI, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
+                sender = "VERA",
+                text = "Hello! I am VERA, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
             )
         )
     }
@@ -411,7 +411,7 @@ class GeminiAgentViewModel : ViewModel() {
         } else {
             messages.add(
                 ChatMessage(
-                    sender = "OttoAI",
+                    sender = "VERA",
                     text = "Loaded diagnostic session: ${session.title}"
                 )
             )
@@ -429,11 +429,11 @@ class GeminiAgentViewModel : ViewModel() {
 
     private fun buildRecentConversationContextForLive(maxMessages: Int = 20): String {
         val relevant = messages
-            .filter { it.sender == "User" || it.sender == "OttoAI" || it.sender == "OttoAI (Live)" }
+            .filter { it.sender == "User" || it.sender == "VERA" || it.sender == "VERA (Live)" || it.sender == "OttoAI" || it.sender == "OttoAI (Live)" }
             .takeLast(maxMessages)
         if (relevant.isEmpty()) return ""
         return relevant.joinToString("\n") { msg ->
-            val label = if (msg.sender == "User") "DRIVER" else "OTTOAI"
+            val label = if (msg.sender == "User") "DRIVER" else "VERA"
             "$label: ${msg.text.trim()}"
         }
     }
@@ -581,26 +581,26 @@ class GeminiAgentViewModel : ViewModel() {
         isNewUserTurn = true
 
         if (isNewLiveTurn) {
-            messages.add(ChatMessage("OttoAI (Live)", text.trim()))
+            messages.add(ChatMessage("VERA (Live)", text.trim()))
             isNewLiveTurn = false
         } else {
             val lastMsg = messages.lastOrNull()
-            if (lastMsg != null && lastMsg.sender == "OttoAI (Live)") {
+            if (lastMsg != null && (lastMsg.sender == "VERA (Live)" || lastMsg.sender == "OttoAI (Live)")) {
                 val updated = if (lastMsg.text.endsWith(" ") || text.startsWith(" ") || text.startsWith(",") || text.startsWith(".") || text.startsWith("!") || text.startsWith("?")) {
                     lastMsg.text + text
                 } else {
                     lastMsg.text + " " + text
                 }
                 val idx = messages.size - 1
-                messages[idx] = ChatMessage("OttoAI (Live)", updated)
+                messages[idx] = ChatMessage("VERA (Live)", updated)
             } else {
-                messages.add(ChatMessage("OttoAI (Live)", text.trim()))
+                messages.add(ChatMessage("VERA (Live)", text.trim()))
             }
         }
     }
 
     private val liveSystemPromptText = """
-        You are OttoAI, an elite automotive master technician and seasoned mechanic riding shotgun with the driver.
+        You are VERA, an elite automotive master technician and seasoned mechanic riding shotgun with the driver.
 
         You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
 
@@ -824,6 +824,9 @@ class GeminiAgentViewModel : ViewModel() {
     private val _recordingSampleCount = MutableStateFlow(0)
     val recordingSampleCount: StateFlow<Int> = _recordingSampleCount.asStateFlow()
 
+    private val _recordedSamplesFlow = MutableStateFlow<List<RecordedDataSample>>(emptyList())
+    val recordedSamplesFlow: StateFlow<List<RecordedDataSample>> = _recordedSamplesFlow.asStateFlow()
+
     private val recordedSamples = mutableListOf<RecordedDataSample>()
     private var recordingJob: kotlinx.coroutines.Job? = null
     private var recordingStartMs = 0L
@@ -834,6 +837,7 @@ class GeminiAgentViewModel : ViewModel() {
     fun startRecording() {
         if (_isRecording.value) return
         synchronized(recordedSamples) { recordedSamples.clear() }
+        _recordedSamplesFlow.value = emptyList()
         recordingStartMs = System.currentTimeMillis()
         _recordingDurationSeconds.value = 0
         _recordingSampleCount.value = 0
@@ -858,13 +862,16 @@ class GeminiAgentViewModel : ViewModel() {
                 )
 
                 var count = 0
+                val currentCopy: List<RecordedDataSample>
                 synchronized(recordedSamples) {
                     recordedSamples.add(sample)
                     count = recordedSamples.size
+                    currentCopy = recordedSamples.toList()
                 }
 
                 _recordingDurationSeconds.value = elapsedSec.toInt()
                 _recordingSampleCount.value = count
+                _recordedSamplesFlow.value = currentCopy
 
                 kotlinx.coroutines.delay(250)
             }
@@ -877,10 +884,11 @@ class GeminiAgentViewModel : ViewModel() {
         recordingJob = null
 
         val samplesCopy = synchronized(recordedSamples) { recordedSamples.toList() }
+        _recordedSamplesFlow.value = samplesCopy
         val durationSec = if (samplesCopy.isNotEmpty()) (samplesCopy.last().timestampMs - samplesCopy.first().timestampMs) / 1000.0 else 0.0
 
         val timeStr = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
-        val defaultFilename = "OttoAI_DataLog_$timeStr.csv"
+        val defaultFilename = "VERA_DataLog_$timeStr.csv"
 
         val csvString = generateCsvData(
             samples = samplesCopy,
@@ -905,7 +913,7 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun onCsvAttachedForAnalysis(result: RecordedCsvResult) {
-        val summary = "💾 Recorded Live Data Log Attached (${result.sampleCount} samples, ${String.format(java.util.Locale.US, "%.1f", result.durationSeconds)}s duration).\nFile: ${result.defaultFilename}\n\nAsk OttoAI any question about this data log!"
+        val summary = "💾 Recorded Live Data Log Attached (${result.sampleCount} samples, ${String.format(java.util.Locale.US, "%.1f", result.durationSeconds)}s duration).\nFile: ${result.defaultFilename}\n\nAsk VERA any question about this data log!"
         messages.add(ChatMessage("System", summary))
     }
 
@@ -928,7 +936,7 @@ class GeminiAgentViewModel : ViewModel() {
         val startTimeStr = if (samples.isNotEmpty()) dateFormat.format(java.util.Date(samples.first().timestampMs)) else "N/A"
         val durationSec = if (samples.isNotEmpty()) (samples.last().timestampMs - samples.first().timestampMs) / 1000.0 else 0.0
 
-        sb.append("# OttoAI Vehicle Live Data Log\n")
+        sb.append("# VERA Vehicle Live Data Log\n")
         sb.append("# Vehicle: ${vehicleDetails ?: "Unknown Vehicle"}\n")
         sb.append("# VIN: ${vehicleVin ?: "N/A"}\n")
         sb.append("# Start Time: $startTimeStr\n")
@@ -1089,7 +1097,7 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     private val systemPromptText = """
-        You are OttoAI, a master automotive diagnostic expert and seasoned, practical shade-tree mechanic riding shotgun with the driver.
+        You are VERA, a master automotive diagnostic expert and seasoned, practical shade-tree mechanic riding shotgun with the driver.
         
         Persona & Knowledge Base:
         - Master Diagnostic Skills: Deep understanding of engine thermodynamics, electrical systems, PID sensors, fuel trim math, ignition timing, and ECU logic.
@@ -1097,7 +1105,7 @@ class GeminiAgentViewModel : ViewModel() {
 
         Blue-Collar Garage Humor & Shop Personality:
         - Infuse a subtle, friendly blue-collar mechanic sense of humor (e.g., light garage banter, missing 10mm socket jokes, engineers overcomplicating simple parts, or mild "just send it" shop humor).
-        - Keep it light, natural, and occasional—not every single response needs a joke, but present enough to make riding shotgun with OttoAI pleasant, warm, and engaging to deal with.
+        - Keep it light, natural, and occasional—not every single response needs a joke, but present enough to make riding shotgun with VERA pleasant, warm, and engaging to deal with.
 
         Core Mechanics & Communication Rules:
         1. SPEAK LIKE A REAL HUMAN MECHANIC IN PLAIN ENGLISH: Speak naturally as an expert mechanic sitting in the passenger seat. NEVER recite raw sensor numbers, PID values, RPM figures, voltage levels, or test ID numbers out loud unless the user specifically asks for exact numbers.
@@ -1487,7 +1495,7 @@ class GeminiAgentViewModel : ViewModel() {
 
                 _isSendingMessage.value = true
                 val aiResponseText = callGeminiApi(contextualPrompt, imagesBase64)
-                messages.add(ChatMessage("OttoAI", aiResponseText))
+                messages.add(ChatMessage("VERA", aiResponseText))
                 _isSendingMessage.value = false
                 speak(aiResponseText)
                 autoSaveCurrentSession()

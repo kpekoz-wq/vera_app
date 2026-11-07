@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.ottoai.app
 
@@ -24,6 +24,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -147,7 +148,7 @@ fun generateChatTranscriptText(
 
     val sb = StringBuilder()
     sb.appendLine("==================================================")
-    sb.appendLine("        OttoAI Diagnostic Log & Chat Transcript   ")
+    sb.appendLine("        VERA Diagnostic Log & Chat Transcript     ")
     sb.appendLine("==================================================")
     sb.appendLine("Generated: $timestamp")
     sb.appendLine("Vehicle Details: ${vehicleDetails ?: "Unknown Vehicle"}")
@@ -164,7 +165,8 @@ fun generateChatTranscriptText(
         for ((idx, msg) in messages.withIndex()) {
             val senderLabel = when (msg.sender) {
                 "User" -> "YOU"
-                "OttoAI" -> "OTTOAI MECHANIC"
+                "VERA", "OttoAI" -> "VERA MECHANIC"
+                "VERA (Live)", "OttoAI (Live)" -> "VERA (LIVE)"
                 else -> msg.sender.uppercase()
             }
             sb.appendLine("[${idx + 1}] $senderLabel:")
@@ -531,7 +533,7 @@ fun getDtcDiagnosticGuidance(code: String, description: String = ""): String {
         code == "P0172" || code == "P0175" -> "System Too Rich. Common causes: Leaking fuel injector, faulty fuel pressure regulator, dirty air filter, or failing O2 sensor."
         code == "P0420" || code == "P0430" -> "Catalyst System Efficiency Below Threshold. Inspect downstream O2 sensor output, exhaust leaks upstream of cat, or failing catalytic converter."
         code.startsWith("P04") -> "Emissions/EVAP System Fault. Check gas cap seal, EVAP purge solenoid valve, vent solenoid, and vacuum lines."
-        else -> "Diagnostic trouble code recorded by engine control unit. Use OttoAI Assistant to analyze live telemetry and specific repair procedures."
+        else -> "Diagnostic trouble code recorded by engine control unit. Use VERA Assistant to analyze live telemetry and specific repair procedures."
     }
 }
 
@@ -556,50 +558,73 @@ fun SleekMetricTile(
     label: String,
     value: String,
     unit: String,
+    isSelected: Boolean = false,
     onClick: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier
             .height(66.dp)
-            .clickable { onClick() },
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        border = if (isSelected) {
+            androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+        }
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(vertical = 4.dp, horizontal = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = label,
-                fontSize = 9.sp,
-                lineHeight = 10.sp,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 9.sp,
+                    lineHeight = 10.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
-            Text(
-                text = value,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1
-            )
+                Text(
+                    text = value,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
 
-            Text(
-                text = if (unit.isNotBlank()) unit else " ",
-                fontSize = 9.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1
-            )
+                Text(
+                    text = if (unit.isNotBlank()) unit else " ",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1
+                )
+            }
+
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(3.dp)
+                        .size(13.dp)
+                )
+            }
         }
     }
 }
@@ -1315,6 +1340,452 @@ fun FullScreenStreamDetailView(
 }
 
 // -----------------------------------------------------------------------------
+// Multi-Stream Real-Time Live Graph View
+// -----------------------------------------------------------------------------
+
+data class MultiStreamPlotItem(
+    val pidHex: String,
+    val name: String,
+    val description: String,
+    val rawValue: Double,
+    val formattedValue: String,
+    val unit: String,
+    val history: List<StreamSample>,
+    val color: Color
+)
+
+@Composable
+fun MultiStreamLiveGraphView(
+    selectedStreamPids: List<String>,
+    supportedStreams: List<LiveStreamData>,
+    mode22Streams: List<Mode22StreamData>,
+    metrics: BluetoothObdManager.VehicleMetrics,
+    unitSystem: UnitSystem,
+    vehicleDetails: String?,
+    vehicleVin: String?,
+    odoFormatted: String?,
+    isRecording: Boolean,
+    durationSeconds: Int,
+    sampleCount: Int,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit,
+    onSaveCsv: (RecordedCsvResult) -> Unit,
+    stoppedCsvResult: RecordedCsvResult?,
+    onTogglePid: (String) -> Unit,
+    onAttachToChat: ((RecordedCsvResult) -> Unit)? = null,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val palette = remember {
+        listOf(
+            Color(0xFF00E5FF), // Electric Cyan
+            Color(0xFFFFC107), // Amber Gold
+            Color(0xFFE040FB), // Vibrant Magenta
+            Color(0xFF00E676), // Neon Spring Green
+            Color(0xFFFF6D00), // Vivid Orange
+            Color(0xFFFF5252), // Bright Coral Red
+            Color(0xFF40C4FF), // Deep Sky Blue
+            Color(0xFFEEFF41)  // Lime Accent
+        )
+    }
+
+    // Resolve selected PIDs into live stream items with history
+    val activePlotItems = remember(selectedStreamPids, supportedStreams, mode22Streams, metrics, unitSystem) {
+        selectedStreamPids.mapIndexed { index, pidKey ->
+            val color = palette[index % palette.size]
+            val supStream = supportedStreams.find { it.pid.pidHex.equals(pidKey, ignoreCase = true) }
+            if (supStream != null) {
+                val (fmtVal, fmtUnit) = formatValueWithUnit(supStream.rawValue, supStream.pid, unitSystem)
+                MultiStreamPlotItem(
+                    pidHex = supStream.pid.pidHex,
+                    name = supStream.pid.name,
+                    description = supStream.pid.description,
+                    rawValue = supStream.rawValue,
+                    formattedValue = fmtVal,
+                    unit = fmtUnit,
+                    history = supStream.history,
+                    color = color
+                )
+            } else if (pidKey.startsWith("22_")) {
+                val rawPid = pidKey.removePrefix("22_")
+                val m22 = mode22Streams.find { it.pid.pidHex.equals(rawPid, ignoreCase = true) }
+                if (m22 != null) {
+                    val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m22.rawValue, m22.pid, unitSystem)
+                    MultiStreamPlotItem(
+                        pidHex = pidKey,
+                        name = m22.pid.name,
+                        description = m22.pid.description,
+                        rawValue = m22.rawValue,
+                        formattedValue = fmtVal,
+                        unit = fmtUnit,
+                        history = listOf(StreamSample(m22.rawValue)),
+                        color = color
+                    )
+                } else {
+                    MultiStreamPlotItem(pidKey, "PID $pidKey", "", 0.0, "--", "", emptyList(), color)
+                }
+            } else {
+                when (pidKey) {
+                    "0C" -> MultiStreamPlotItem("0C", "Engine RPM", "Crankshaft rotational speed", metrics.rpm.toDouble(), "${metrics.rpm}", "RPM", emptyList(), color)
+                    "0D" -> {
+                        val spdVal = if (unitSystem == UnitSystem.SAE) metrics.speed * 0.621371 else metrics.speed.toDouble()
+                        val spdUnit = if (unitSystem == UnitSystem.SAE) "mph" else "km/h"
+                        MultiStreamPlotItem("0D", "Vehicle Speed", "Vehicle velocity", metrics.speed.toDouble(), String.format(java.util.Locale.US, "%.0f", spdVal), spdUnit, emptyList(), color)
+                    }
+                    "05" -> {
+                        val cVal = if (unitSystem == UnitSystem.SAE) (metrics.coolantTemp * 1.8) + 32 else metrics.coolantTemp.toDouble()
+                        val cUnit = if (unitSystem == UnitSystem.SAE) "°F" else "°C"
+                        MultiStreamPlotItem("05", "Coolant Temp", "Engine coolant temperature", metrics.coolantTemp.toDouble(), String.format(java.util.Locale.US, "%.0f", cVal), cUnit, emptyList(), color)
+                    }
+                    "04" -> MultiStreamPlotItem("04", "Engine Load", "Engine air charge load", metrics.engineLoad.toDouble(), "${metrics.engineLoad}", "%", emptyList(), color)
+                    "06" -> MultiStreamPlotItem("06", "Fuel Trim", "Short term fuel trim", metrics.fuelTrim.toDouble(), "${metrics.fuelTrim}", "%", emptyList(), color)
+                    "10" -> MultiStreamPlotItem("10", "MAF Sensor", "Mass air flow rate", metrics.maf, String.format(java.util.Locale.US, "%.1f", metrics.maf), "g/s", emptyList(), color)
+                    "0F" -> {
+                        val iVal = if (unitSystem == UnitSystem.SAE) (metrics.intakeAirTemp * 1.8) + 32 else metrics.intakeAirTemp.toDouble()
+                        val iUnit = if (unitSystem == UnitSystem.SAE) "°F" else "°C"
+                        MultiStreamPlotItem("0F", "Intake Air Temp", "Intake air temperature", metrics.intakeAirTemp.toDouble(), String.format(java.util.Locale.US, "%.0f", iVal), iUnit, emptyList(), color)
+                    }
+                    "11" -> MultiStreamPlotItem("11", "Throttle Position", "Throttle plate position", metrics.throttlePosition.toDouble(), "${metrics.throttlePosition}", "%", emptyList(), color)
+                    else -> MultiStreamPlotItem(pidKey, "PID $pidKey", "", 0.0, "--", "", emptyList(), color)
+                }
+            }
+        }
+    }
+
+    fun shareTelemetryPlot() {
+        val sb = StringBuilder()
+        sb.appendLine("=========================================")
+        sb.appendLine("   VERA MULTI-STREAM TELEMETRY REPORT   ")
+        sb.appendLine("=========================================")
+        sb.appendLine("Vehicle: ${vehicleDetails ?: "Connected Vehicle"}")
+        if (!vehicleVin.isNullOrBlank()) sb.appendLine("VIN: $vehicleVin")
+        if (!odoFormatted.isNullOrBlank()) sb.appendLine("Odometer: $odoFormatted")
+        sb.appendLine("Recording Duration: ${durationSeconds}s | Recorded Samples: $sampleCount")
+        sb.appendLine("Timestamp: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
+        sb.appendLine()
+        sb.appendLine("--- MONITORED TELEMETRY STREAMS ---")
+        activePlotItems.forEach { item ->
+            val vals = item.history.map { it.value }
+            val minVal = vals.minOrNull() ?: item.rawValue
+            val maxVal = vals.maxOrNull() ?: item.rawValue
+            val minFmt = String.format(java.util.Locale.US, "%.1f", minVal)
+            val maxFmt = String.format(java.util.Locale.US, "%.1f", maxVal)
+            sb.appendLine("• ${item.name} (${item.pidHex}): Live: ${item.formattedValue} ${item.unit} [Range: $minFmt - $maxFmt]")
+        }
+        sb.appendLine()
+        if (stoppedCsvResult != null) {
+            sb.appendLine("--- RECORDED CSV TELEMETRY DATA ---")
+            sb.appendLine(stoppedCsvResult.csvContent)
+        }
+        val sendIntent = Intent().apply {
+            action = Intent.ACTION_SEND
+            putExtra(Intent.EXTRA_TEXT, sb.toString())
+            putExtra(Intent.EXTRA_SUBJECT, "VERA Telemetry Plot Log - ${activePlotItems.take(3).joinToString(", ") { it.name }}")
+            type = "text/plain"
+        }
+        context.startActivity(Intent.createChooser(sendIntent, "Share or Email VERA Telemetry Plot"))
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            // Header: Back button + Title + REC button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("← Dashboard", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                Text(
+                    text = "Multi-Stream Plot",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+
+                TapeDeckRecordButton(
+                    isRecording = isRecording,
+                    durationSeconds = durationSeconds,
+                    sampleCount = sampleCount,
+                    onStartRecording = onStartRecording,
+                    onStopRecording = onStopRecording
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Graph Subtitle & Action Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(if (isRecording) Color(0xFFFF1744) else Color(0xFF00E676), CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isRecording) "RECORDING LIVE ($sampleCount pts)" else "${activePlotItems.size} STREAMS MONITORED",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isRecording) Color(0xFFFF5252) else MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilledTonalButton(
+                        onClick = { shareTelemetryPlot() },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Share, contentDescription = "Share", modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share / Email", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    if (stoppedCsvResult != null) {
+                        Button(
+                            onClick = { onSaveCsv(stoppedCsvResult) },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("Save CSV", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Multi-Stream Shared Canvas Line Graph
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(230.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF10141D),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+            ) {
+                if (activePlotItems.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No streams selected. Tap and hold tiles to select streams.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 12.dp)
+                    ) {
+                        val canvasWidth = size.width
+                        val canvasHeight = size.height
+                        val padY = 16.dp.toPx()
+                        val plotHeight = canvasHeight - (2 * padY)
+
+                        // Draw horizontal reference grid lines (25%, 50%, 75%)
+                        val gridAlpha = 0.12f
+                        drawLine(
+                            color = Color.White.copy(alpha = gridAlpha),
+                            start = Offset(0f, padY + plotHeight * 0.25f),
+                            end = Offset(canvasWidth, padY + plotHeight * 0.25f),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                        drawLine(
+                            color = Color.White.copy(alpha = gridAlpha),
+                            start = Offset(0f, padY + plotHeight * 0.50f),
+                            end = Offset(canvasWidth, padY + plotHeight * 0.50f),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                        drawLine(
+                            color = Color.White.copy(alpha = gridAlpha),
+                            start = Offset(0f, padY + plotHeight * 0.75f),
+                            end = Offset(canvasWidth, padY + plotHeight * 0.75f),
+                            strokeWidth = 1.dp.toPx()
+                        )
+
+                        // Plot each stream line
+                        activePlotItems.forEach { item ->
+                            val samples = item.history.takeLast(100)
+                            if (samples.size >= 2) {
+                                val minVal = samples.minOf { it.value }
+                                val maxVal = samples.maxOf { it.value }
+                                val range = if (maxVal == minVal) 1.0 else (maxVal - minVal)
+
+                                val path = Path()
+                                var lastX = 0f
+                                var lastY = 0f
+
+                                samples.forEachIndexed { i, sample ->
+                                    val norm = ((sample.value - minVal) / range).toFloat().coerceIn(0f, 1f)
+                                    val x = (i.toFloat() / (samples.size - 1)) * canvasWidth
+                                    val y = (canvasHeight - padY) - (norm * plotHeight)
+
+                                    if (i == 0) {
+                                        path.moveTo(x, y)
+                                    } else {
+                                        path.lineTo(x, y)
+                                    }
+                                    lastX = x
+                                    lastY = y
+                                }
+
+                                drawPath(
+                                    path = path,
+                                    color = item.color,
+                                    style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                                )
+
+                                // Glowing head dot on latest data point
+                                drawCircle(
+                                    color = item.color.copy(alpha = 0.35f),
+                                    radius = 6.dp.toPx(),
+                                    center = Offset(lastX, lastY)
+                                )
+                                drawCircle(
+                                    color = item.color,
+                                    radius = 3.dp.toPx(),
+                                    center = Offset(lastX, lastY)
+                                )
+                                drawCircle(
+                                    color = Color.White,
+                                    radius = 1.2.dp.toPx(),
+                                    center = Offset(lastX, lastY)
+                                )
+                            } else if (samples.size == 1) {
+                                val y = padY + (plotHeight * 0.5f)
+                                drawLine(
+                                    color = item.color,
+                                    start = Offset(0f, y),
+                                    end = Offset(canvasWidth, y),
+                                    strokeWidth = 2.dp.toPx()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Legend Header
+            Text(
+                text = "STREAM COLOR LEGEND",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+
+            // Legend Items List
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(activePlotItems) { item ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, item.color.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                // Color Dot Swatch
+                                Box(
+                                    modifier = Modifier
+                                        .size(13.dp)
+                                        .background(item.color, CircleShape)
+                                        .border(1.dp, Color.White.copy(alpha = 0.6f), CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = item.name,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = item.color.copy(alpha = 0.2f)
+                                        ) {
+                                            Text(
+                                                text = "PID ${item.pidHex}",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = item.color,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    val vals = item.history.map { it.value }
+                                    val minV = vals.minOrNull() ?: item.rawValue
+                                    val maxV = vals.maxOrNull() ?: item.rawValue
+                                    Text(
+                                        text = "Min: ${String.format(java.util.Locale.US, "%.1f", minV)} • Max: ${String.format(java.util.Locale.US, "%.1f", maxV)}",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${item.formattedValue} ${item.unit}",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = item.color
+                                )
+                                IconButton(
+                                    onClick = { onTogglePid(item.pidHex) },
+                                    modifier = Modifier.size(28.dp).padding(start = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove stream",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Main Diagnostic App Screen
 // -----------------------------------------------------------------------------
 
@@ -1361,6 +1832,9 @@ fun OttoMainScreen(
     val unitSystem by viewModel.unitSystem.collectAsState()
     val obdbLoadedResult by viewModel.obdbLoadedResult.collectAsState()
     val obdbSignalResults by viewModel.obdbSignalResults.collectAsState()
+    val isRecording by viewModel.isRecording.collectAsState()
+    val recordingDurationSec by viewModel.recordingDurationSeconds.collectAsState()
+    val recordingSampleCount by viewModel.recordingSampleCount.collectAsState()
 
     val odoFormatted = remember(vehicleOdometerKm, unitSystem) {
         vehicleOdometerKm?.let { km ->
@@ -1716,16 +2190,16 @@ fun OttoMainScreen(
         val sendIntent = Intent().apply {
             action = Intent.ACTION_SEND
             putExtra(Intent.EXTRA_TEXT, transcript)
-            putExtra(Intent.EXTRA_SUBJECT, "OttoAI Diagnostic Log - ${vehicleDetails ?: "Vehicle"}")
+            putExtra(Intent.EXTRA_SUBJECT, "VERA Diagnostic Log - ${vehicleDetails ?: "Vehicle"}")
             type = "text/plain"
         }
-        val shareIntent = Intent.createChooser(sendIntent, "Share OttoAI Diagnostic Chat")
+        val shareIntent = Intent.createChooser(sendIntent, "Share VERA Diagnostic Chat")
         context.startActivity(shareIntent)
     }
 
     fun saveChatToTextFile() {
         val timeStr = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
-        val defaultFilename = "OttoAI_ChatLog_$timeStr.txt"
+        val defaultFilename = "VERA_ChatLog_$timeStr.txt"
         saveFileLauncher.launch(defaultFilename)
     }
 
@@ -1739,12 +2213,27 @@ fun OttoMainScreen(
     var isLiveStreamsExpanded by remember { mutableStateOf(true) }
     var isMode06Expanded by remember { mutableStateOf(false) }
     var isMode22Expanded by remember { mutableStateOf(false) }
+    val selectedStreamPids = remember { mutableStateListOf<String>() }
+    var showMultiStreamGraphView by remember { mutableStateOf(false) }
     val carouselListState = rememberLazyListState()
     val chatListState = rememberLazyListState()
 
     LaunchedEffect(viewModel.messages.size) {
         if (viewModel.messages.isNotEmpty()) {
             chatListState.animateScrollToItem(viewModel.messages.size - 1)
+        }
+    }
+
+    // Auto-twirl expansion: when Mode 06 or Mode 22 data arrives, automatically expand panels
+    LaunchedEffect(mode06Results.size) {
+        if (mode06Results.isNotEmpty()) {
+            isMode06Expanded = true
+        }
+    }
+
+    LaunchedEffect(mode22Streams.size, obdbSignalResults.size) {
+        if (mode22Streams.isNotEmpty() || obdbSignalResults.isNotEmpty()) {
+            isMode22Expanded = true
         }
     }
 
@@ -1774,6 +2263,44 @@ fun OttoMainScreen(
             stream = activeStream,
             unitSystem = unitSystem,
             onBack = { selectedStreamForDetail = null }
+        )
+        return
+    }
+
+    if (showMultiStreamGraphView) {
+        MultiStreamLiveGraphView(
+            selectedStreamPids = selectedStreamPids.toList(),
+            supportedStreams = supportedStreams,
+            mode22Streams = mode22Streams,
+            metrics = metrics,
+            unitSystem = unitSystem,
+            vehicleDetails = vehicleDetails,
+            vehicleVin = vehicleVin,
+            odoFormatted = odoFormatted,
+            isRecording = isRecording,
+            durationSeconds = recordingDurationSec,
+            sampleCount = recordingSampleCount,
+            onStartRecording = { viewModel.startRecording() },
+            onStopRecording = {
+                val csvResult = viewModel.stopRecording()
+                if (csvResult.sampleCount > 0) {
+                    stoppedCsvResult = csvResult
+                    pendingCsvResult = csvResult
+                }
+            },
+            onSaveCsv = { result ->
+                pendingCsvResult = result
+                saveCsvLauncher.launch(result.defaultFilename)
+            },
+            stoppedCsvResult = stoppedCsvResult ?: viewModel.lastRecordedCsvResult,
+            onTogglePid = { pid ->
+                if (selectedStreamPids.contains(pid)) {
+                    selectedStreamPids.remove(pid)
+                } else {
+                    selectedStreamPids.add(pid)
+                }
+            },
+            onBack = { showMultiStreamGraphView = false }
         )
         return
     }
@@ -1809,7 +2336,7 @@ fun OttoMainScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "OttoAI Chats",
+                                text = "VERA Chats",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -1961,8 +2488,8 @@ fun OttoMainScreen(
                     }
                     Column {
                         Text(
-                            text = "OttoAI Diagnostic",
-                            fontSize = 19.sp,
+                            text = "VERA",
+                            fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onBackground
                         )
@@ -1980,28 +2507,32 @@ fun OttoMainScreen(
                                 Pair(rawDetails, "")
                             }
 
-                            Text(
-                                text = makeModelYearText,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            val subDetails = buildList {
-                                if (vinText.isNotBlank()) add(vinText)
-                                if (!odoFormatted.isNullOrBlank()) add("ODO: $odoFormatted")
-                            }.joinToString(" • ")
-
-                            if (subDetails.isNotBlank()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
                                 Text(
-                                    text = subDetails,
+                                    text = if (makeModelYearText.isNotBlank()) makeModelYearText else "Connected Vehicle",
+                                    fontSize = 11.sp,
+                                    lineHeight = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = if (vinText.isNotBlank()) vinText else "VIN: Detecting...",
                                     fontSize = 10.sp,
+                                    lineHeight = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "ODO: ${odoFormatted ?: "--"}",
+                                    fontSize = 10.sp,
+                                    lineHeight = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         } else {
                             Text(
-                                text = "Autonomous Automotive Agent",
+                                text = "Automotive Diagnostic Assistant",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2478,15 +3009,16 @@ fun OttoMainScreen(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Tape Deck Record Button / RECORDING Indicator
-                val isRecording by viewModel.isRecording.collectAsState()
-                val recordingDurationSec by viewModel.recordingDurationSeconds.collectAsState()
-                val recordingSampleCount by viewModel.recordingSampleCount.collectAsState()
-
                 TapeDeckRecordButton(
                     isRecording = isRecording,
                     durationSeconds = recordingDurationSec,
                     sampleCount = recordingSampleCount,
-                    onStartRecording = { viewModel.startRecording() },
+                    onStartRecording = {
+                        viewModel.startRecording()
+                        if (selectedStreamPids.isNotEmpty()) {
+                            showMultiStreamGraphView = true
+                        }
+                    },
                     onStopRecording = {
                         val csvResult = viewModel.stopRecording()
                         if (csvResult.sampleCount > 0) {
@@ -2500,10 +3032,60 @@ fun OttoMainScreen(
             }
 
             Text(
-                text = if (isConnected) "Tap to inspect • Swipe ←" else "Disconnected",
+                text = if (isConnected) "Tap • Hold to select multiple" else "Disconnected",
                 fontSize = 10.sp,
                 color = if (isConnected) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+
+        // Multi-Stream Selection Floating Banner
+        if (selectedStreamPids.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${selectedStreamPids.size} stream${if (selectedStreamPids.size > 1) "s" else ""} selected",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(
+                            onClick = { selectedStreamPids.clear() },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text("Clear", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                if (!isRecording) viewModel.startRecording()
+                                showMultiStreamGraphView = true
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(if (isRecording) "View Graph 📈" else "REC & Graph 📈", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
         }
 
         AnimatedVisibility(
@@ -2538,13 +3120,23 @@ fun OttoMainScreen(
                             ) {
                                 columnItems.forEach { stream ->
                                     val (formattedVal, formattedUnit) = formatValueWithUnit(stream.rawValue, stream.pid, unitSystem)
+                                    val pidHex = stream.pid.pidHex
+                                    val isSelected = selectedStreamPids.contains(pidHex)
                                     SleekMetricTile(
                                         label = stream.pid.name,
                                         value = formattedVal,
                                         unit = formattedUnit,
+                                        isSelected = isSelected,
                                         onClick = {
                                             if (!carouselListState.isScrollInProgress) {
                                                 selectedStreamForDetail = stream
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (selectedStreamPids.contains(pidHex)) {
+                                                selectedStreamPids.remove(pidHex)
+                                            } else {
+                                                selectedStreamPids.add(pidHex)
                                             }
                                         },
                                         modifier = Modifier
@@ -2575,24 +3167,49 @@ fun OttoMainScreen(
                         if (unitSystem == UnitSystem.SAE) String.format(java.util.Locale.US, "%.0f", (metrics.intakeAirTemp * 1.8) + 32) else "${metrics.intakeAirTemp}"
                     } else "--"
 
+                    val rpmSelected = selectedStreamPids.contains("0C")
+                    val speedSelected = selectedStreamPids.contains("0D")
+                    val coolantSelected = selectedStreamPids.contains("05")
+                    val loadSelected = selectedStreamPids.contains("04")
+                    val fuelTrimSelected = selectedStreamPids.contains("06")
+                    val mafSelected = selectedStreamPids.contains("10")
+                    val intakeSelected = selectedStreamPids.contains("0F")
+                    val throttleSelected = selectedStreamPids.contains("11")
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        SleekMetricTile("RPM", if (isConnected) "${metrics.rpm}" else "--", "RPM", modifier = Modifier.weight(1f))
-                        SleekMetricTile("Speed", displaySpeed, speedUnit, modifier = Modifier.weight(1f))
-                        SleekMetricTile("Coolant", displayCoolant, tempUnit, modifier = Modifier.weight(1f))
-                        SleekMetricTile("Load", if (isConnected) "${metrics.engineLoad}" else "--", "%", modifier = Modifier.weight(1f))
+                        SleekMetricTile("RPM", if (isConnected) "${metrics.rpm}" else "--", "RPM", isSelected = rpmSelected, onLongClick = {
+                            if (rpmSelected) selectedStreamPids.remove("0C") else selectedStreamPids.add("0C")
+                        }, modifier = Modifier.weight(1f))
+                        SleekMetricTile("Speed", displaySpeed, speedUnit, isSelected = speedSelected, onLongClick = {
+                            if (speedSelected) selectedStreamPids.remove("0D") else selectedStreamPids.add("0D")
+                        }, modifier = Modifier.weight(1f))
+                        SleekMetricTile("Coolant", displayCoolant, tempUnit, isSelected = coolantSelected, onLongClick = {
+                            if (coolantSelected) selectedStreamPids.remove("05") else selectedStreamPids.add("05")
+                        }, modifier = Modifier.weight(1f))
+                        SleekMetricTile("Load", if (isConnected) "${metrics.engineLoad}" else "--", "%", isSelected = loadSelected, onLongClick = {
+                            if (loadSelected) selectedStreamPids.remove("04") else selectedStreamPids.add("04")
+                        }, modifier = Modifier.weight(1f))
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        SleekMetricTile("Fuel Trim", if (isConnected) "${metrics.fuelTrim}" else "--", "%", modifier = Modifier.weight(1f))
-                        SleekMetricTile("MAF", if (isConnected) String.format("%.1f", metrics.maf) else "--", "g/s", modifier = Modifier.weight(1f))
-                        SleekMetricTile("Intake", displayIntake, tempUnit, modifier = Modifier.weight(1f))
-                        SleekMetricTile("Throttle", if (isConnected) "${metrics.throttlePosition}" else "--", "%", modifier = Modifier.weight(1f))
+                        SleekMetricTile("Fuel Trim", if (isConnected) "${metrics.fuelTrim}" else "--", "%", isSelected = fuelTrimSelected, onLongClick = {
+                            if (fuelTrimSelected) selectedStreamPids.remove("06") else selectedStreamPids.add("06")
+                        }, modifier = Modifier.weight(1f))
+                        SleekMetricTile("MAF", if (isConnected) String.format("%.1f", metrics.maf) else "--", "g/s", isSelected = mafSelected, onLongClick = {
+                            if (mafSelected) selectedStreamPids.remove("10") else selectedStreamPids.add("10")
+                        }, modifier = Modifier.weight(1f))
+                        SleekMetricTile("Intake", displayIntake, tempUnit, isSelected = intakeSelected, onLongClick = {
+                            if (intakeSelected) selectedStreamPids.remove("0F") else selectedStreamPids.add("0F")
+                        }, modifier = Modifier.weight(1f))
+                        SleekMetricTile("Throttle", if (isConnected) "${metrics.throttlePosition}" else "--", "%", isSelected = throttleSelected, onLongClick = {
+                            if (throttleSelected) selectedStreamPids.remove("11") else selectedStreamPids.add("11")
+                        }, modifier = Modifier.weight(1f))
                     }
                 }
             }
@@ -2648,7 +3265,10 @@ fun OttoMainScreen(
                 }
 
                 FilledTonalButton(
-                    onClick = { viewModel.scanMode06Monitors() },
+                    onClick = {
+                        isMode06Expanded = true
+                        viewModel.scanMode06Monitors()
+                    },
                     enabled = !isScanningMode06,
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -2823,7 +3443,10 @@ fun OttoMainScreen(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton(
-                    onClick = { viewModel.scanMode22Parameters() },
+                    onClick = {
+                        isMode22Expanded = true
+                        viewModel.scanMode22Parameters()
+                    },
                     enabled = !isScanningMode22,
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -2869,10 +3492,20 @@ fun OttoMainScreen(
                             ) {
                                 items(mode22Streams) { stream ->
                                     val (valStr, unitStr) = formatMode22ValueWithUnit(stream.rawValue, stream.pid, unitSystem)
+                                    val pidKey = "22_${stream.pid.pidHex}"
+                                    val isSelected = selectedStreamPids.contains(pidKey)
                                     SleekMetricTile(
                                         label = stream.pid.name,
                                         value = valStr,
                                         unit = unitStr,
+                                        isSelected = isSelected,
+                                        onLongClick = {
+                                            if (isSelected) {
+                                                selectedStreamPids.remove(pidKey)
+                                            } else {
+                                                selectedStreamPids.add(pidKey)
+                                            }
+                                        },
                                         modifier = Modifier
                                             .width(102.dp)
                                             .height(66.dp)
@@ -3158,7 +3791,8 @@ fun OttoMainScreen(
                                         Text(
                                             text = when (msg.sender) {
                                                 "User" -> "You"
-                                                "OttoAI" -> "OttoAI Mechanic"
+                                                "VERA", "OttoAI" -> "VERA Mechanic"
+                                                "VERA (Live)", "OttoAI (Live)" -> "VERA (Live)"
                                                 else -> msg.sender
                                             },
                                             fontWeight = FontWeight.Bold,
@@ -3344,7 +3978,7 @@ fun OttoMainScreen(
             TextField(
                 value = userPrompt,
                 onValueChange = { userPrompt = it },
-                placeholder = { Text("Ask OttoAI Mechanic or attach logs/files...", fontSize = 12.sp) },
+                placeholder = { Text("Ask VERA Mechanic or attach logs/files...", fontSize = 12.sp) },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
                 colors = TextFieldDefaults.colors(
