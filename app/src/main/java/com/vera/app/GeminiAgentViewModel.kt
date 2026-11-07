@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -194,10 +194,10 @@ class GeminiAgentViewModel : ViewModel() {
 
                     if (selectedVoice != null) {
                         tts?.voice = selectedVoice
-                        Log.i("OttoAI_TTS", "Selected Google US High-Definition Voice: ${selectedVoice.name}")
+                        Log.i("VERA_TTS", "Selected Google US High-Definition Voice: ${selectedVoice.name}")
                     }
                 } catch (e: Exception) {
-                    Log.w("OttoAI_TTS", "Error selecting voice", e)
+                    Log.w("VERA_TTS", "Error selecting voice", e)
                 }
             }
         }
@@ -260,7 +260,7 @@ class GeminiAgentViewModel : ViewModel() {
                             val audioB64 = JSONObject(responseStr).optString("audioContent", "")
                             if (audioB64.isNotBlank()) {
                                 val mp3Bytes = Base64.decode(audioB64, Base64.DEFAULT)
-                                val tempFile = java.io.File.createTempFile("otto_voice_", ".mp3", cacheDir)
+                                val tempFile = java.io.File.createTempFile("vera_voice_", ".mp3", cacheDir)
                                 tempFile.writeBytes(mp3Bytes)
 
                                 withContext(Dispatchers.Main) {
@@ -286,12 +286,12 @@ class GeminiAgentViewModel : ViewModel() {
                                     }
                                 }
                                 audioPlaySuccess = true
-                                Log.i("OttoAI_Voice", "Played Google Cloud Human Voice ($voiceName)")
+                                Log.i("VERA_Voice", "Played Google Cloud Human Voice ($voiceName)")
                                 break
                             }
                         }
                     } catch (e: Exception) {
-                        Log.w("OttoAI_Voice", "Cloud TTS Voice $voiceName failed: ${e.message}")
+                        Log.w("VERA_Voice", "Cloud TTS Voice $voiceName failed: ${e.message}")
                     }
                 }
             }
@@ -313,7 +313,7 @@ class GeminiAgentViewModel : ViewModel() {
             @Suppress("DEPRECATION")
             override fun onError(utteranceId: String?) { _isSpeaking.value = false }
         })
-        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "OttoAiUtterance_${System.currentTimeMillis()}")
+        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "VeraUtterance_${System.currentTimeMillis()}")
     }
 
     fun stopSpeaking() {
@@ -441,7 +441,7 @@ class GeminiAgentViewModel : ViewModel() {
     fun initLiveStreamManager(context: Context) {
         appContext = context.applicationContext
         initSessionManager(context)
-        OttoVoiceService.onStopRequested = {
+        VeraVoiceService.onStopRequested = {
             stopGeminiLiveSession()
         }
         if (liveStreamManager != null) return
@@ -483,7 +483,7 @@ class GeminiAgentViewModel : ViewModel() {
         _isHandsFreeVoiceActive.value = true
 
         appContext?.let {
-            OttoVoiceService.startService(it)
+            VeraVoiceService.startService(it)
         }
 
         val voice = mgr.voiceName.value
@@ -495,7 +495,7 @@ class GeminiAgentViewModel : ViewModel() {
         messages.add(
             ChatMessage(
                 "System",
-                "🎙️ Hands-Free Gemini Live Active (Voice: $voice).\nReal-time 2-way conversation running. Speak naturally—OttoAI has full live read-only telemetry access to your vehicle."
+                "🎙️ Hands-Free Gemini Live Active (Voice: $voice).\nReal-time 2-way conversation running. Speak naturally—VERA has full live read-only telemetry access to your vehicle."
             )
         )
 
@@ -531,7 +531,7 @@ class GeminiAgentViewModel : ViewModel() {
                     messages.add(ChatMessage("Error", "Gemini Live Error: $errMsg"))
                     _isHandsFreeVoiceActive.value = false
                     appContext?.let {
-                        OttoVoiceService.stopService(it)
+                        VeraVoiceService.stopService(it)
                     }
                 }
             }
@@ -544,7 +544,7 @@ class GeminiAgentViewModel : ViewModel() {
         isNewUserTurn = true
         liveStreamManager?.stopLiveSession()
         appContext?.let {
-            OttoVoiceService.stopService(it)
+            VeraVoiceService.stopService(it)
         }
         messages.add(ChatMessage("System", "⚡ Hands-Free Gemini Live Mode Ended."))
         autoSaveCurrentSession()
@@ -849,7 +849,7 @@ class GeminiAgentViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         appContext?.let {
-            OttoVoiceService.stopService(it)
+            VeraVoiceService.stopService(it)
         }
         liveStreamManager?.stopLiveSession()
         tts?.stop()

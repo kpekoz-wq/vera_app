@@ -13,11 +13,11 @@ plugins {
 }
 
 extensions.configure<ApplicationExtension> {
-    namespace = "com.ottoai.app"
+    namespace = "com.vera.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.ottoai.app"
+        applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -47,10 +47,10 @@ extensions.configure<ApplicationExtension> {
     buildTypes {
         getByName("debug") {
             firebaseAppDistribution {
-                appId = "1:123456789012:android:0123456789abcdef" // Replace with your Firebase App ID
+                appId = "1:200348372358:android:26ca31f85e30e8ba57b007"
                 testers = "tester1@example.com, tester2@example.com"
                 groups = "qa-team, internal-testers"
-                releaseNotes = "Automated test build from Gradle"
+                releaseNotes = "Automated VERA test build from Gradle"
                 artifactType = "APK"
             }
         }

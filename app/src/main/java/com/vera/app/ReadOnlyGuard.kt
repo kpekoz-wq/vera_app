@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 /**
  * Last line of defence: decides whether a string about to be sent to the adapter is READ-ONLY.

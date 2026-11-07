@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers

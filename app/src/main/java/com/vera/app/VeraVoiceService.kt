@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -20,20 +20,20 @@ import androidx.core.app.ServiceCompat
  * Foreground Service that keeps CPU, AudioRecord, and Bluetooth OBD2 communication active
  * when the phone screen turns dark or sleeps while in hands-free Gemini Live Voice mode.
  */
-class OttoVoiceService : Service() {
+class VeraVoiceService : Service() {
 
     companion object {
-        private const val TAG = "OttoVoiceService"
-        private const val CHANNEL_ID = "otto_voice_channel"
+        private const val TAG = "VeraVoiceService"
+        private const val CHANNEL_ID = "vera_voice_channel"
         private const val NOTIFICATION_ID = 4001
 
-        const val ACTION_START_VOICE = "com.ottoai.app.ACTION_START_VOICE"
-        const val ACTION_STOP_VOICE = "com.ottoai.app.ACTION_STOP_VOICE"
+        const val ACTION_START_VOICE = "com.vera.app.ACTION_START_VOICE"
+        const val ACTION_STOP_VOICE = "com.vera.app.ACTION_STOP_VOICE"
 
         var onStopRequested: (() -> Unit)? = null
 
         fun startService(context: Context) {
-            val intent = Intent(context, OttoVoiceService::class.java).apply {
+            val intent = Intent(context, VeraVoiceService::class.java).apply {
                 action = ACTION_START_VOICE
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -44,7 +44,7 @@ class OttoVoiceService : Service() {
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, OttoVoiceService::class.java).apply {
+            val intent = Intent(context, VeraVoiceService::class.java).apply {
                 action = ACTION_STOP_VOICE
             }
             context.stopService(intent)
@@ -64,7 +64,7 @@ class OttoVoiceService : Service() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
         wakeLock = powerManager?.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
-            "ottoai:live_voice_wakelock"
+            "vera:live_voice_wakelock"
         )?.apply {
             setReferenceCounted(false)
             acquire()
@@ -74,7 +74,7 @@ class OttoVoiceService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_VOICE) {
-            Log.i(TAG, "Stop voice action received in OttoVoiceService.")
+            Log.i(TAG, "Stop voice action received in VeraVoiceService.")
             onStopRequested?.invoke()
             stopSelf()
             return START_NOT_STICKY
@@ -99,9 +99,9 @@ class OttoVoiceService : Service() {
                 notification,
                 foregroundServiceType
             )
-            Log.i(TAG, "OttoVoiceService started in foreground successfully.")
+            Log.i(TAG, "VeraVoiceService started in foreground successfully.")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to startForeground in OttoVoiceService", e)
+            Log.e(TAG, "Failed to startForeground in VeraVoiceService", e)
         }
 
         return START_STICKY
@@ -117,7 +117,7 @@ class OttoVoiceService : Service() {
         }
         wakeLock = null
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Log.i(TAG, "OttoVoiceService destroyed.")
+        Log.i(TAG, "VeraVoiceService destroyed.")
     }
 
     private fun createNotificationChannel() {
@@ -145,7 +145,7 @@ class OttoVoiceService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = Intent(this, OttoVoiceService::class.java).apply {
+        val stopIntent = Intent(this, VeraVoiceService::class.java).apply {
             action = ACTION_STOP_VOICE
         }
         val stopPendingIntent = PendingIntent.getService(

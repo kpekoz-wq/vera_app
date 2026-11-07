@@ -1,4 +1,4 @@
-package com.ottoai.app.ui.theme
+package com.vera.app.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
@@ -583,7 +583,7 @@ class BluetoothObdManager {
         if (dir != null) {
             try {
                 if (!dir.exists()) dir.mkdirs()
-                debugLogFile = java.io.File(dir, "ottoai_elm327_debug.log")
+                debugLogFile = java.io.File(dir, "vera_elm327_debug.log")
             } catch (e: Exception) {
                 Log.e(TAG, "Error setting log file directory", e)
             }
@@ -2399,7 +2399,7 @@ class BluetoothObdManager {
             if (!usbManager.hasPermission(device)) {
                 _connectionState.value = ConnectionState.Error("USB permission required for Vgate vLinker FS USB. Requesting permission...")
                 val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) android.app.PendingIntent.FLAG_IMMUTABLE else 0
-                val pi = android.app.PendingIntent.getBroadcast(context, 0, android.content.Intent("com.ottoai.app.USB_PERMISSION"), flags)
+                val pi = android.app.PendingIntent.getBroadcast(context, 0, android.content.Intent("com.vera.app.USB_PERMISSION"), flags)
                 usbManager.requestPermission(device, pi)
                 return@withContext Result.failure(IllegalStateException("USB permission requested. Please tap ACCEPT on screen and reconnect."))
             }

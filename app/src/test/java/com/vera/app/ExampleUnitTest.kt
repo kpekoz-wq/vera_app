@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 import org.junit.Test
 import org.junit.Assert.*

@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 /**
  * Pure-Kotlin (no Android imports) parsing for ELM327 / OBD-II / UDS responses.

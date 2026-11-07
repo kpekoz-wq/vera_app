@@ -1,4 +1,4 @@
-package com.ottoai.app.ui.theme
+package com.vera.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

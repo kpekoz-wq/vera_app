@@ -1,6 +1,6 @@
 @file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
-package com.ottoai.app
+package com.vera.app
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -77,7 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.ottoai.app.ui.theme.OttoAITheme
+import com.vera.app.ui.theme.VeraTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -93,9 +93,9 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermissions()
 
         setContent {
-            OttoAITheme {
+            VeraTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    OttoMainScreen(modifier = Modifier.padding(innerPadding))
+                    VeraMainScreen(modifier = Modifier.padding(innerPadding))
                 }
             }
         }
@@ -1875,7 +1875,7 @@ fun MultiStreamLiveGraphView(
 @SuppressLint("MissingPermission")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OttoMainScreen(
+fun VeraMainScreen(
     modifier: Modifier = Modifier,
     viewModel: GeminiAgentViewModel = viewModel()
 ) {
@@ -1990,7 +1990,7 @@ fun OttoMainScreen(
             override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
                 val action = intent?.action ?: return
                 when (action) {
-                    "com.ottoai.app.USB_PERMISSION" -> {
+                    "com.vera.app.USB_PERMISSION" -> {
                         val granted = intent.getBooleanExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, false)
                         if (granted) {
                             Toast.makeText(context, "🔌 USB Permission granted! Connecting to Vgate vLinker FS...", Toast.LENGTH_SHORT).show()
@@ -2016,7 +2016,7 @@ fun OttoMainScreen(
             }
         }
         val filter = android.content.IntentFilter().apply {
-            addAction("com.ottoai.app.USB_PERMISSION")
+            addAction("com.vera.app.USB_PERMISSION")
             addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED)
         }
@@ -2044,7 +2044,7 @@ fun OttoMainScreen(
                 }
                 Toast.makeText(context, "Chat log saved successfully!", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
-                android.util.Log.e("OttoAI", "Error saving chat file", e)
+                android.util.Log.e("VERA", "Error saving chat file", e)
                 Toast.makeText(context, "Failed to save chat file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -2066,7 +2066,7 @@ fun OttoMainScreen(
                 Toast.makeText(context, "Live data CSV saved (${result.sampleCount} samples)!", Toast.LENGTH_LONG).show()
                 viewModel.onCsvSavedSuccessfully(result)
             } catch (e: Exception) {
-                android.util.Log.e("OttoAI", "Error saving CSV file", e)
+                android.util.Log.e("VERA", "Error saving CSV file", e)
                 Toast.makeText(context, "Failed to save CSV file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             }
         }

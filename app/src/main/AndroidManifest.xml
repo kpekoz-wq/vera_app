@@ -25,21 +25,21 @@
         android:label="VERA"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.OttoAI">
+        android:theme="@style/Theme.Vera">
 
         <uses-library
             android:name="org.apache.http.legacy"
             android:required="false" />
 
         <service
-            android:name=".OttoVoiceService"
+            android:name=".VeraVoiceService"
             android:exported="false"
             android:foregroundServiceType="microphone|connectedDevice" />
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.OttoAI">
+            android:theme="@style/Theme.Vera">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

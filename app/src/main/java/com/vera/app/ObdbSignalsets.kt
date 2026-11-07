@@ -1,4 +1,4 @@
-package com.ottoai.app
+package com.vera.app
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -487,7 +487,7 @@ class ObdbRepository(private val context: Context) {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000
-        conn.setRequestProperty("User-Agent", "OttoAI-OBD-App")
+        conn.setRequestProperty("User-Agent", "VERA-OBD-App")
         try {
             if (conn.responseCode != 200) throw HttpStatusException(conn.responseCode)
             return conn.inputStream.bufferedReader().use { it.readText() }
