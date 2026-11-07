@@ -2217,10 +2217,26 @@ fun OttoMainScreen(
     var showMultiStreamGraphView by remember { mutableStateOf(false) }
     val carouselListState = rememberLazyListState()
     val chatListState = rememberLazyListState()
+    val mainScrollState = rememberScrollState()
+    var prevMessageCount by remember { mutableIntStateOf(0) }
+    val lastMessageText = viewModel.messages.lastOrNull()?.text ?: ""
+    val messagesCount = viewModel.messages.size
 
-    LaunchedEffect(viewModel.messages.size) {
-        if (viewModel.messages.isNotEmpty()) {
-            chatListState.animateScrollToItem(viewModel.messages.size - 1)
+    LaunchedEffect(messagesCount, lastMessageText) {
+        if (messagesCount > 0) {
+            launch {
+                if (messagesCount != prevMessageCount) {
+                    prevMessageCount = messagesCount
+                    chatListState.animateScrollToItem(messagesCount - 1)
+                } else {
+                    chatListState.scrollToItem(messagesCount - 1)
+                }
+            }
+            launch {
+                if (mainScrollState.maxValue > 0) {
+                    mainScrollState.animateScrollTo(mainScrollState.maxValue)
+                }
+            }
         }
     }
 
@@ -2304,8 +2320,6 @@ fun OttoMainScreen(
         )
         return
     }
-
-    val mainScrollState = rememberScrollState()
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -2493,7 +2507,7 @@ fun OttoMainScreen(
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onBackground
                         )
-                        if (isConnected && (!vehicleDetails.isNullOrBlank() || !odoFormatted.isNullOrBlank())) {
+                        if (isConnected) {
                             val rawDetails = vehicleDetails ?: "Connected Vehicle"
                             val parts = rawDetails.split("•").map { it.trim() }
                             val (makeModelYearText, vinText) = if (parts.size >= 2) {
@@ -2532,7 +2546,7 @@ fun OttoMainScreen(
                             }
                         } else {
                             Text(
-                                text = "Automotive Diagnostic Assistant",
+                                text = "Vehicle Evaluation & Repair Assistant",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -3978,7 +3992,7 @@ fun OttoMainScreen(
             TextField(
                 value = userPrompt,
                 onValueChange = { userPrompt = it },
-                placeholder = { Text("Ask VERA Mechanic or attach logs/files...", fontSize = 12.sp) },
+                placeholder = { Text("Ask Vera", fontSize = 13.sp) },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
                 colors = TextFieldDefaults.colors(
