@@ -88,11 +88,14 @@ class GeminiLiveStreamManager(private val context: Context) {
         }
     }
 
+    private var currentHasPriorHistory = false
+
     @SuppressLint("MissingPermission")
     fun startLiveSession(
         apiKey: String,
         systemInstruction: String,
         telemetrySummary: String,
+        conversationHistory: String = "",
         onMessageReceived: (String) -> Unit,
         onUserTranscriptReceived: ((String) -> Unit)? = null,
         onTurnComplete: (() -> Unit)? = null,
@@ -106,6 +109,7 @@ class GeminiLiveStreamManager(private val context: Context) {
             return
         }
         stopLiveSession()
+        currentHasPriorHistory = conversationHistory.isNotBlank()
 
         // 15-minute maximum session length limit to prevent unintended costs
         sessionTimeoutJob = scope.launch {
@@ -128,7 +132,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                 Log.i(TAG, "Gemini Live WebSocket opened successfully.")
 
                 // 1. Send Setup Frame FIRST with Voice, Tools, & Vehicle System Instructions
-                sendSetupFrame(ws, systemInstruction, telemetrySummary, _voiceName.value)
+                sendSetupFrame(ws, systemInstruction, telemetrySummary, conversationHistory, _voiceName.value)
 
                 // 2. Start Microphone PCM Audio Streaming AFTER setup frame is sent
                 startMicrophoneStreaming(ws)
@@ -165,13 +169,25 @@ class GeminiLiveStreamManager(private val context: Context) {
         ws: WebSocket,
         systemInstruction: String,
         telemetrySummary: String,
+        conversationHistory: String,
         selectedVoice: String
     ) {
+        val historySection = if (conversationHistory.isNotBlank()) {
+            """
+            
+            PRIOR CONVERSATION HISTORY IN THIS SESSION (MAINTAIN CONTINUITY):
+            $conversationHistory
+            
+            CONTINUITY DIRECTIVE: You have complete context of the previous conversation history above. Continue seamlessly without re-introducing yourself if you were already discussing a topic.
+            """.trimIndent()
+        } else ""
+
         val fullInstruction = """
             $systemInstruction
             
             CURRENT LIVE VEHICLE TELEMETRY SUMMARY AT SESSION START:
             $telemetrySummary
+            $historySection
             
             VOICE DIRECTIVE: Speak naturally in plain English like a real human mechanic sitting in the passenger seat.
         """.trimIndent()
@@ -275,6 +291,11 @@ class GeminiLiveStreamManager(private val context: Context) {
 
     private fun sendInitialGreetingTrigger(ws: WebSocket) {
         _isGeminiSpeaking.value = true
+        val greetingPrompt = if (currentHasPriorHistory) {
+            "The driver just reactivated hands-free voice mode during an ongoing conversation. Warmly acknowledge that you're back with them in one short, natural sentence (e.g. 'I'm back with you. Where were we?'), referencing the last topic if appropriate."
+        } else {
+            "The driver just activated hands-free driving voice mode. Briefly greet them out loud in one short, warm sentence as their mechanic riding shotgun and ask how you can help."
+        }
         val triggerObj = JSONObject().apply {
             put("clientContent", JSONObject().apply {
                 put("turns", JSONArray().apply {
@@ -282,7 +303,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                         put("role", "user")
                         put("parts", JSONArray().apply {
                             put(JSONObject().apply {
-                                put("text", "The driver just activated hands-free driving voice mode. Briefly greet them out loud in one short, warm sentence as their mechanic riding shotgun and ask how you can help.")
+                                put("text", greetingPrompt)
                             })
                         })
                     })
@@ -291,7 +312,7 @@ class GeminiLiveStreamManager(private val context: Context) {
             })
         }
         val sent = ws.send(triggerObj.toString())
-        Log.i(TAG, "Sent initial greeting prompt to Gemini Live (success=$sent).")
+        Log.i(TAG, "Sent initial greeting prompt to Gemini Live (hasHistory=$currentHasPriorHistory, success=$sent).")
     }
 
     @SuppressLint("MissingPermission")
@@ -353,8 +374,14 @@ class GeminiLiveStreamManager(private val context: Context) {
             val readBuffer = ByteArray(1600)
             val accumStream = ByteArrayOutputStream()
 
-            while (_isLiveSessionActive.value && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                val readBytes = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: 0
+            while (_isLiveSessionActive.value) {
+                val record = audioRecord
+                if (record == null || record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    delay(50)
+                    continue
+                }
+
+                val readBytes = record.read(readBuffer, 0, readBuffer.size)
                 if (readBytes > 0) {
                     // Suppress microphone transmission while Gemini is speaking to eliminate acoustic feedback and self-interruption
                     if (_isGeminiSpeaking.value) {
@@ -380,6 +407,8 @@ class GeminiLiveStreamManager(private val context: Context) {
                         }
                         ws.send(audioChunkObj.toString())
                     }
+                } else if (readBytes < 0) {
+                    delay(30)
                 }
             }
         }

@@ -32,12 +32,19 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import android.view.WindowManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VolumeOff
@@ -111,6 +118,12 @@ class MainActivity : ComponentActivity() {
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
 
         if (permissionsToRequest.isNotEmpty()) {
@@ -1373,6 +1386,27 @@ fun OttoMainScreen(
     val isHandsFreeVoiceActive by viewModel.isHandsFreeVoiceActive.collectAsState()
     val isGeminiSpeaking by viewModel.isGeminiSpeaking.collectAsState()
     val liveVoiceName by viewModel.liveVoiceName.collectAsState()
+    val savedSessions by viewModel.savedSessions.collectAsState()
+    val currentSessionId by viewModel.currentSessionId.collectAsState()
+
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        viewModel.initSessionManager(context)
+    }
+
+    DisposableEffect(isLiveSessionActive) {
+        val activity = context as? Activity
+        if (isLiveSessionActive) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -1746,67 +1780,234 @@ fun OttoMainScreen(
 
     val mainScrollState = rememberScrollState()
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-    ) {
-        // 1. PINNED TOP HEADER (Always Fixed at Top of Screen)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                Text(
-                    text = "OttoAI Diagnostic",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                if (isConnected && (!vehicleDetails.isNullOrBlank() || !odoFormatted.isNullOrBlank())) {
-                    val rawDetails = vehicleDetails ?: "Connected Vehicle"
-                    val parts = rawDetails.split("•").map { it.trim() }
-                    val (makeModelYearText, vinText) = if (parts.size >= 2) {
-                        val lastPart = parts.last()
-                        if (lastPart.startsWith("VIN:", ignoreCase = true)) {
-                            Pair(parts.dropLast(1).joinToString(" • "), lastPart)
-                        } else {
-                            Pair(rawDetails, "")
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = true,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(320.dp),
+                drawerContainerColor = MaterialTheme.colorScheme.surface,
+                drawerContentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    // Drawer Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Chat,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "OttoAI Chats",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        IconButton(onClick = { coroutineScope.launch { drawerState.close() } }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close Sidebar")
+                        }
+                    }
+
+                    // + New Chat Button
+                    FilledTonalButton(
+                        onClick = {
+                            viewModel.createNewChatSession()
+                            coroutineScope.launch { drawerState.close() }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("New Diagnostic Chat", fontWeight = FontWeight.Bold)
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Saved Drive Sessions",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+
+                    if (savedSessions.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No saved drive sessions yet.\nChats are automatically logged in your history.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
                         }
                     } else {
-                        Pair(rawDetails, "")
-                    }
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(savedSessions, key = { it.id }) { session ->
+                                val isCurrent = session.id == currentSessionId
+                                Surface(
+                                    onClick = {
+                                        viewModel.loadChatSession(session.id)
+                                        coroutineScope.launch { drawerState.close() }
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    border = if (isCurrent) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = session.title,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = session.formattedDate,
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            val metaText = buildList {
+                                                session.vehicleDetails?.let { add(it.split("•").first().trim()) }
+                                                session.odometerFormatted?.let { add(it) }
+                                                add("${session.messages.size} msgs")
+                                                if (session.dtcs.isNotEmpty()) add("${session.dtcs.size} DTC")
+                                            }.joinToString(" • ")
 
-                    Text(
-                        text = makeModelYearText,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    val subDetails = buildList {
-                        if (vinText.isNotBlank()) add(vinText)
-                        if (!odoFormatted.isNullOrBlank()) add("ODO: $odoFormatted")
-                    }.joinToString(" • ")
+                                            Text(
+                                                text = metaText,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = if (session.dtcs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                            )
+                                        }
 
-                    if (subDetails.isNotBlank()) {
-                        Text(
-                            text = subDetails,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                                        IconButton(
+                                            onClick = { viewModel.deleteChatSession(session.id) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DeleteOutline,
+                                                contentDescription = "Delete Session",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                } else {
-                    Text(
-                        text = "Autonomous Automotive Agent",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
+        }
+    ) {
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+        ) {
+            // 1. PINNED TOP HEADER (Always Fixed at Top of Screen)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { coroutineScope.launch { drawerState.open() } },
+                        modifier = Modifier.size(36.dp).padding(end = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Open Chat History Sidebar",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "OttoAI Diagnostic",
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        if (isConnected && (!vehicleDetails.isNullOrBlank() || !odoFormatted.isNullOrBlank())) {
+                            val rawDetails = vehicleDetails ?: "Connected Vehicle"
+                            val parts = rawDetails.split("•").map { it.trim() }
+                            val (makeModelYearText, vinText) = if (parts.size >= 2) {
+                                val lastPart = parts.last()
+                                if (lastPart.startsWith("VIN:", ignoreCase = true)) {
+                                    Pair(parts.dropLast(1).joinToString(" • "), lastPart)
+                                } else {
+                                    Pair(rawDetails, "")
+                                }
+                            } else {
+                                Pair(rawDetails, "")
+                            }
+
+                            Text(
+                                text = makeModelYearText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            val subDetails = buildList {
+                                if (vinText.isNotBlank()) add(vinText)
+                                if (!odoFormatted.isNullOrBlank()) add("ODO: $odoFormatted")
+                            }.joinToString(" • ")
+
+                            if (subDetails.isNotBlank()) {
+                                Text(
+                                    text = subDetails,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "Autonomous Automotive Agent",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isConnected) {
@@ -2792,6 +2993,23 @@ fun OttoMainScreen(
                             }
                         }
 
+                        // Saved Chats Sidebar Icon Button
+                        Surface(
+                            onClick = { coroutineScope.launch { drawerState.open() } },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.History,
+                                    contentDescription = "Saved Drive Chats",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
                         // View Dongle Log Icon Button (🔌)
                         Surface(
                             onClick = { showDongleLogDialog = true },
@@ -3285,5 +3503,6 @@ fun OttoMainScreen(
             }
         )
     }
+}
 }
 }

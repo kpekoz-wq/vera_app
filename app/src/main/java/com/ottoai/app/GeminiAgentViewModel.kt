@@ -337,7 +337,113 @@ class GeminiAgentViewModel : ViewModel() {
     private val _isHandsFreeVoiceActive = MutableStateFlow(false)
     val isHandsFreeVoiceActive: StateFlow<Boolean> = _isHandsFreeVoiceActive.asStateFlow()
 
+    private var sessionManager: ChatSessionManager? = null
+    private val _currentSessionId = MutableStateFlow(java.util.UUID.randomUUID().toString())
+    val currentSessionId: StateFlow<String> = _currentSessionId.asStateFlow()
+
+    private val _savedSessions = MutableStateFlow<List<ChatSession>>(emptyList())
+    val savedSessions: StateFlow<List<ChatSession>> = _savedSessions.asStateFlow()
+
+    fun initSessionManager(context: Context) {
+        if (sessionManager == null) {
+            val sm = ChatSessionManager(context.applicationContext)
+            sessionManager = sm
+            _savedSessions.value = sm.getAllSessions()
+        }
+    }
+
+    fun autoSaveCurrentSession() {
+        val sm = sessionManager ?: return
+        if (messages.isEmpty() || (messages.size == 1 && messages[0].sender == "OttoAI")) {
+            return
+        }
+
+        val odoKm = obdManager.vehicleOdometerKm.value
+        val odoStr = odoKm?.let { km ->
+            if (unitSystem.value == UnitSystem.SAE) {
+                String.format(java.util.Locale.US, "%,d mi", (km * 0.621371).toInt())
+            } else {
+                String.format(java.util.Locale.US, "%,d km", km.toInt())
+            }
+        }
+        val dtcList = troubleCodes.value
+        val title = ChatSessionManager.generateDefaultTitle(
+            messages = messages.toList(),
+            vehicleDetails = obdManager.vehicleDetails.value,
+            odometerFormatted = odoStr,
+            dtcs = dtcList
+        )
+
+        val session = ChatSession(
+            id = _currentSessionId.value,
+            title = title,
+            timestamp = System.currentTimeMillis(),
+            vehicleDetails = obdManager.vehicleDetails.value,
+            vehicleVin = obdManager.vehicleVin.value,
+            odometerFormatted = odoStr,
+            dtcs = dtcList,
+            messages = messages.toList()
+        )
+        sm.saveSession(session)
+        _savedSessions.value = sm.getAllSessions()
+    }
+
+    fun createNewChatSession() {
+        autoSaveCurrentSession()
+        _currentSessionId.value = java.util.UUID.randomUUID().toString()
+        messages.clear()
+        messages.add(
+            ChatMessage(
+                sender = "OttoAI",
+                text = "Hello! I am OttoAI, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
+            )
+        )
+    }
+
+    fun loadChatSession(sessionId: String) {
+        autoSaveCurrentSession()
+        val sm = sessionManager ?: return
+        val session = sm.loadSession(sessionId) ?: return
+        _currentSessionId.value = session.id
+        messages.clear()
+        if (session.messages.isNotEmpty()) {
+            messages.addAll(session.messages)
+        } else {
+            messages.add(
+                ChatMessage(
+                    sender = "OttoAI",
+                    text = "Loaded diagnostic session: ${session.title}"
+                )
+            )
+        }
+    }
+
+    fun deleteChatSession(sessionId: String) {
+        val sm = sessionManager ?: return
+        sm.deleteSession(sessionId)
+        _savedSessions.value = sm.getAllSessions()
+        if (_currentSessionId.value == sessionId) {
+            createNewChatSession()
+        }
+    }
+
+    private fun buildRecentConversationContextForLive(maxMessages: Int = 20): String {
+        val relevant = messages
+            .filter { it.sender == "User" || it.sender == "OttoAI" || it.sender == "OttoAI (Live)" }
+            .takeLast(maxMessages)
+        if (relevant.isEmpty()) return ""
+        return relevant.joinToString("\n") { msg ->
+            val label = if (msg.sender == "User") "DRIVER" else "OTTOAI"
+            "$label: ${msg.text.trim()}"
+        }
+    }
+
     fun initLiveStreamManager(context: Context) {
+        appContext = context.applicationContext
+        initSessionManager(context)
+        OttoVoiceService.onStopRequested = {
+            stopGeminiLiveSession()
+        }
         if (liveStreamManager != null) return
         val mgr = GeminiLiveStreamManager(context.applicationContext)
         liveStreamManager = mgr
@@ -376,8 +482,13 @@ class GeminiAgentViewModel : ViewModel() {
         stopSpeaking()
         _isHandsFreeVoiceActive.value = true
 
+        appContext?.let {
+            OttoVoiceService.startService(it)
+        }
+
         val voice = mgr.voiceName.value
         val summary = buildTelemetrySnapshotForLive()
+        val historyContext = buildRecentConversationContextForLive(maxMessages = 20)
         isNewLiveTurn = true
         isNewUserTurn = true
 
@@ -392,6 +503,7 @@ class GeminiAgentViewModel : ViewModel() {
             apiKey = geminiApiKey,
             systemInstruction = liveSystemPromptText,
             telemetrySummary = summary,
+            conversationHistory = historyContext,
             onMessageReceived = { text ->
                 if (text.isNotBlank()) {
                     viewModelScope.launch(Dispatchers.Main) {
@@ -408,6 +520,7 @@ class GeminiAgentViewModel : ViewModel() {
                 viewModelScope.launch(Dispatchers.Main) {
                     isNewLiveTurn = true
                     isNewUserTurn = true
+                    autoSaveCurrentSession()
                 }
             },
             onToolCall = { toolName, callId, args ->
@@ -417,6 +530,9 @@ class GeminiAgentViewModel : ViewModel() {
                 viewModelScope.launch(Dispatchers.Main) {
                     messages.add(ChatMessage("Error", "Gemini Live Error: $errMsg"))
                     _isHandsFreeVoiceActive.value = false
+                    appContext?.let {
+                        OttoVoiceService.stopService(it)
+                    }
                 }
             }
         )
@@ -427,7 +543,11 @@ class GeminiAgentViewModel : ViewModel() {
         isNewLiveTurn = true
         isNewUserTurn = true
         liveStreamManager?.stopLiveSession()
+        appContext?.let {
+            OttoVoiceService.stopService(it)
+        }
         messages.add(ChatMessage("System", "⚡ Hands-Free Gemini Live Mode Ended."))
+        autoSaveCurrentSession()
     }
 
     fun interruptLivePlayback() {
@@ -660,6 +780,9 @@ class GeminiAgentViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        appContext?.let {
+            OttoVoiceService.stopService(it)
+        }
         liveStreamManager?.stopLiveSession()
         tts?.stop()
         tts?.shutdown()
@@ -1367,6 +1490,7 @@ class GeminiAgentViewModel : ViewModel() {
                 messages.add(ChatMessage("OttoAI", aiResponseText))
                 _isSendingMessage.value = false
                 speak(aiResponseText)
+                autoSaveCurrentSession()
 
             } catch (e: Throwable) {
                 messages.add(ChatMessage("Error", "Gemini Request Error: ${e.message ?: e.toString()}"))
