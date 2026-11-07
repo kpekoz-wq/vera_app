@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit
  * Manages real-time bidirectional audio streaming with Google's Gemini Multimodal Live API over WebSockets.
  * Continuously streams 16kHz PCM audio from the vehicle microphone to Gemini Live, and plays back
  * 24kHz PCM native human AI voice speech over car audio or device speakers, with real-time
- * read-only vehicle telemetry function calling and acoustic echo isolation.
+ * read-only vehicle telemetry function calling, live driver/assistant chat transcription, and acoustic echo isolation.
  */
 class GeminiLiveStreamManager(private val context: Context) {
 
@@ -88,6 +88,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         systemInstruction: String,
         telemetrySummary: String,
         onMessageReceived: (String) -> Unit,
+        onUserTranscriptReceived: ((String) -> Unit)? = null,
         onTurnComplete: (() -> Unit)? = null,
         onToolCall: ((String, String, JSONObject) -> JSONObject)? = null,
         onError: ((String) -> Unit)? = null
@@ -128,11 +129,11 @@ class GeminiLiveStreamManager(private val context: Context) {
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                handleServerMessage(ws, text, onMessageReceived, onTurnComplete, onToolCall)
+                handleServerMessage(ws, text, onMessageReceived, onUserTranscriptReceived, onTurnComplete, onToolCall)
             }
 
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                handleServerMessage(ws, bytes.utf8(), onMessageReceived, onTurnComplete, onToolCall)
+                handleServerMessage(ws, bytes.utf8(), onMessageReceived, onUserTranscriptReceived, onTurnComplete, onToolCall)
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
@@ -169,9 +170,11 @@ class GeminiLiveStreamManager(private val context: Context) {
             VOICE DIRECTIVE: Speak naturally in plain English like a real human mechanic sitting in the passenger seat.
         """.trimIndent()
 
-        val emptyParamsObj = JSONObject().apply {
-            put("type", "OBJECT")
-            put("properties", JSONObject())
+        val stringParam = { desc: String ->
+            JSONObject().apply {
+                put("type", "STRING")
+                put("description", desc)
+            }
         }
 
         val toolsArray = JSONArray().apply {
@@ -179,28 +182,53 @@ class GeminiLiveStreamManager(private val context: Context) {
                 put("functionDeclarations", JSONArray().apply {
                     put(JSONObject().apply {
                         put("name", "get_live_data")
-                        put("description", "Returns current live vehicle engine telemetry snapshot (RPM, speed, coolant temp, throttle, voltage, fuel trims, MAP/MAF, etc.).")
-                        put("parameters", emptyParamsObj)
+                        put("description", "Returns current live vehicle engine telemetry snapshot from ECU (RPM, speed in mph/kmh, coolant temp in F/C, battery voltage, throttle, fuel trims, MAP/MAF, etc.). Invoke whenever driver asks about speed, engine status, temperatures, battery, or sensors.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("sensor_focus", stringParam("Specific sensor requested, e.g. 'coolant', 'rpm', 'speed', 'battery', 'all'"))
+                            })
+                        })
                     })
                     put(JSONObject().apply {
                         put("name", "get_dtcs")
-                        put("description", "Returns current Diagnostic Trouble Codes (DTCs) logged by the vehicle ECU across stored, pending, and permanent modes.")
-                        put("parameters", emptyParamsObj)
+                        put("description", "Scans active, pending, and permanent Diagnostic Trouble Codes (DTCs) logged by the vehicle ECU across all modules.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("scan_scope", stringParam("Scope of DTC scan, e.g. 'all', 'stored', 'pending'"))
+                            })
+                        })
                     })
                     put(JSONObject().apply {
                         put("name", "get_mode06_results")
                         put("description", "Returns Mode 06 on-board diagnostic monitor test results (misfire counters per cylinder, EVAP limits, O2 sensor monitors).")
-                        put("parameters", emptyParamsObj)
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("monitor_type", stringParam("Monitor type to inspect, e.g. 'misfires', 'evap', 'o2', 'all'"))
+                            })
+                        })
                     })
                     put(JSONObject().apply {
                         put("name", "get_vehicle_info")
-                        put("description", "Returns vehicle identification number (VIN) and decoded make, model, year information.")
-                        put("parameters", emptyParamsObj)
+                        put("description", "Returns vehicle identification number (VIN) and decoded make, model, year, and adapter connection status.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("info_type", stringParam("Information requested, e.g. 'vin', 'specs', 'status'"))
+                            })
+                        })
                     })
                     put(JSONObject().apply {
                         put("name", "get_obdb_signals")
-                        put("description", "Returns community-sourced OBDb parameters and custom Mode 22 enhanced PID telemetry readings.")
-                        put("parameters", emptyParamsObj)
+                        put("description", "Returns community-sourced OBDb parameters and custom Mode 22 enhanced PID telemetry readings (transmission fluid temp, oil temp/pressure).")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("signal_name", stringParam("Signal requested, e.g. 'transmission_temp', 'oil_pressure', 'all'"))
+                            })
+                        })
                     })
                 })
             })
@@ -229,12 +257,13 @@ class GeminiLiveStreamManager(private val context: Context) {
                         })
                     })
                 })
+                put("inputAudioTranscription", JSONObject())
                 put("outputAudioTranscription", JSONObject())
             })
         }
 
         ws.send(setupObj.toString())
-        Log.i(TAG, "Sent Gemini Live Setup frame using model $LIVE_MODEL (Voice: $selectedVoice).")
+        Log.i(TAG, "Sent Gemini Live Setup frame using model $LIVE_MODEL (Voice: $selectedVoice, transcription enabled).")
     }
 
     private fun sendInitialGreetingTrigger(ws: WebSocket) {
@@ -461,12 +490,12 @@ class GeminiLiveStreamManager(private val context: Context) {
         ws: WebSocket,
         jsonText: String,
         onMessageReceived: (String) -> Unit,
+        onUserTranscriptReceived: ((String) -> Unit)?,
         onTurnCompleteCallback: (() -> Unit)?,
         onToolCall: ((String, String, JSONObject) -> JSONObject)?
     ) {
         try {
             val root = JSONObject(jsonText)
-            Log.i(TAG, "Server msg keys: ${root.keys().asSequence().toList()}")
 
             // 0. Check for setup confirmation
             if (root.has("setupComplete") || root.has("setup_complete")) {
@@ -475,13 +504,42 @@ class GeminiLiveStreamManager(private val context: Context) {
                 return
             }
 
-            // 1. Check for serverContent (model speech audio, transcript, interruptions)
+            // 1. Check for serverContent (model speech audio, user & model transcripts, interruptions)
             val serverContent = root.optJSONObject("serverContent") ?: root.optJSONObject("server_content")
             if (serverContent != null) {
                 val isInterrupted = serverContent.optBoolean("interrupted", false)
                 if (isInterrupted) {
                     Log.i(TAG, "Gemini Live interrupted by user speech. Flushing playback.")
                     flushPlaybackQueue()
+                }
+
+                // 1a. User speech transcription (from inputAudioTranscription)
+                val inputTxObj = serverContent.optJSONObject("inputAudioTranscription")
+                    ?: serverContent.optJSONObject("input_audio_transcription")
+                    ?: serverContent.optJSONObject("inputTranscription")
+                    ?: serverContent.optJSONObject("input_transcription")
+                val userText = inputTxObj?.optString("text", "")
+                    ?: (serverContent.optString("inputAudioTranscription", "").takeIf { it.isNotBlank() }
+                        ?: serverContent.optString("input_audio_transcription", ""))
+
+                if (userText.isNotBlank()) {
+                    Log.i(TAG, "User speech transcript: $userText")
+                    onUserTranscriptReceived?.invoke(userText)
+                }
+
+                // 1b. Model speech transcription (from outputAudioTranscription)
+                val outputTxObj = serverContent.optJSONObject("outputAudioTranscription")
+                    ?: serverContent.optJSONObject("output_audio_transcription")
+                    ?: serverContent.optJSONObject("outputTranscription")
+                    ?: serverContent.optJSONObject("output_transcription")
+                val modelText = outputTxObj?.optString("text", "")
+                    ?: (serverContent.optString("outputAudioTranscription", "").takeIf { it.isNotBlank() }
+                        ?: serverContent.optString("output_audio_transcription", ""))
+
+                if (modelText.isNotBlank()) {
+                    Log.i(TAG, "Model speech transcript: $modelText")
+                    _lastTranscriptText.value = modelText
+                    onMessageReceived(modelText)
                 }
 
                 val modelTurn = serverContent.optJSONObject("modelTurn") ?: serverContent.optJSONObject("model_turn")
@@ -495,10 +553,10 @@ class GeminiLiveStreamManager(private val context: Context) {
                         for (i in 0 until parts.length()) {
                             val part = parts.optJSONObject(i) ?: continue
 
-                            // Text transcript (skip internal thought parts, only capture actual speech text)
+                            // Text transcript fallback (if outputAudioTranscription was absent)
                             val isThought = part.optBoolean("thought", false)
                             val text = part.optString("text", "")
-                            if (!isThought && text.isNotBlank()) {
+                            if (!isThought && text.isNotBlank() && outputTxObj == null && modelText.isBlank()) {
                                 _lastTranscriptText.value = text
                                 onMessageReceived(text)
                             }
