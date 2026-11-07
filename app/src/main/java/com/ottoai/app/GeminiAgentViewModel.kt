@@ -331,6 +331,9 @@ class GeminiAgentViewModel : ViewModel() {
     private val _isLiveSessionActive = MutableStateFlow(false)
     val isLiveSessionActive: StateFlow<Boolean> = _isLiveSessionActive.asStateFlow()
 
+    private val _isGeminiSpeaking = MutableStateFlow(false)
+    val isGeminiSpeaking: StateFlow<Boolean> = _isGeminiSpeaking.asStateFlow()
+
     private val _isHandsFreeVoiceActive = MutableStateFlow(false)
     val isHandsFreeVoiceActive: StateFlow<Boolean> = _isHandsFreeVoiceActive.asStateFlow()
 
@@ -341,26 +344,260 @@ class GeminiAgentViewModel : ViewModel() {
         viewModelScope.launch {
             mgr.isLiveSessionActive.collect { active ->
                 _isLiveSessionActive.value = active
+                _isHandsFreeVoiceActive.value = active
+            }
+        }
+        viewModelScope.launch {
+            mgr.isGeminiSpeaking.collect { speaking ->
+                _isGeminiSpeaking.value = speaking
             }
         }
     }
 
     fun toggleHandsFreeVoiceMode() {
-        _isHandsFreeVoiceActive.value = !_isHandsFreeVoiceActive.value
-        if (_isHandsFreeVoiceActive.value) {
-            stopSpeaking()
-            messages.add(ChatMessage("System", "⚡ Hands-Free Voice Mode Active. Speak with OttoAI anytime or tap the Voice button to stop..."))
+        if (_isLiveSessionActive.value) {
+            stopGeminiLiveSession()
         } else {
-            _isHandsFreeVoiceActive.value = false
-            stopSpeaking()
-            messages.add(ChatMessage("System", "⚡ Hands-Free Voice Mode Ended."))
+            startGeminiLiveSession()
         }
+    }
+
+    fun startGeminiLiveSession() {
+        if (geminiApiKey.isBlank()) {
+            messages.add(ChatMessage("Error", "GEMINI_API_KEY is not set in local.properties."))
+            return
+        }
+        val mgr = liveStreamManager
+        if (mgr == null) {
+            messages.add(ChatMessage("Error", "Gemini Live stream manager is not initialized yet."))
+            return
+        }
+
+        stopSpeaking()
+        _isHandsFreeVoiceActive.value = true
+
+        val voice = mgr.voiceName.value
+        val summary = buildTelemetrySnapshotForLive()
+        isNewLiveTurn = true
+
+        messages.add(
+            ChatMessage(
+                "System",
+                "🎙️ Hands-Free Gemini Live Active (Voice: $voice).\nReal-time 2-way conversation running. Speak naturally—OttoAI has full live read-only telemetry access to your vehicle."
+            )
+        )
+
+        mgr.startLiveSession(
+            apiKey = geminiApiKey,
+            systemInstruction = liveSystemPromptText,
+            telemetrySummary = summary,
+            onMessageReceived = { text ->
+                if (text.isNotBlank()) {
+                    viewModelScope.launch(Dispatchers.Main) {
+                        appendOrUpdateLiveTranscript(text)
+                    }
+                }
+            },
+            onTurnComplete = {
+                viewModelScope.launch(Dispatchers.Main) {
+                    isNewLiveTurn = true
+                }
+            },
+            onToolCall = { toolName, callId, args ->
+                executeLiveTool(toolName, callId, args)
+            },
+            onError = { errMsg ->
+                viewModelScope.launch(Dispatchers.Main) {
+                    messages.add(ChatMessage("Error", "Gemini Live Error: $errMsg"))
+                    _isHandsFreeVoiceActive.value = false
+                }
+            }
+        )
     }
 
     fun stopGeminiLiveSession() {
         _isHandsFreeVoiceActive.value = false
+        isNewLiveTurn = true
         liveStreamManager?.stopLiveSession()
-        messages.add(ChatMessage("System", "⚡ Hands-Free Driving Voice Mode Ended."))
+        messages.add(ChatMessage("System", "⚡ Hands-Free Gemini Live Mode Ended."))
+    }
+
+    fun interruptLivePlayback() {
+        isNewLiveTurn = true
+        liveStreamManager?.interruptPlayback()
+    }
+
+    private var isNewLiveTurn = true
+
+    private fun appendOrUpdateLiveTranscript(text: String) {
+        if (isNewLiveTurn) {
+            messages.add(ChatMessage("OttoAI (Live)", text.trim()))
+            isNewLiveTurn = false
+        } else {
+            val lastMsg = messages.lastOrNull()
+            if (lastMsg != null && lastMsg.sender == "OttoAI (Live)") {
+                val updated = if (lastMsg.text.endsWith(" ") || text.startsWith(" ") || text.startsWith(",") || text.startsWith(".") || text.startsWith("!") || text.startsWith("?")) {
+                    lastMsg.text + text
+                } else {
+                    lastMsg.text + " " + text
+                }
+                val idx = messages.size - 1
+                messages[idx] = ChatMessage("OttoAI (Live)", updated)
+            } else {
+                messages.add(ChatMessage("OttoAI (Live)", text.trim()))
+            }
+        }
+    }
+
+    private val liveSystemPromptText = """
+        You are OttoAI, an elite automotive master technician and seasoned mechanic riding shotgun with the driver.
+
+        You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
+
+        CRITICAL DRIVING & VOICE RULES:
+        1. NATURAL HUMAN MECHANIC VOICE & CONVERSATION:
+           - Speak naturally and conversationally, like a knowledgeable friend and master mechanic sitting in the passenger seat.
+           - Keep answers concise (1 to 3 sentences) so the driver can remain focused on the road.
+           - NEVER recite raw numbers, PIDs, sensor codes, voltages, or test IDs out loud unless the driver explicitly asks for them.
+           - Blue-collar garage humor: Keep it warm, personable, and occasionally humorous (like classic driveway wrenching banter or missing 10mm sockets).
+           - Give clear plain-English verdicts:
+             * Healthy vehicle: "Everything is purring smoothly and your temperatures are right where they should be. Let me know if you feel or hear anything unusual."
+             * Issue detected: "I'm catching a few misfires on cylinder three. Nothing catastrophic right now, but once we're parked we should inspect the spark plug and ignition coil."
+        2. LIVE TELEMETRY FUNCTION TOOLS (READ-ONLY):
+           - You have direct, live read-only tools to inspect the car at any second:
+             * get_live_data: Current engine telemetry snapshot (RPM, speed, coolant temp, throttle, engine load, fuel trim, MAF).
+             * get_dtcs: Scans active, pending, and permanent Diagnostic Trouble Codes.
+             * get_mode06_results: Mode 06 misfire counters per cylinder and emission monitor test results.
+             * get_vehicle_info: Vehicle VIN, make, model, year.
+             * get_obdb_signals: Enhanced Mode 22 custom PIDs and community parameters.
+           - Whenever the driver asks about their car's condition, engine speed, temperature, error codes, fuel economy, or performance, ALWAYS invoke the appropriate tool to query the latest vehicle telemetry before giving your answer!
+        3. SAFETY FIRST:
+           - The driver is operating a vehicle. Never give instructions that require them to look away from the road while driving.
+    """.trimIndent()
+
+    private fun buildTelemetrySnapshotForLive(): String {
+        val isConnected = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+        if (!isConnected) {
+            return "OBD2 ADAPTER STATUS: DISCONNECTED (No vehicle connected yet)."
+        }
+        val metrics = obdManager.metrics.value
+        val dtcs = troubleCodes.value
+        val vin = obdManager.vehicleVin.value ?: "Unknown"
+        val vehicle = obdManager.vehicleDetails.value ?: "Vehicle"
+        val m06 = obdManager.mode06Results.value
+        val streams = obdManager.supportedStreams.value
+
+        val streamsText = if (streams.isNotEmpty()) {
+            streams.take(15).joinToString(", ") { "${it.pid.name}: ${it.formattedValue}" }
+        } else "RPM: ${metrics.rpm}, Speed: ${metrics.speed} km/h, Coolant: ${metrics.coolantTemp}°C"
+
+        val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
+        val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
+
+        return """
+            Vehicle: $vehicle (VIN: $vin)
+            Connection: Active & Connected
+            Active DTCs: $dtcText
+            Live Snapshot: $streamsText
+            Mode 06 Monitors: $m06Text
+        """.trimIndent()
+    }
+
+    private fun executeLiveTool(name: String, callId: String, @Suppress("UNUSED_PARAMETER") args: JSONObject): JSONObject {
+        Log.i("GeminiAgentViewModel", "Executing live tool: $name ($callId)")
+        return try {
+            when (name) {
+                "get_live_data" -> {
+                    val metrics = obdManager.metrics.value
+                    val streams = obdManager.supportedStreams.value
+                    val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                    JSONObject().apply {
+                        put("connected", isConn)
+                        put("rpm", metrics.rpm)
+                        put("speed_kmh", metrics.speed)
+                        put("coolant_temp_c", metrics.coolantTemp)
+                        put("intake_air_temp_c", metrics.intakeAirTemp)
+                        put("engine_load_percent", metrics.engineLoad)
+                        put("throttle_position_percent", metrics.throttlePosition)
+                        put("fuel_trim_percent", metrics.fuelTrim)
+                        put("mass_air_flow_gs", metrics.maf)
+                        if (streams.isNotEmpty()) {
+                            val streamsArr = JSONArray()
+                            for (s in streams) {
+                                streamsArr.put(JSONObject().apply {
+                                    put("name", s.pid.name)
+                                    put("value", s.formattedValue)
+                                })
+                            }
+                            put("supported_streams", streamsArr)
+                        }
+                    }
+                }
+                "get_dtcs" -> {
+                    val dtcs = dtcDetails.value
+                    val codes = troubleCodes.value
+                    JSONObject().apply {
+                        put("active_trouble_codes_count", codes.size)
+                        put("codes", JSONArray(codes))
+                        val detailsArr = JSONArray()
+                        for (d in dtcs) {
+                            detailsArr.put(JSONObject().apply {
+                                put("code", d.code)
+                                put("category", d.category)
+                                put("description", d.description)
+                            })
+                        }
+                        put("details", detailsArr)
+                    }
+                }
+                "get_mode06_results" -> {
+                    val m06 = obdManager.mode06Results.value
+                    JSONObject().apply {
+                        put("monitors_count", m06.size)
+                        val monArr = JSONArray()
+                        for (m in m06) {
+                            monArr.put(JSONObject().apply {
+                                put("name", m.name)
+                                put("category", m.category)
+                                put("value", m.testValue)
+                                put("min_limit", m.minLimit)
+                                put("max_limit", m.maxLimit)
+                                put("unit", m.unit)
+                                put("status", m.status.name)
+                            })
+                        }
+                        put("monitors", monArr)
+                    }
+                }
+                "get_vehicle_info" -> {
+                    JSONObject().apply {
+                        put("vin", obdManager.vehicleVin.value ?: "Not available")
+                        put("vehicle_details", obdManager.vehicleDetails.value ?: "Not available")
+                        put("connection_status", connectionStatus.value)
+                    }
+                }
+                "get_obdb_signals" -> {
+                    val m22 = obdManager.mode22Streams.value
+                    JSONObject().apply {
+                        val arr = JSONArray()
+                        for (p in m22) {
+                            arr.put(JSONObject().apply {
+                                put("name", p.pid.name)
+                                put("category", p.pid.category)
+                                put("value", p.formattedValue)
+                            })
+                        }
+                        put("custom_pids", arr)
+                    }
+                }
+                else -> {
+                    JSONObject().put("status", "unknown tool $name")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiAgentViewModel", "Error in live tool $name", e)
+            JSONObject().put("error", e.message ?: "Failed to execute tool")
+        }
     }
 
     val liveVoiceName: StateFlow<String>
@@ -372,6 +609,7 @@ class GeminiAgentViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        liveStreamManager?.stopLiveSession()
         tts?.stop()
         tts?.shutdown()
     }

@@ -2,6 +2,7 @@ package com.ottoai.app
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
@@ -11,24 +12,28 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Manages real-time bidirectional audio streaming with Google's Gemini Live API over WebSockets.
- * Streams 16kHz PCM audio from microphone to Gemini Live, and plays back 24kHz PCM native human
- * AI voice speech (using voice 'Fenrir') over phone or Bluetooth speakers.
+ * Manages real-time bidirectional audio streaming with Google's Gemini Multimodal Live API over WebSockets.
+ * Continuously streams 16kHz PCM audio from the vehicle microphone to Gemini Live, and plays back
+ * 24kHz PCM native human AI voice speech over car audio or device speakers, with real-time
+ * read-only vehicle telemetry function calling and acoustic echo isolation.
  */
 class GeminiLiveStreamManager(private val context: Context) {
 
@@ -36,11 +41,12 @@ class GeminiLiveStreamManager(private val context: Context) {
         private const val TAG = "GeminiLiveStream"
         private const val SAMPLE_RATE_IN = 16000
         private const val SAMPLE_RATE_OUT = 24000
+        private const val LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest"
     }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS) // Indefinite streaming
+        .readTimeout(0, TimeUnit.MILLISECONDS) // Indefinite streaming connection
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
@@ -52,7 +58,13 @@ class GeminiLiveStreamManager(private val context: Context) {
     private var recordJob: Job? = null
     private var playbackJob: Job? = null
     private var sessionTimeoutJob: Job? = null
+    private var turnCompletionJob: Job? = null
     private var audioPlaybackChannel = Channel<ByteArray>(Channel.UNLIMITED)
+
+    @Volatile
+    private var totalFramesWritten = 0L
+    @Volatile
+    private var isPlayingActive = false
 
     private val _isLiveSessionActive = MutableStateFlow(false)
     val isLiveSessionActive: StateFlow<Boolean> = _isLiveSessionActive.asStateFlow()
@@ -76,45 +88,57 @@ class GeminiLiveStreamManager(private val context: Context) {
         systemInstruction: String,
         telemetrySummary: String,
         onMessageReceived: (String) -> Unit,
-        onToolCall: ((String, String, JSONObject) -> JSONObject)? = null
+        onTurnComplete: (() -> Unit)? = null,
+        onToolCall: ((String, String, JSONObject) -> JSONObject)? = null,
+        onError: ((String) -> Unit)? = null
     ) {
         if (apiKey.isBlank()) {
-            Log.e(TAG, "Cannot start Gemini Live: API key is blank.")
+            val err = "Cannot start Gemini Live: API key is blank."
+            Log.e(TAG, err)
+            onError?.invoke(err)
             return
         }
         stopLiveSession()
 
-        // 10-minute maximum session length limit to prevent unintended costs
+        // 15-minute maximum session length limit to prevent unintended costs
         sessionTimeoutJob = scope.launch {
-            kotlinx.coroutines.delay(10 * 60 * 1000L)
-            Log.i(TAG, "10-minute Gemini Live session limit reached. Stopping session automatically.")
+            delay(15 * 60 * 1000L)
+            Log.i(TAG, "Gemini Live session limit reached. Stopping session automatically.")
             stopLiveSession()
         }
 
-        // Multimodal Live API WebSocket URL
-        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
+        // Multimodal Live API WebSocket URL (v1beta endpoint)
+        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
         val request = Request.Builder().url(wsUrl).build()
+
+        _isLiveSessionActive.value = true
+        _isGeminiSpeaking.value = true // Initial state: suppress mic while connecting and greeting
 
         initAudioPlayer()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.i(TAG, "Gemini Live WebSocket opened successfully.")
-                _isLiveSessionActive.value = true
 
-                // Start Streaming Microphone PCM Audio Chunks (Before Setup)
-                startMicrophoneStreaming(ws)
-
-                // Send Setup Frame with Voice Configuration, Tools, & Vehicle System Instruction
+                // 1. Send Setup Frame FIRST with Voice, Tools, & Vehicle System Instructions
                 sendSetupFrame(ws, systemInstruction, telemetrySummary, _voiceName.value)
+
+                // 2. Start Microphone PCM Audio Streaming AFTER setup frame is sent
+                startMicrophoneStreaming(ws)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                handleServerMessage(ws, text, onMessageReceived, onToolCall)
+                handleServerMessage(ws, text, onMessageReceived, onTurnComplete, onToolCall)
+            }
+
+            override fun onMessage(ws: WebSocket, bytes: ByteString) {
+                handleServerMessage(ws, bytes.utf8(), onMessageReceived, onTurnComplete, onToolCall)
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Gemini Live WebSocket Error: ${t.message}", t)
+                val err = "Gemini Live WebSocket Error: ${t.message}"
+                Log.e(TAG, err, t)
+                onError?.invoke(t.message ?: "Connection failure")
                 stopLiveSession()
             }
 
@@ -139,34 +163,44 @@ class GeminiLiveStreamManager(private val context: Context) {
         val fullInstruction = """
             $systemInstruction
             
-            CURRENT LIVE VEHICLE TELEMETRY SUMMARY:
+            CURRENT LIVE VEHICLE TELEMETRY SUMMARY AT SESSION START:
             $telemetrySummary
             
             VOICE DIRECTIVE: Speak naturally in plain English like a real human mechanic sitting in the passenger seat.
         """.trimIndent()
+
+        val emptyParamsObj = JSONObject().apply {
+            put("type", "OBJECT")
+            put("properties", JSONObject())
+        }
 
         val toolsArray = JSONArray().apply {
             put(JSONObject().apply {
                 put("functionDeclarations", JSONArray().apply {
                     put(JSONObject().apply {
                         put("name", "get_live_data")
-                        put("description", "Returns current live vehicle engine telemetry data snapshot (RPM, speed, coolant temp, etc.).")
+                        put("description", "Returns current live vehicle engine telemetry snapshot (RPM, speed, coolant temp, throttle, voltage, fuel trims, MAP/MAF, etc.).")
+                        put("parameters", emptyParamsObj)
                     })
                     put(JSONObject().apply {
                         put("name", "get_dtcs")
-                        put("description", "Returns current active Diagnostic Trouble Codes (DTCs) logged by the vehicle ECU.")
+                        put("description", "Returns current Diagnostic Trouble Codes (DTCs) logged by the vehicle ECU across stored, pending, and permanent modes.")
+                        put("parameters", emptyParamsObj)
                     })
                     put(JSONObject().apply {
                         put("name", "get_mode06_results")
-                        put("description", "Returns Mode 06 on-board diagnostic monitor test results (misfire counters, EVAP limits, O2 sensor monitors).")
+                        put("description", "Returns Mode 06 on-board diagnostic monitor test results (misfire counters per cylinder, EVAP limits, O2 sensor monitors).")
+                        put("parameters", emptyParamsObj)
                     })
                     put(JSONObject().apply {
                         put("name", "get_vehicle_info")
                         put("description", "Returns vehicle identification number (VIN) and decoded make, model, year information.")
+                        put("parameters", emptyParamsObj)
                     })
                     put(JSONObject().apply {
                         put("name", "get_obdb_signals")
-                        put("description", "Returns community-sourced OBDb parameters and custom PID telemetry readings.")
+                        put("description", "Returns community-sourced OBDb parameters and custom Mode 22 enhanced PID telemetry readings.")
+                        put("parameters", emptyParamsObj)
                     })
                 })
             })
@@ -174,7 +208,7 @@ class GeminiLiveStreamManager(private val context: Context) {
 
         val setupObj = JSONObject().apply {
             put("setup", JSONObject().apply {
-                put("model", "models/gemini-2.0-flash-realtime-exp")
+                put("model", LIVE_MODEL)
                 put("systemInstruction", JSONObject().apply {
                     put("parts", JSONArray().apply {
                         put(JSONObject().apply {
@@ -184,9 +218,8 @@ class GeminiLiveStreamManager(private val context: Context) {
                 })
                 put("tools", toolsArray)
                 put("generationConfig", JSONObject().apply {
-                    put("responseModalities", JSONArray().apply { 
-                        put("TEXT")
-                        put("AUDIO") 
+                    put("responseModalities", JSONArray().apply {
+                        put("AUDIO")
                     })
                     put("speechConfig", JSONObject().apply {
                         put("voiceConfig", JSONObject().apply {
@@ -196,12 +229,33 @@ class GeminiLiveStreamManager(private val context: Context) {
                         })
                     })
                 })
+                put("outputAudioTranscription", JSONObject())
             })
         }
 
         ws.send(setupObj.toString())
-        
-        Log.i(TAG, "Sent Gemini Live Setup frame with tools (Voice: $selectedVoice).")
+        Log.i(TAG, "Sent Gemini Live Setup frame using model $LIVE_MODEL (Voice: $selectedVoice).")
+    }
+
+    private fun sendInitialGreetingTrigger(ws: WebSocket) {
+        _isGeminiSpeaking.value = true
+        val triggerObj = JSONObject().apply {
+            put("clientContent", JSONObject().apply {
+                put("turns", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("text", "The driver just activated hands-free driving voice mode. Briefly greet them out loud in one short, warm sentence as their mechanic riding shotgun and ask how you can help.")
+                            })
+                        })
+                    })
+                })
+                put("turnComplete", true)
+            })
+        }
+        val sent = ws.send(triggerObj.toString())
+        Log.i(TAG, "Sent initial greeting prompt to Gemini Live (success=$sent).")
     }
 
     @SuppressLint("MissingPermission")
@@ -211,32 +265,68 @@ class GeminiLiveStreamManager(private val context: Context) {
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
+        val recordBufSize = maxOf(minBufSize * 4, 16000)
 
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE_IN,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBufSize, 6400)
-        )
+        // Prefer VOICE_RECOGNITION for speech-optimized gain & noise reduction
+        var record: AudioRecord? = null
+        try {
+            val candidate = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE_IN,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                recordBufSize
+            )
+            if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+                record = candidate
+            } else {
+                candidate.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "VOICE_RECOGNITION audio source failed, falling back to MIC", e)
+        }
+
+        if (record == null) {
+            try {
+                record = AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    SAMPLE_RATE_IN,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    recordBufSize
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize AudioRecord with MIC", e)
+                return
+            }
+        }
+
+        audioRecord = record
 
         try {
             audioRecord?.startRecording()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start AudioRecord", e)
+            Log.e(TAG, "Failed to start AudioRecord recording", e)
             return
         }
 
+        recordJob?.cancel()
         recordJob = scope.launch {
-            val pcmChunkSize = 6400 // ~200ms of 16kHz 16-bit mono audio
-            val readBuffer = ByteArray(2048)
-            val accumStream = java.io.ByteArrayOutputStream()
+            // ~100ms chunks of 16kHz 16-bit mono audio = 16000 * 2 * 0.1 = 3200 bytes
+            val pcmChunkSize = 3200
+            val readBuffer = ByteArray(1600)
+            val accumStream = ByteArrayOutputStream()
 
             while (_isLiveSessionActive.value && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val readBytes = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: 0
                 if (readBytes > 0) {
-                    accumStream.write(readBuffer, 0, readBytes)
+                    // Suppress microphone transmission while Gemini is speaking to eliminate acoustic feedback and self-interruption
+                    if (_isGeminiSpeaking.value) {
+                        accumStream.reset()
+                        continue
+                    }
 
+                    accumStream.write(readBuffer, 0, readBytes)
                     if (accumStream.size() >= pcmChunkSize) {
                         val chunkBytes = accumStream.toByteArray()
                         accumStream.reset()
@@ -260,17 +350,23 @@ class GeminiLiveStreamManager(private val context: Context) {
     }
 
     private fun initAudioPlayer() {
+        try {
+            audioTrack?.stop()
+            audioTrack?.release()
+        } catch (_: Exception) {}
+
         val minBufSize = AudioTrack.getMinBufferSize(
             SAMPLE_RATE_OUT,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
+        val trackBufSize = maxOf(minBufSize * 4, 48000) // ~1 second buffer to prevent underruns
 
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
-                android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
             .setAudioFormat(
@@ -280,101 +376,226 @@ class GeminiLiveStreamManager(private val context: Context) {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBufSize, 8192))
+            .setBufferSizeInBytes(trackBufSize)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
 
-        audioTrack?.play()
-        
-        // Recreate the channel for a new session
+        totalFramesWritten = 0L
+        isPlayingActive = false
+
         audioPlaybackChannel.close()
         audioPlaybackChannel = Channel(Channel.UNLIMITED)
-        
+
         playbackJob?.cancel()
         playbackJob = scope.launch {
             for (pcmBytes in audioPlaybackChannel) {
-                if (_isLiveSessionActive.value) {
-                    audioTrack?.write(pcmBytes, 0, pcmBytes.size)
+                if (!_isLiveSessionActive.value) break
+                val track = audioTrack ?: continue
+
+                val written = track.write(pcmBytes, 0, pcmBytes.size)
+                if (written > 0) {
+                    totalFramesWritten += (written / 2) // 16-bit mono = 2 bytes per frame
+                }
+
+                // Pre-buffer ~150ms (3600 frames = 7200 bytes) before calling play() to prevent underruns
+                if (!isPlayingActive && totalFramesWritten >= 3600) {
+                    try {
+                        track.play()
+                        isPlayingActive = true
+                    } catch (e: Exception) {
+                        Log.w(TAG, "AudioTrack play failed", e)
+                    }
                 }
             }
         }
+    }
+
+    private fun onTurnComplete(onTurnCompleteCallback: (() -> Unit)?) {
+        onTurnCompleteCallback?.invoke()
+        val track = audioTrack
+        if (track != null && !isPlayingActive && totalFramesWritten > 0) {
+            try {
+                track.play()
+                isPlayingActive = true
+            } catch (_: Exception) {}
+        }
+
+        turnCompletionJob?.cancel()
+        turnCompletionJob = scope.launch {
+            if (track != null && isPlayingActive) {
+                while (_isLiveSessionActive.value && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    val head = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                    if (head >= totalFramesWritten) break
+                    delay(40)
+                }
+                delay(250) // Acoustic settling delay
+            }
+            _isGeminiSpeaking.value = false
+        }
+    }
+
+    /**
+     * Instantly flushes audio playback queue when interrupted.
+     */
+    fun flushPlaybackQueue() {
+        while (audioPlaybackChannel.tryReceive().isSuccess) {
+            // Discard pending buffered audio chunks
+        }
+        try {
+            audioTrack?.pause()
+            audioTrack?.flush()
+        } catch (_: Exception) {}
+        isPlayingActive = false
+        totalFramesWritten = 0L
+        turnCompletionJob?.cancel()
+        turnCompletionJob = null
+        _isGeminiSpeaking.value = false
+        Log.i(TAG, "Audio playback queue flushed.")
+    }
+
+    fun interruptPlayback() {
+        flushPlaybackQueue()
     }
 
     private fun handleServerMessage(
         ws: WebSocket,
         jsonText: String,
         onMessageReceived: (String) -> Unit,
+        onTurnCompleteCallback: (() -> Unit)?,
         onToolCall: ((String, String, JSONObject) -> JSONObject)?
     ) {
         try {
             val root = JSONObject(jsonText)
+            Log.i(TAG, "Server msg keys: ${root.keys().asSequence().toList()}")
+
+            // 0. Check for setup confirmation
+            if (root.has("setupComplete") || root.has("setup_complete")) {
+                Log.i(TAG, "Gemini Live setup confirmed by server. Triggering initial greeting.")
+                sendInitialGreetingTrigger(ws)
+                return
+            }
+
+            // 1. Check for serverContent (model speech audio, transcript, interruptions)
             val serverContent = root.optJSONObject("serverContent") ?: root.optJSONObject("server_content")
-            
             if (serverContent != null) {
+                val isInterrupted = serverContent.optBoolean("interrupted", false)
+                if (isInterrupted) {
+                    Log.i(TAG, "Gemini Live interrupted by user speech. Flushing playback.")
+                    flushPlaybackQueue()
+                }
+
                 val modelTurn = serverContent.optJSONObject("modelTurn") ?: serverContent.optJSONObject("model_turn")
                 if (modelTurn != null) {
+                    turnCompletionJob?.cancel()
+                    turnCompletionJob = null
+                    _isGeminiSpeaking.value = true
+
                     val parts = modelTurn.optJSONArray("parts")
                     if (parts != null) {
                         for (i in 0 until parts.length()) {
                             val part = parts.optJSONObject(i) ?: continue
 
-                            // Check for text transcript
+                            // Text transcript (skip internal thought parts, only capture actual speech text)
+                            val isThought = part.optBoolean("thought", false)
                             val text = part.optString("text", "")
-                            if (text.isNotBlank()) {
+                            if (!isThought && text.isNotBlank()) {
                                 _lastTranscriptText.value = text
                                 onMessageReceived(text)
                             }
 
-                            // Check for inline PCM audio bytes
+                            // Native PCM audio bytes (24kHz 16-bit Mono)
                             val inlineData = part.optJSONObject("inlineData") ?: part.optJSONObject("inline_data")
                             if (inlineData != null) {
                                 val b64Data = inlineData.optString("data", "")
                                 if (b64Data.isNotBlank()) {
                                     val pcmBytes = Base64.decode(b64Data, Base64.DEFAULT)
-                                    _isGeminiSpeaking.value = true
                                     audioPlaybackChannel.trySend(pcmBytes)
                                 }
                             }
 
-                            // Check for tool / function call requests
+                            // Embedded function call within modelTurn part
                             val funcCall = part.optJSONObject("functionCall") ?: part.optJSONObject("function_call")
                             if (funcCall != null && onToolCall != null) {
-                                val name = funcCall.optString("name", "")
-                                val callId = funcCall.optString("id", "")
-                                val args = funcCall.optJSONObject("args") ?: JSONObject()
-
-                                Log.i(TAG, "Gemini Live requested tool execution: $name ($callId)")
-                                val toolResult = onToolCall(name, callId, args)
-
-                                val responseObj = JSONObject().apply {
-                                    put("toolResponse", JSONObject().apply {
-                                        put("functionResponses", JSONArray().apply {
-                                            put(JSONObject().apply {
-                                                put("name", name)
-                                                put("id", callId)
-                                                put("response", JSONObject().apply {
-                                                    put("output", toolResult)
-                                                })
-                                            })
-                                        })
-                                    })
-                                }
-                                ws.send(responseObj.toString())
+                                handleSingleFunctionCall(ws, funcCall, onToolCall)
                             }
                         }
                     }
                 }
-                
+
                 val turnComplete = serverContent.optBoolean("turnComplete", false) || serverContent.optBoolean("turn_complete", false)
                 if (turnComplete) {
-                    _isGeminiSpeaking.value = false
+                    onTurnComplete(onTurnCompleteCallback)
                 }
-            } else {
-                 Log.d(TAG, "Server message received without serverContent: $jsonText")
+            }
+
+            // 2. Check for Top-Level toolCall message (standard Live API function calling)
+            val toolCall = root.optJSONObject("toolCall") ?: root.optJSONObject("tool_call")
+            if (toolCall != null && onToolCall != null) {
+                turnCompletionJob?.cancel()
+                turnCompletionJob = null
+                _isGeminiSpeaking.value = true
+
+                val functionCalls = toolCall.optJSONArray("functionCalls") ?: toolCall.optJSONArray("function_calls")
+                if (functionCalls != null && functionCalls.length() > 0) {
+                    val responsesArray = JSONArray()
+                    for (i in 0 until functionCalls.length()) {
+                        val fc = functionCalls.optJSONObject(i) ?: continue
+                        val name = fc.optString("name", "")
+                        val callId = fc.optString("id", "")
+                        val args = fc.optJSONObject("args") ?: JSONObject()
+
+                        Log.i(TAG, "Gemini Live requested tool execution: $name ($callId)")
+                        val toolResult = onToolCall(name, callId, args)
+
+                        responsesArray.put(JSONObject().apply {
+                            put("name", name)
+                            put("id", callId)
+                            put("response", JSONObject().apply {
+                                put("output", toolResult)
+                            })
+                        })
+                    }
+
+                    val responseMsg = JSONObject().apply {
+                        put("toolResponse", JSONObject().apply {
+                            put("functionResponses", responsesArray)
+                        })
+                    }
+                    ws.send(responseMsg.toString())
+                    Log.i(TAG, "Sent toolResponse for ${responsesArray.length()} tool(s).")
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error handling Gemini Live server message", e)
         }
+    }
+
+    private fun handleSingleFunctionCall(
+        ws: WebSocket,
+        funcCall: JSONObject,
+        onToolCall: (String, String, JSONObject) -> JSONObject
+    ) {
+        val name = funcCall.optString("name", "")
+        val callId = funcCall.optString("id", "")
+        val args = funcCall.optJSONObject("args") ?: JSONObject()
+
+        Log.i(TAG, "Gemini Live requested embedded tool execution: $name ($callId)")
+        val toolResult = onToolCall(name, callId, args)
+
+        val responseObj = JSONObject().apply {
+            put("toolResponse", JSONObject().apply {
+                put("functionResponses", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("name", name)
+                        put("id", callId)
+                        put("response", JSONObject().apply {
+                            put("output", toolResult)
+                        })
+                    })
+                })
+            })
+        }
+        ws.send(responseObj.toString())
     }
 
     fun stopLiveSession() {
@@ -384,9 +605,12 @@ class GeminiLiveStreamManager(private val context: Context) {
         sessionTimeoutJob?.cancel()
         sessionTimeoutJob = null
 
+        turnCompletionJob?.cancel()
+        turnCompletionJob = null
+
         recordJob?.cancel()
         recordJob = null
-        
+
         playbackJob?.cancel()
         playbackJob = null
         audioPlaybackChannel.close()
@@ -398,10 +622,14 @@ class GeminiLiveStreamManager(private val context: Context) {
         audioRecord = null
 
         try {
+            audioTrack?.pause()
+            audioTrack?.flush()
             audioTrack?.stop()
             audioTrack?.release()
         } catch (_: Exception) {}
         audioTrack = null
+        isPlayingActive = false
+        totalFramesWritten = 0L
 
         webSocket?.close(1000, "User stopped live session")
         webSocket = null

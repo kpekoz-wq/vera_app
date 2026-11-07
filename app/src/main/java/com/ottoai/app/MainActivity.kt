@@ -10,9 +10,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.widget.Toast
 import android.net.Uri
 import androidx.activity.ComponentActivity
@@ -1358,6 +1355,7 @@ fun OttoMainScreen(
     val isSpeaking by viewModel.isSpeaking.collectAsState()
     val isLiveSessionActive by viewModel.isLiveSessionActive.collectAsState()
     val isHandsFreeVoiceActive by viewModel.isHandsFreeVoiceActive.collectAsState()
+    val isGeminiSpeaking by viewModel.isGeminiSpeaking.collectAsState()
     val liveVoiceName by viewModel.liveVoiceName.collectAsState()
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -1693,91 +1691,6 @@ fun OttoMainScreen(
     var isMode22Expanded by remember { mutableStateOf(false) }
     val carouselListState = rememberLazyListState()
     val chatListState = rememberLazyListState()
-
-    val voiceHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
-    var isListeningVoice by remember { mutableStateOf(false) }
-    var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
-
-    fun startInAppVoiceListening() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(context, "Microphone permission required for voice input", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            Toast.makeText(context, "Voice input not supported on this device", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        try {
-            speechRecognizer?.destroy()
-            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-            speechRecognizer = recognizer
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.US)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            }
-
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { isListeningVoice = true }
-                override fun onBeginningOfSpeech() { isListeningVoice = true }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { isListeningVoice = false }
-                override fun onError(error: Int) {
-                    isListeningVoice = false
-                    android.util.Log.w("OttoAI_Voice", "SpeechRecognizer error code: $error")
-                    if (isHandsFreeVoiceActive && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)) {
-                        voiceHandler.postDelayed({
-                            if (isHandsFreeVoiceActive && !isSpeaking && !isSendingMessage && !isListeningVoice) {
-                                startInAppVoiceListening()
-                            }
-                        }, 800L)
-                    }
-                }
-                override fun onResults(results: Bundle?) {
-                    isListeningVoice = false
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val spokenText = matches?.firstOrNull()
-                    if (!spokenText.isNullOrBlank()) {
-                        isLiveStreamsExpanded = false
-                        isDtcExpanded = false
-                        isMode06Expanded = false
-                        isMode22Expanded = false
-                        viewModel.sendMessageToAgent(
-                            userText = spokenText,
-                            attachments = attachedFiles
-                        )
-                        attachedFiles = emptyList()
-                    } else if (isHandsFreeVoiceActive) {
-                        voiceHandler.postDelayed({
-                            if (isHandsFreeVoiceActive && !isSpeaking && !isSendingMessage && !isListeningVoice) {
-                                startInAppVoiceListening()
-                            }
-                        }, 800L)
-                    }
-                }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-
-            recognizer.startListening(intent)
-            isListeningVoice = true
-            Toast.makeText(context, "🎙️ Listening to your voice...", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            android.util.Log.e("OttoAI_Voice", "Error starting SpeechRecognizer", e)
-            isListeningVoice = false
-        }
-    }
-
-    LaunchedEffect(isHandsFreeVoiceActive, isSpeaking, isSendingMessage) {
-        if (isHandsFreeVoiceActive && !isSpeaking && !isSendingMessage && !isListeningVoice) {
-            kotlinx.coroutines.delay(600L)
-            startInAppVoiceListening()
-        }
-    }
 
     LaunchedEffect(viewModel.messages.size) {
         if (viewModel.messages.isNotEmpty()) {
@@ -2918,106 +2831,56 @@ fun OttoMainScreen(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 ) {
-                    val voiceHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
-    var isListeningVoice by remember { mutableStateOf(false) }
-    var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
-
-    fun startInAppVoiceListening() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(context, "Microphone permission required for voice input", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            Toast.makeText(context, "Voice input not supported on this device", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        try {
-            speechRecognizer?.destroy()
-            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-            speechRecognizer = recognizer
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.US)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            }
-
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { isListeningVoice = true }
-                override fun onBeginningOfSpeech() { isListeningVoice = true }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { isListeningVoice = false }
-                override fun onError(error: Int) {
-                    isListeningVoice = false
-                    android.util.Log.w("OttoAI_Voice", "SpeechRecognizer error code: $error")
-                    if (isHandsFreeVoiceActive && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)) {
-                        voiceHandler.postDelayed({
-                            if (isHandsFreeVoiceActive && !isSpeaking && !isSendingMessage && !isListeningVoice) {
-                                startInAppVoiceListening()
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        if (isLiveSessionActive || isHandsFreeVoiceActive) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .clickable(enabled = isGeminiSpeaking) {
+                                        viewModel.interruptLivePlayback()
+                                    },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isGeminiSpeaking) Color(0xFF2E7D32) else Color(0xFF1B5E20)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "Gemini Live Active",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isGeminiSpeaking) "🔊 Gemini Speaking (Tap to Mute/Skip)" else "🎙️ 2-Way Gemini Live Active (Hands-Free)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = "Voice: $liveVoiceName",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White.copy(alpha = 0.85f)
+                                    )
+                                }
                             }
-                        }, 800L)
-                    }
-                }
-                override fun onResults(results: Bundle?) {
-                    isListeningVoice = false
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val spokenText = matches?.firstOrNull()
-                    if (!spokenText.isNullOrBlank()) {
-                        isLiveStreamsExpanded = false
-                        isDtcExpanded = false
-                        isMode06Expanded = false
-                        isMode22Expanded = false
-                        viewModel.sendMessageToAgent(
-                            userText = spokenText,
-                            attachments = attachedFiles
-                        )
-                        attachedFiles = emptyList()
-                    } else if (isHandsFreeVoiceActive) {
-                        voiceHandler.postDelayed({
-                            if (isHandsFreeVoiceActive && !isSpeaking && !isSendingMessage && !isListeningVoice) {
-                                startInAppVoiceListening()
-                            }
-                        }, 800L)
-                    }
-                }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-
-            recognizer.startListening(intent)
-            isListeningVoice = true
-            Toast.makeText(context, "🎙️ Listening to your voice...", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            android.util.Log.e("OttoAI_Voice", "Error starting SpeechRecognizer", e)
-            isListeningVoice = false
-        }
-    }
-
-    LaunchedEffect(isHandsFreeVoiceActive, isSpeaking, isSendingMessage) {
-        if (isHandsFreeVoiceActive && !isSpeaking && !isSendingMessage && !isListeningVoice) {
-            kotlinx.coroutines.delay(600L)
-            startInAppVoiceListening()
-        }
-    }
-
-    LaunchedEffect(viewModel.messages.size) {
-                        if (viewModel.messages.isNotEmpty()) {
-                            chatListState.animateScrollToItem(viewModel.messages.size - 1)
                         }
-                    }
 
-                    LazyColumn(
-                        state = chatListState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        contentPadding = PaddingValues(bottom = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        reverseLayout = false
-                    ) {
+                        LazyColumn(
+                            state = chatListState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(bottom = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            reverseLayout = false
+                        ) {
                         items(viewModel.messages, key = { it.id }) { msg ->
                             val isUser = msg.sender == "User"
                             val isError = msg.sender == "Error"
@@ -3072,6 +2935,7 @@ fun OttoMainScreen(
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
@@ -3257,23 +3121,22 @@ fun OttoMainScreen(
 
             Spacer(modifier = Modifier.width(4.dp))
 
-            // Hands-Free 2-Way Voice Streaming Button
+            // Hands-Free 2-Way Voice Streaming Button (Gemini Live)
             Surface(
                 onClick = {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                         Toast.makeText(context, "Microphone permission required for voice mode.", Toast.LENGTH_SHORT).show()
                         micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else if (isGeminiSpeaking) {
+                        viewModel.interruptLivePlayback()
                     } else {
                         viewModel.toggleHandsFreeVoiceMode()
-                        if (!isHandsFreeVoiceActive) {
-                            speechRecognizer?.destroy()
-                            speechRecognizer = null
-                            isListeningVoice = false
-                        }
                     }
                 },
                 shape = RoundedCornerShape(18.dp),
-                color = if (isHandsFreeVoiceActive) Color(0xFF2E7D32) else MaterialTheme.colorScheme.tertiaryContainer,
+                color = if (isLiveSessionActive || isHandsFreeVoiceActive) {
+                    if (isGeminiSpeaking) Color(0xFF00796B) else Color(0xFF2E7D32)
+                } else MaterialTheme.colorScheme.tertiaryContainer,
                 modifier = Modifier.height(36.dp)
             ) {
                 Row(
@@ -3282,16 +3145,20 @@ fun OttoMainScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Mic,
-                        contentDescription = "Hands-Free Voice Mode",
-                        tint = if (isHandsFreeVoiceActive) Color.White else MaterialTheme.colorScheme.onTertiaryContainer,
+                        contentDescription = "Hands-Free Gemini Live Voice Mode",
+                        tint = if (isLiveSessionActive || isHandsFreeVoiceActive) Color.White else MaterialTheme.colorScheme.onTertiaryContainer,
                         modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Voice",
+                        text = when {
+                            isGeminiSpeaking -> "Speaking"
+                            isLiveSessionActive || isHandsFreeVoiceActive -> "Live"
+                            else -> "Voice"
+                        },
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = if (isHandsFreeVoiceActive) Color.White else MaterialTheme.colorScheme.onTertiaryContainer
+                        color = if (isLiveSessionActive || isHandsFreeVoiceActive) Color.White else MaterialTheme.colorScheme.onTertiaryContainer
                     )
                 }
             }
