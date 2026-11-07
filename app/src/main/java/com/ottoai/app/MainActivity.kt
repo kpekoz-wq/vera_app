@@ -2224,17 +2224,28 @@ fun OttoMainScreen(
 
     LaunchedEffect(messagesCount, lastMessageText) {
         if (messagesCount > 0) {
-            launch {
+            // Check if user is actively reading older messages higher up in the chat
+            val isUserReadingOlder = if (chatListState.isScrollInProgress) {
+                true
+            } else {
+                val visibleItems = chatListState.layoutInfo.visibleItemsInfo
+                if (visibleItems.isNotEmpty() && chatListState.canScrollForward) {
+                    val lastVisibleIndex = visibleItems.last().index
+                    lastVisibleIndex < (messagesCount - 2)
+                } else {
+                    false
+                }
+            }
+
+            // Only auto-scroll the chat list if the user is at the bottom, or if a new user prompt was sent.
+            // Never scroll the outer screen (mainScrollState) so the user's view of live data/tiles is never hijacked.
+            val isUserMessage = viewModel.messages.lastOrNull()?.sender == "User"
+            if (!isUserReadingOlder || isUserMessage) {
                 if (messagesCount != prevMessageCount) {
                     prevMessageCount = messagesCount
                     chatListState.animateScrollToItem(messagesCount - 1)
                 } else {
                     chatListState.scrollToItem(messagesCount - 1)
-                }
-            }
-            launch {
-                if (mainScrollState.maxValue > 0) {
-                    mainScrollState.animateScrollTo(mainScrollState.maxValue)
                 }
             }
         }
