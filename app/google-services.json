@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "200348372358",
+    "project_id": "ottoai-8a61f",
+    "storage_bucket": "ottoai-8a61f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:200348372358:android:26ca31f85e30e8ba57b007",
+        "android_client_info": {
+          "package_name": "com.ottoai.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyedaF3B1MNogD9AzL4WsSZjhWyDPl-f4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
