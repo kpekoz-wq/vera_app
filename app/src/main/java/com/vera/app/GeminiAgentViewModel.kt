@@ -266,32 +266,46 @@ class GeminiAgentViewModel : ViewModel() {
 
         if (cleanText.isBlank()) return
 
+        val activeVoice = liveStreamManager?.voiceName?.value ?: "Aoede"
+
         viewModelScope.launch(Dispatchers.IO) {
             var audioPlaySuccess = false
             val cacheDir = appContext?.cacheDir
 
             if (geminiApiKey.isNotBlank() && cacheDir != null) {
-                val voicesToTry = listOf("en-US-Journey-D", "en-US-Neural2-J", "en-US-Studio-O", "en-US-Neural2-D")
-                for (voiceName in voicesToTry) {
+                // Use Gemini Native Voice models to output smooth human voice (Aoede) matching live voice chat
+                val ttsModels = listOf("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-2.5-flash-preview-tts")
+                for (modelName in ttsModels) {
                     try {
-                        val url = URL("https://texttospeech.googleapis.com/v1/text:synthesize?key=$geminiApiKey")
+                        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$geminiApiKey")
                         val connection = (url.openConnection() as HttpURLConnection).apply {
                             requestMethod = "POST"
                             setRequestProperty("Content-Type", "application/json")
-                            connectTimeout = 5000
-                            readTimeout = 8000
+                            connectTimeout = 8000
+                            readTimeout = 15000
                             doOutput = true
                         }
 
                         val requestJson = JSONObject().apply {
-                            put("input", JSONObject().put("text", cleanText))
-                            put("voice", JSONObject().apply {
-                                put("languageCode", "en-US")
-                                put("name", voiceName)
+                            put("contents", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("role", "user")
+                                    put("parts", JSONArray().apply {
+                                        put(JSONObject().put("text", cleanText))
+                                    })
+                                })
                             })
-                            put("audioConfig", JSONObject().apply {
-                                put("audioEncoding", "MP3")
-                                put("speakingRate", 1.02)
+                            put("generationConfig", JSONObject().apply {
+                                put("responseModalities", JSONArray().apply {
+                                    put("AUDIO")
+                                })
+                                put("speechConfig", JSONObject().apply {
+                                    put("voiceConfig", JSONObject().apply {
+                                        put("prebuiltVoiceConfig", JSONObject().apply {
+                                            put("voiceName", activeVoice)
+                                        })
+                                    })
+                                })
                             })
                         }
 
@@ -301,41 +315,62 @@ class GeminiAgentViewModel : ViewModel() {
 
                         if (connection.responseCode in 200..299) {
                             val responseStr = connection.inputStream.bufferedReader().use { it.readText() }
-                            val audioB64 = JSONObject(responseStr).optString("audioContent", "")
-                            if (audioB64.isNotBlank()) {
-                                val mp3Bytes = Base64.decode(audioB64, Base64.DEFAULT)
-                                val tempFile = java.io.File.createTempFile("vera_voice_", ".mp3", cacheDir)
-                                tempFile.writeBytes(mp3Bytes)
+                            val jsonResp = JSONObject(responseStr)
+                            val candidates = jsonResp.optJSONArray("candidates")
+                            if (candidates != null && candidates.length() > 0) {
+                                val parts = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
+                                if (parts != null && parts.length() > 0) {
+                                    val inlineData = parts.getJSONObject(0).optJSONObject("inlineData")
+                                    val audioB64 = inlineData?.optString("data", "") ?: ""
+                                    val mimeType = inlineData?.optString("mimeType", "") ?: ""
 
-                                withContext(Dispatchers.Main) {
-                                    try {
-                                        val player = MediaPlayer()
-                                        mediaPlayer = player
-                                        player.setDataSource(tempFile.absolutePath)
-                                        player.prepare()
-                                        _isSpeaking.value = true
-                                        player.setOnCompletionListener {
-                                            _isSpeaking.value = false
-                                            tempFile.delete()
+                                    if (audioB64.isNotBlank()) {
+                                        val rawAudioBytes = Base64.decode(audioB64, Base64.DEFAULT)
+                                        val finalWavBytes = if (mimeType.contains("wav", ignoreCase = true) ||
+                                            (rawAudioBytes.size > 4 && rawAudioBytes[0] == 'R'.code.toByte() && rawAudioBytes[1] == 'I'.code.toByte())) {
+                                            rawAudioBytes
+                                        } else {
+                                            addWavHeader(rawAudioBytes, sampleRate = 24000, channels = 1)
                                         }
-                                        player.setOnErrorListener { _, _, _ ->
-                                            _isSpeaking.value = false
-                                            tempFile.delete()
-                                            false
+
+                                        val tempFile = java.io.File.createTempFile("vera_human_voice_", ".wav", cacheDir)
+                                        tempFile.writeBytes(finalWavBytes)
+
+                                        withContext(Dispatchers.Main) {
+                                            try {
+                                                stopSpeaking()
+                                                val player = MediaPlayer()
+                                                mediaPlayer = player
+                                                player.setDataSource(tempFile.absolutePath)
+                                                player.prepare()
+                                                _isSpeaking.value = true
+                                                player.setOnCompletionListener {
+                                                    _isSpeaking.value = false
+                                                    tempFile.delete()
+                                                }
+                                                player.setOnErrorListener { _, _, _ ->
+                                                    _isSpeaking.value = false
+                                                    tempFile.delete()
+                                                    false
+                                                }
+                                                player.start()
+                                            } catch (e: Exception) {
+                                                _isSpeaking.value = false
+                                                tempFile.delete()
+                                            }
                                         }
-                                        player.start()
-                                    } catch (e: Exception) {
-                                        _isSpeaking.value = false
-                                        tempFile.delete()
+                                        audioPlaySuccess = true
+                                        Log.i("VERA_Voice", "Played Gemini Smooth Human Voice ($activeVoice via $modelName)")
+                                        break
                                     }
                                 }
-                                audioPlaySuccess = true
-                                Log.i("VERA_Voice", "Played Google Cloud Human Voice ($voiceName)")
-                                break
                             }
+                        } else {
+                            val errStr = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                            Log.w("VERA_Voice", "TTS model $modelName returned error: $errStr")
                         }
                     } catch (e: Exception) {
-                        Log.w("VERA_Voice", "Cloud TTS Voice $voiceName failed: ${e.message}")
+                        Log.w("VERA_Voice", "TTS model $modelName failed: ${e.message}")
                     }
                 }
             }
@@ -346,6 +381,27 @@ class GeminiAgentViewModel : ViewModel() {
                 }
             }
         }
+    }
+
+    private fun addWavHeader(pcmData: ByteArray, sampleRate: Int = 24000, channels: Int = 1): ByteArray {
+        val totalDataLen = pcmData.size + 36
+        val byteRate = sampleRate * channels * 2
+        val header = ByteArray(44)
+        val bb = java.nio.ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        bb.put("RIFF".toByteArray())
+        bb.putInt(totalDataLen)
+        bb.put("WAVE".toByteArray())
+        bb.put("fmt ".toByteArray())
+        bb.putInt(16) // Subchunk1Size (16 for PCM)
+        bb.putShort(1) // AudioFormat (1 for PCM)
+        bb.putShort(channels.toShort())
+        bb.putInt(sampleRate)
+        bb.putInt(byteRate)
+        bb.putShort((channels * 2).toShort()) // BlockAlign
+        bb.putShort(16) // BitsPerSample
+        bb.put("data".toByteArray())
+        bb.putInt(pcmData.size)
+        return header + pcmData
     }
 
     private fun speakWithAndroidTts(cleanText: String) {
