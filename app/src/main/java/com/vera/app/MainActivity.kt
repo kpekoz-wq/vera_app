@@ -2503,6 +2503,54 @@ fun VeraMainScreen(
                             }
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Feedback & Help Button
+                    FilledTonalButton(
+                        onClick = {
+                            coroutineScope.launch { drawerState.close() }
+                            val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("mailto:")
+                                putExtra(Intent.EXTRA_EMAIL, arrayOf("pekozy@gmail.com"))
+                                putExtra(Intent.EXTRA_SUBJECT, "VERA Diagnostic App - Beta Feedback")
+                                val body = buildString {
+                                    appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (Android ${android.os.Build.VERSION.RELEASE})")
+                                    appendLine("App Version: 3.0 (Build 10)")
+                                    if (vehicleDetails != null) appendLine("Vehicle: $vehicleDetails")
+                                    if (vehicleVin != null) appendLine("VIN: $vehicleVin")
+                                    appendLine()
+                                    appendLine("--- Your Feedback / Feature Request / Bug Report ---")
+                                    appendLine()
+                                }
+                                putExtra(Intent.EXTRA_TEXT, body)
+                            }
+                            try {
+                                context.startActivity(Intent.createChooser(emailIntent, "Send Feedback via Email"))
+                            } catch (_: Exception) {
+                                Toast.makeText(context, "No email client installed to send feedback.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Chat,
+                            contentDescription = "Send Feedback",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Send Developer Feedback", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                 }
             }
         }
@@ -2538,8 +2586,9 @@ fun VeraMainScreen(
                         Text(
                             text = "VERA",
                             fontSize = 20.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onBackground
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp,
+                            color = MaterialTheme.colorScheme.primary
                         )
                         if (isConnected) {
                             val rawDetails = vehicleDetails ?: "Connected Vehicle"
@@ -2607,11 +2656,11 @@ fun VeraMainScreen(
                 // Connection Status Pill
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = if (isConnected) Color(0xFF1B5E20) else Color(0xFF3E2723),
-                    contentColor = if (isConnected) Color(0xFF81C784) else Color(0xFFFF8A80),
+                    color = if (isConnected) Color(0xFF0C2A24) else Color(0xFF261318),
+                    contentColor = if (isConnected) Color(0xFF00E676) else Color(0xFFFF8A80),
                     modifier = Modifier.border(
                         width = 1.dp,
-                        color = if (isConnected) Color(0xFF4CAF50) else Color(0xFFE53935),
+                        color = if (isConnected) Color(0xFF00E676).copy(alpha = 0.6f) else Color(0xFFFF5252).copy(alpha = 0.6f),
                         shape = RoundedCornerShape(20.dp)
                     )
                 ) {
@@ -2623,7 +2672,7 @@ fun VeraMainScreen(
                             modifier = Modifier
                                 .size(6.dp)
                                 .clip(CircleShape)
-                                .background(if (isConnected) Color(0xFF4CAF50) else Color(0xFFE53935))
+                                .background(if (isConnected) Color(0xFF00E676) else Color(0xFFFF5252))
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
@@ -2935,8 +2984,8 @@ fun VeraMainScreen(
                             Surface(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF1B5E20).copy(alpha = 0.15f),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.5f))
+                                color = Color(0xFF0C2A24).copy(alpha = 0.4f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E676).copy(alpha = 0.5f))
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -2944,12 +2993,12 @@ fun VeraMainScreen(
                                 ) {
                                     Surface(
                                         shape = androidx.compose.foundation.shape.CircleShape,
-                                        color = Color(0xFF4CAF50)
+                                        color = Color(0xFF00E676)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.CheckCircle,
                                             contentDescription = null,
-                                            tint = Color.White,
+                                            tint = Color(0xFF070D18),
                                             modifier = Modifier
                                                 .padding(2.dp)
                                                 .size(13.dp)
@@ -3601,14 +3650,14 @@ fun VeraMainScreen(
                 }
                 .border(
                     width = 1.5.dp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
                     shape = RoundedCornerShape(18.dp)
                 ),
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
             ),
-            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)
         ) {
             val inputBarHeightDp = with(LocalDensity.current) { if (inputBarHeightPx > 0f) inputBarHeightPx.toDp() else 80.dp }
             Column(
@@ -3821,7 +3870,8 @@ fun VeraMainScreen(
                                         viewModel.interruptLivePlayback()
                                     },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isGeminiSpeaking) Color(0xFF2E7D32) else Color(0xFF1B5E20)
+                                color = if (isGeminiSpeaking) Color(0xFF0F3254) else Color(0xFF0D1B2A),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -3830,7 +3880,7 @@ fun VeraMainScreen(
                                     Icon(
                                         imageVector = Icons.Default.Mic,
                                         contentDescription = "Gemini Live Active",
-                                        tint = Color.White,
+                                        tint = Color(0xFF00E5FF),
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -3838,14 +3888,14 @@ fun VeraMainScreen(
                                         text = if (isGeminiSpeaking) "🔊 Gemini Speaking (Tap to Mute/Skip)" else "🎙️ 2-Way Gemini Live Active (Hands-Free)",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color.White,
+                                        color = Color(0xFFF0F9FF),
                                         modifier = Modifier.weight(1f)
                                     )
                                     Text(
                                         text = "Voice: $liveVoiceName",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = Color.White.copy(alpha = 0.85f)
+                                        color = Color(0xFF7DD3FC)
                                     )
                                 }
                             }
@@ -3876,21 +3926,25 @@ fun VeraMainScreen(
                                         else -> RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp)
                                     },
                                     color = when {
-                                        isUser -> MaterialTheme.colorScheme.primary
+                                        isUser -> MaterialTheme.colorScheme.primaryContainer
                                         isError -> Color(0xFF3E1010)
-                                        isSystem -> MaterialTheme.colorScheme.surfaceVariant
-                                        else -> MaterialTheme.colorScheme.surfaceVariant
+                                        isSystem -> MaterialTheme.colorScheme.surface
+                                        else -> MaterialTheme.colorScheme.surface
                                     },
                                     contentColor = when {
-                                        isUser -> MaterialTheme.colorScheme.onPrimary
+                                        isUser -> MaterialTheme.colorScheme.onPrimaryContainer
                                         isError -> Color(0xFFFF8A80)
-                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        else -> MaterialTheme.colorScheme.onSurface
                                     },
                                     modifier = Modifier
                                         .widthIn(max = 280.dp)
                                         .border(
-                                            width = if (isError) 1.dp else 0.dp,
-                                            color = if (isError) Color(0xFFFF5252) else Color.Transparent,
+                                            width = if (isError) 1.dp else 1.dp,
+                                            color = when {
+                                                isError -> Color(0xFFFF5252)
+                                                isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                            },
                                             shape = RoundedCornerShape(14.dp)
                                         )
                                 ) {
@@ -3904,7 +3958,7 @@ fun VeraMainScreen(
                                             },
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 11.sp,
-                                            color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.primary
+                                            color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary
                                         )
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
@@ -3936,12 +3990,12 @@ fun VeraMainScreen(
             }
             .border(
                 width = 1.5.dp,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
                 shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp, topStart = 8.dp, topEnd = 8.dp)
             ),
         shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp, topStart = 8.dp, topEnd = 8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-        tonalElevation = 6.dp
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        tonalElevation = 8.dp
     ) {
         Column(
             modifier = Modifier
@@ -4101,8 +4155,12 @@ fun VeraMainScreen(
                 },
                 shape = RoundedCornerShape(18.dp),
                 color = if (isLiveSessionActive || isHandsFreeVoiceActive) {
-                    if (isGeminiSpeaking) Color(0xFF00796B) else Color(0xFF2E7D32)
-                } else MaterialTheme.colorScheme.tertiaryContainer,
+                    if (isGeminiSpeaking) Color(0xFF0284C7) else Color(0xFF00E5FF)
+                } else MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (isLiveSessionActive || isHandsFreeVoiceActive) Color(0xFF00E5FF) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                ),
                 modifier = Modifier.height(36.dp)
             ) {
                 Row(
@@ -4112,7 +4170,7 @@ fun VeraMainScreen(
                     Icon(
                         imageVector = Icons.Default.Mic,
                         contentDescription = "Hands-Free Gemini Live Voice Mode",
-                        tint = if (isLiveSessionActive || isHandsFreeVoiceActive) Color.White else MaterialTheme.colorScheme.onTertiaryContainer,
+                        tint = if (isLiveSessionActive || isHandsFreeVoiceActive) Color(0xFF070D18) else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -4124,7 +4182,7 @@ fun VeraMainScreen(
                         },
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = if (isLiveSessionActive || isHandsFreeVoiceActive) Color.White else MaterialTheme.colorScheme.onTertiaryContainer
+                        color = if (isLiveSessionActive || isHandsFreeVoiceActive) Color(0xFF070D18) else MaterialTheme.colorScheme.primary
                     )
                 }
             }
