@@ -153,11 +153,11 @@ class GeminiLiveStreamManager(private val context: Context) {
 
         currentHasPriorHistory = conversationHistory.isNotBlank()
 
-        // 2-hour maximum driving session length limit (extended from 15 mins for road trips/commutes)
+        // 30-minute maximum driving session length limit
         sessionTimeoutJob?.cancel()
         sessionTimeoutJob = scope.launch {
-            delay(2 * 60 * 60 * 1000L) // 2 hours
-            Log.i(TAG, "Gemini Live driving session limit reached (2 hours). Stopping session automatically.")
+            delay(30 * 60 * 1000L) // 30 minutes
+            Log.i(TAG, "Gemini Live driving session limit reached (30 minutes). Stopping session automatically.")
             stopLiveSession()
         }
 

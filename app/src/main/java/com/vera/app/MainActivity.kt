@@ -2078,73 +2078,10 @@ fun VeraMainScreen(
 
     var attachedFiles by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
-    var showDongleLogDialog by remember { mutableStateOf(false) }
 
     var chatCardTopY by remember { mutableFloatStateOf(0f) }
     var chatCardHeight by remember { mutableFloatStateOf(0f) }
     var inputBarHeightPx by remember { mutableFloatStateOf(0f) }
-
-    // Live ELM327 Command & Error Trace Dialog
-    if (showDongleLogDialog) {
-        val rawLogText = viewModel.getRawElmTraceText()
-        val elmLogList by viewModel.elmCommandLog.collectAsState()
-
-        AlertDialog(
-            onDismissRequest = { showDongleLogDialog = false },
-            title = {
-                Text(text = "Live ELM327 Command & Error Trace", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            },
-            text = {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 280.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF1E1E1E)
-                ) {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(8.dp)
-                    ) {
-                        items(elmLogList) { line ->
-                            Text(
-                                text = line,
-                                fontSize = 10.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                color = if (line.contains("ERROR") || line.contains("7F") || line.contains("NODATA")) Color(0xFFFF8A80) else Color(0xFF81C784)
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showDongleLogDialog = false
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("ELM327 Trace Log", rawLogText)
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "Copied raw ELM327 trace to clipboard!", Toast.LENGTH_SHORT).show()
-                    }
-                ) {
-                    Text("Copy Trace Log", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                OutlinedButton(
-                    onClick = {
-                        showDongleLogDialog = false
-                        viewModel.sendMessageToAgent(
-                            userText = "Analyze this raw ELM327 Bluetooth OBD2 command and response trace log. Diagnose any CAN protocol or header response anomalies:\n\n$rawLogText"
-                        )
-                    }
-                ) {
-                    Text("Analyze Trace 🤖")
-                }
-            }
-        )
-    }
 
 
 
@@ -3753,18 +3690,6 @@ fun VeraMainScreen(
                                 )
                             }
                         }
-
-                        // View Dongle Log Icon Button (🔌)
-                        Surface(
-                            onClick = { showDongleLogDialog = true },
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text("🔌", fontSize = 14.sp)
-                            }
-                        }
                     }
                 }
 
@@ -4143,22 +4068,7 @@ fun VeraMainScreen(
                             viewModel.sendMessageToAgent(userText = "Analyze current live vehicle telemetry, DTCs, and Mode 06 monitors.")
                         }
                     )
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("🔌", fontSize = 14.sp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Analyze Dongle CAN Trace", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary)
-                            }
-                        },
-                        onClick = {
-                            showAttachmentMenu = false
-                            val trace = viewModel.getRawElmTraceText()
-                            viewModel.sendMessageToAgent(
-                                userText = "Analyze this raw ELM327 Bluetooth OBD2 command and response trace log. Diagnose any CAN protocol or header response anomalies:\n\n$trace"
-                            )
-                        }
-                    )
+
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     DropdownMenuItem(
                         text = {

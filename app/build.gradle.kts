@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.3"
+        versionCode = 4
+        versionName = "2.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.3: Added AI Model pulldown selector (Gemini 2.5 Flash, Gemini 2.5 Pro, Gemini 2.0 Thinking) in chat window"
+                releaseNotes = "VERA v2.4: 30-min live voice session limit, hidden raw dongle trace log from UI (kept behind the scenes for troubleshooting)"
                 artifactType = "APK"
             }
         }
