@@ -104,7 +104,14 @@ class VeraVoiceService : Service() {
             Log.e(TAG, "Failed to startForeground in VeraVoiceService", e)
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i(TAG, "onTaskRemoved: User swiped app away from Recents. Terminating voice session.")
+        onStopRequested?.invoke()
+        stopSelf()
     }
 
     override fun onDestroy() {
