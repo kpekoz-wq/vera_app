@@ -49,6 +49,8 @@ class GeminiLiveStreamManager(private val context: Context) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // Indefinite streaming connection
         .writeTimeout(15, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS) // Send WebSocket PING every 15s to keep cellular NAT & towers alive
+        .retryOnConnectionFailure(true)
         .build()
 
     private var webSocket: WebSocket? = null
@@ -60,6 +62,7 @@ class GeminiLiveStreamManager(private val context: Context) {
     private var playbackJob: Job? = null
     private var sessionTimeoutJob: Job? = null
     private var turnCompletionJob: Job? = null
+    private var reconnectJob: Job? = null
     private var audioPlaybackChannel = Channel<ByteArray>(Channel.UNLIMITED)
 
     @Volatile
@@ -98,6 +101,21 @@ class GeminiLiveStreamManager(private val context: Context) {
     }
 
     private var currentHasPriorHistory = false
+    private var lastApiKey: String = ""
+    private var lastSystemInstruction: String = ""
+    private var lastTelemetrySummary: String = ""
+    private var lastConversationHistory: String = ""
+    private var lastOnMessageReceived: ((String) -> Unit)? = null
+    private var lastOnUserTranscriptReceived: ((String) -> Unit)? = null
+    private var lastOnTurnComplete: (() -> Unit)? = null
+    private var lastOnToolCall: ((String, String, JSONObject) -> JSONObject)? = null
+    private var lastOnError: ((String) -> Unit)? = null
+
+    @Volatile
+    private var isExplicitlyStopped = false
+    @Volatile
+    private var isReconnecting = false
+    private var reconnectAttempts = 0
 
     @SuppressLint("MissingPermission")
     fun startLiveSession(
@@ -118,58 +136,96 @@ class GeminiLiveStreamManager(private val context: Context) {
             return
         }
         stopLiveSession()
+
+        isExplicitlyStopped = false
+        isReconnecting = false
+        reconnectAttempts = 0
+
+        lastApiKey = apiKey
+        lastSystemInstruction = systemInstruction
+        lastTelemetrySummary = telemetrySummary
+        lastConversationHistory = conversationHistory
+        lastOnMessageReceived = onMessageReceived
+        lastOnUserTranscriptReceived = onUserTranscriptReceived
+        lastOnTurnComplete = onTurnComplete
+        lastOnToolCall = onToolCall
+        lastOnError = onError
+
         currentHasPriorHistory = conversationHistory.isNotBlank()
 
-        // 15-minute maximum session length limit to prevent unintended costs
+        // 2-hour maximum driving session length limit (extended from 15 mins for road trips/commutes)
+        sessionTimeoutJob?.cancel()
         sessionTimeoutJob = scope.launch {
-            delay(15 * 60 * 1000L)
-            Log.i(TAG, "Gemini Live session limit reached. Stopping session automatically.")
+            delay(2 * 60 * 60 * 1000L) // 2 hours
+            Log.i(TAG, "Gemini Live driving session limit reached (2 hours). Stopping session automatically.")
             stopLiveSession()
         }
-
-        // Multimodal Live API WebSocket URL (v1beta endpoint)
-        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
-        val request = Request.Builder().url(wsUrl).build()
 
         _isLiveSessionActive.value = true
         _isGeminiSpeaking.value = true // Initial state: suppress mic while connecting and greeting
 
         initAudioPlayer()
+        connectWebSocket(isReconnect = false)
+    }
+
+    private fun connectWebSocket(isReconnect: Boolean) {
+        if (isExplicitlyStopped || !_isLiveSessionActive.value) return
+
+        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$lastApiKey"
+        val request = Request.Builder().url(wsUrl).build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
-                Log.i(TAG, "Gemini Live WebSocket opened successfully.")
+                Log.i(TAG, "Gemini Live WebSocket opened successfully (isReconnect=$isReconnect).")
+                reconnectAttempts = 0
 
                 // 1. Send Setup Frame FIRST with Voice, Tools, & Vehicle System Instructions
-                sendSetupFrame(ws, systemInstruction, telemetrySummary, conversationHistory, _voiceName.value)
+                sendSetupFrame(ws, lastSystemInstruction, lastTelemetrySummary, lastConversationHistory, _voiceName.value)
 
                 // 2. Start Microphone PCM Audio Streaming AFTER setup frame is sent
                 startMicrophoneStreaming(ws)
+
+                // If reconnecting silently while driving, release mic immediately without waiting for speech greeting
+                if (isReconnect) {
+                    _isGeminiSpeaking.value = false
+                }
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                handleServerMessage(ws, text, onMessageReceived, onUserTranscriptReceived, onTurnComplete, onToolCall)
+                handleServerMessage(ws, text, lastOnMessageReceived ?: {}, lastOnUserTranscriptReceived, lastOnTurnComplete, lastOnToolCall)
             }
 
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                handleServerMessage(ws, bytes.utf8(), onMessageReceived, onUserTranscriptReceived, onTurnComplete, onToolCall)
+                handleServerMessage(ws, bytes.utf8(), lastOnMessageReceived ?: {}, lastOnUserTranscriptReceived, lastOnTurnComplete, lastOnToolCall)
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 val err = "Gemini Live WebSocket Error: ${t.message}"
                 Log.e(TAG, err, t)
-                onError?.invoke(t.message ?: "Connection failure")
-                stopLiveSession()
+                if (!isExplicitlyStopped && _isLiveSessionActive.value) {
+                    attemptReconnect("Connection failure: ${t.message}")
+                } else {
+                    lastOnError?.invoke(t.message ?: "Connection failure")
+                    stopLiveSession()
+                }
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "Gemini Live WebSocket closing: $reason ($code)")
-                stopLiveSession()
+                if (code != 1000 && !isExplicitlyStopped && _isLiveSessionActive.value) {
+                    attemptReconnect("Server closing ($code: $reason)")
+                } else {
+                    stopLiveSession()
+                }
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Gemini Live WebSocket closed.")
-                _isLiveSessionActive.value = false
+                Log.i(TAG, "Gemini Live WebSocket closed ($code).")
+                if (code != 1000 && !isExplicitlyStopped && _isLiveSessionActive.value) {
+                    attemptReconnect("Socket closed ($code)")
+                } else {
+                    _isLiveSessionActive.value = false
+                }
             }
         })
     }
@@ -497,9 +553,11 @@ class GeminiLiveStreamManager(private val context: Context) {
         turnCompletionJob?.cancel()
         turnCompletionJob = scope.launch {
             if (track != null && isPlayingActive) {
+                val startTime = System.currentTimeMillis()
                 while (_isLiveSessionActive.value && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
                     val head = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
                     if (head >= totalFramesWritten) break
+                    if (System.currentTimeMillis() - startTime > 8000L) break
                     delay(40)
                 }
                 delay(250) // Acoustic settling delay
@@ -544,8 +602,14 @@ class GeminiLiveStreamManager(private val context: Context) {
 
             // 0. Check for setup confirmation
             if (root.has("setupComplete") || root.has("setup_complete")) {
-                Log.i(TAG, "Gemini Live setup confirmed by server. Triggering initial greeting.")
-                sendInitialGreetingTrigger(ws)
+                Log.i(TAG, "Gemini Live setup confirmed by server (isReconnecting=$isReconnecting).")
+                if (!isReconnecting) {
+                    sendInitialGreetingTrigger(ws)
+                } else {
+                    _isGeminiSpeaking.value = false
+                    isReconnecting = false
+                    Log.i(TAG, "Silently reconnected to Gemini Live while driving. Resuming listening for driver.")
+                }
                 return
             }
 
@@ -701,7 +765,54 @@ class GeminiLiveStreamManager(private val context: Context) {
         ws.send(responseObj.toString())
     }
 
+    private fun attemptReconnect(reason: String) {
+        if (isExplicitlyStopped || !_isLiveSessionActive.value) return
+
+        if (reconnectAttempts >= 5) {
+            Log.e(TAG, "Max reconnect attempts (5) reached while driving. Stopping live session.")
+            lastOnError?.invoke("Network connection lost while driving: $reason")
+            stopLiveSession()
+            return
+        }
+
+        reconnectAttempts++
+        isReconnecting = true
+        val backoffMs = (reconnectAttempts * 1500L).coerceAtMost(6000L)
+        Log.w(TAG, "Cellular/network disconnect ($reason). Auto-reconnecting attempt #$reconnectAttempts in ${backoffMs}ms...")
+
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            tearDownSocketAndMic()
+            delay(backoffMs)
+            if (!isExplicitlyStopped && _isLiveSessionActive.value) {
+                connectWebSocket(isReconnect = true)
+            }
+        }
+    }
+
+    private fun tearDownSocketAndMic() {
+        recordJob?.cancel()
+        recordJob = null
+
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+        } catch (_: Exception) {}
+        audioRecord = null
+
+        try {
+            webSocket?.cancel()
+        } catch (_: Exception) {}
+        webSocket = null
+    }
+
     fun stopLiveSession() {
+        isExplicitlyStopped = true
+        isReconnecting = false
+        reconnectAttempts = 0
+        reconnectJob?.cancel()
+        reconnectJob = null
+
         _isLiveSessionActive.value = false
         _isGeminiSpeaking.value = false
 
@@ -711,18 +822,11 @@ class GeminiLiveStreamManager(private val context: Context) {
         turnCompletionJob?.cancel()
         turnCompletionJob = null
 
-        recordJob?.cancel()
-        recordJob = null
+        tearDownSocketAndMic()
 
         playbackJob?.cancel()
         playbackJob = null
         audioPlaybackChannel.close()
-
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
-        } catch (_: Exception) {}
-        audioRecord = null
 
         try {
             audioTrack?.pause()
