@@ -82,6 +82,16 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vera.app.ui.theme.VeraTheme
 import kotlinx.coroutines.launch
+import android.graphics.Matrix
+import android.graphics.SurfaceTexture
+import android.media.MediaPlayer
+import android.view.Surface
+import android.view.TextureView
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.viewinterop.AndroidView
 
 class MainActivity : ComponentActivity() {
 
@@ -97,8 +107,27 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             VeraTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    VeraMainScreen(modifier = Modifier.padding(innerPadding))
+                var showSplash by remember { mutableStateOf(true) }
+
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(3500)
+                    showSplash = false
+                }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                        VeraMainScreen(modifier = Modifier.padding(innerPadding))
+                    }
+
+                    AnimatedVisibility(
+                        visible = showSplash,
+                        enter = fadeIn(),
+                        exit = fadeOut(animationSpec = tween(600))
+                    ) {
+                        VeraSplashScreen(
+                            onDismiss = { showSplash = false }
+                        )
+                    }
                 }
             }
         }
@@ -139,6 +168,157 @@ class MainActivity : ComponentActivity() {
 // -----------------------------------------------------------------------------
 // Helper UI Composable Components & Guidance
 // -----------------------------------------------------------------------------
+
+@Composable
+fun VeraSplashScreen(
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val mediaPlayer = remember { MediaPlayer() }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                if (mediaPlayer.isPlaying) mediaPlayer.stop()
+                mediaPlayer.release()
+            } catch (_: Exception) {}
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .clickable { onDismiss() }
+    ) {
+        // 1. Background Video Layer (Loops behind overlay)
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                TextureView(ctx).apply {
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                            try {
+                                mediaPlayer.setSurface(Surface(surface))
+                                val afd = ctx.resources.openRawResourceFd(R.raw.vera_intro_video)
+                                mediaPlayer.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                                afd.close()
+                                mediaPlayer.isLooping = true
+                                mediaPlayer.setVolume(0f, 0f)
+                                mediaPlayer.setOnVideoSizeChangedListener { _, vWidth, vHeight ->
+                                    adjustVideoAspectRatio(this@apply, width, height, vWidth, vHeight)
+                                }
+                                mediaPlayer.prepareAsync()
+                                mediaPlayer.setOnPreparedListener { mp ->
+                                    adjustVideoAspectRatio(this@apply, width, height, mp.videoWidth, mp.videoHeight)
+                                    mp.start()
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+
+                        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                            try {
+                                adjustVideoAspectRatio(this@apply, width, height, mediaPlayer.videoWidth, mediaPlayer.videoHeight)
+                            } catch (_: Exception) {}
+                        }
+
+                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                            try {
+                                mediaPlayer.setSurface(null)
+                            } catch (_: Exception) {}
+                            return true
+                        }
+
+                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                    }
+                }
+            }
+        )
+
+        // 2. Dark Solid Overlay with 50% Transparency
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF070D18).copy(alpha = 0.50f))
+        )
+
+        // 3. Centered Branding: Logo, Large Bold VERA, and Glowing Subtitle
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(horizontal = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Centered Logo / Emblem
+            Image(
+                painter = painterResource(id = R.drawable.vera_logo),
+                contentDescription = "VERA Shield Emblem",
+                modifier = Modifier
+                    .size(160.dp)
+                    .graphicsLayer {
+                        shadowElevation = 24f
+                    }
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Large Bold Sans-Serif VERA with Cyan Glow
+            Text(
+                text = "VERA",
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.SansSerif,
+                letterSpacing = 4.sp,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                style = TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFF00E5FF),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 28f
+                    )
+                )
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Smaller VEHICLE EVAL & REPAIR ASSISTANT in white text with glowing edges
+            Text(
+                text = "VEHICLE EVAL & REPAIR ASSISTANT",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.SansSerif,
+                letterSpacing = 2.sp,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                style = TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFF00E5FF),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 14f
+                    )
+                )
+            )
+        }
+    }
+}
+
+private fun adjustVideoAspectRatio(textureView: TextureView, viewWidth: Int, viewHeight: Int, videoWidth: Int, videoHeight: Int) {
+    if (viewWidth <= 0 || viewHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) return
+    val scaleX = viewWidth.toFloat() / videoWidth
+    val scaleY = viewHeight.toFloat() / videoHeight
+    val maxScale = maxOf(scaleX, scaleY)
+    val matrix = Matrix()
+    matrix.setScale(
+        (videoWidth * maxScale) / viewWidth,
+        (videoHeight * maxScale) / viewHeight,
+        viewWidth / 2f,
+        viewHeight / 2f
+    )
+    textureView.setTransform(matrix)
+}
 
 fun generateChatTranscriptText(
     messages: List<ChatMessage>,
