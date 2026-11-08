@@ -34,6 +34,32 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+enum class GeminiChatModel(
+    val id: String,
+    val displayName: String,
+    val subtitle: String,
+    val fallbackIds: List<String>
+) {
+    FLASH(
+        id = "gemini-2.5-flash",
+        displayName = "Gemini 2.5 Flash",
+        subtitle = "Fast, responsive & balanced (Default)",
+        fallbackIds = listOf("gemini-2.0-flash", "gemini-1.5-flash")
+    ),
+    PRO(
+        id = "gemini-2.5-pro",
+        displayName = "Gemini 2.5 Pro",
+        subtitle = "Deep mechanical reasoning & Mode 06 analysis",
+        fallbackIds = listOf("gemini-1.5-pro", "gemini-2.5-flash")
+    ),
+    THINKING(
+        id = "gemini-2.0-flash-thinking-exp-01-21",
+        displayName = "Gemini 2.0 Thinking",
+        subtitle = "Step-by-step diagnostic reasoning tree",
+        fallbackIds = listOf("gemini-2.5-flash", "gemini-2.0-flash")
+    )
+}
+
 data class ChatAttachment(
     val id: String = java.util.UUID.randomUUID().toString(),
     val fileName: String,
@@ -153,6 +179,20 @@ class GeminiAgentViewModel : ViewModel() {
     private var tts: TextToSpeech? = null
     private var mediaPlayer: MediaPlayer? = null
     private var appContext: Context? = null
+
+    private val _selectedChatModel = MutableStateFlow(GeminiChatModel.FLASH)
+    val selectedChatModel: StateFlow<GeminiChatModel> = _selectedChatModel.asStateFlow()
+
+    fun setChatModel(model: GeminiChatModel) {
+        _selectedChatModel.value = model
+        Log.i("GeminiApi", "Switched diagnostic chat model to: ${model.displayName} (${model.id})")
+        messages.add(
+            ChatMessage(
+                "System",
+                "🧠 Diagnostic Model Changed: ${model.displayName}\n${model.subtitle}"
+            )
+        )
+    }
 
     private val _isTtsEnabled = MutableStateFlow(true)
     val isTtsEnabled: StateFlow<Boolean> = _isTtsEnabled.asStateFlow()
@@ -1227,11 +1267,8 @@ class GeminiAgentViewModel : ViewModel() {
 
     private suspend fun callGeminiApi(prompt: String, imagesBase64: List<String> = emptyList()): String {
         return withContext(Dispatchers.IO) {
-            val models = listOf(
-                "gemini-3.8-flash",
-                "gemini-3.1-pro-preview",
-                "gemini-3.5-flash-lite"
-            )
+            val selected = _selectedChatModel.value
+            val models = listOf(selected.id) + selected.fallbackIds
             var lastErrorMessage = ""
 
             for (modelName in models) {

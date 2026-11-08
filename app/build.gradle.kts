@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.2"
+        versionCode = 3
+        versionName = "2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.2: Extended driving session (2hr), 15s WebSocket heartbeat pings, and cellular auto-reconnect"
+                releaseNotes = "VERA v2.3: Added AI Model pulldown selector (Gemini 2.5 Flash, Gemini 2.5 Pro, Gemini 2.0 Thinking) in chat window"
                 artifactType = "APK"
             }
         }
