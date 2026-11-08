@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "3.2"
+        versionCode = 13
+        versionName = "3.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.6: High-speed Mode 22 scanning (targeted ECU routing, NRC 7F fast-fail, and session caching)"
+                releaseNotes = "VERA v3.3: Instant animated background on splash screen with zero blank delay"
                 artifactType = "APK"
             }
         }

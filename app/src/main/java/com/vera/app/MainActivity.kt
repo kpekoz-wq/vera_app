@@ -82,13 +82,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vera.app.ui.theme.VeraTheme
 import kotlinx.coroutines.launch
-import android.graphics.Matrix
-import android.graphics.SurfaceTexture
-import android.media.MediaPlayer
-import android.view.Surface
-import android.view.TextureView
+import android.graphics.ImageDecoder
+import android.graphics.drawable.Animatable
+import android.graphics.drawable.AnimatedImageDrawable
+import android.widget.ImageView
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.viewinterop.AndroidView
@@ -174,63 +174,39 @@ fun VeraSplashScreen(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val mediaPlayer = remember { MediaPlayer() }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            try {
-                if (mediaPlayer.isPlaying) mediaPlayer.stop()
-                mediaPlayer.release()
-            } catch (_: Exception) {}
-        }
-    }
-
     Box(
         modifier = modifier
             .fillMaxSize()
             .clickable { onDismiss() }
     ) {
-        // 1. Background Video Layer (Loops behind overlay)
+        // 0. Instant static frame 0 poster image - guarantees zero blank delay on cold start
+        Image(
+            painter = painterResource(id = R.drawable.vera_poster),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+
+        // 1. Background Animated Graphic Layer (Instant native ImageDecoder AnimatedImageDrawable)
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                TextureView(ctx).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                            try {
-                                mediaPlayer.setSurface(Surface(surface))
-                                val afd = ctx.resources.openRawResourceFd(R.raw.vera_intro_video)
-                                mediaPlayer.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                                afd.close()
-                                mediaPlayer.isLooping = true
-                                mediaPlayer.setVolume(0f, 0f)
-                                mediaPlayer.setOnVideoSizeChangedListener { _, vWidth, vHeight ->
-                                    adjustVideoAspectRatio(this@apply, width, height, vWidth, vHeight)
-                                }
-                                mediaPlayer.prepareAsync()
-                                mediaPlayer.setOnPreparedListener { mp ->
-                                    adjustVideoAspectRatio(this@apply, width, height, mp.videoWidth, mp.videoHeight)
-                                    mp.start()
-                                }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
+                ImageView(ctx).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            val source = ImageDecoder.createSource(ctx.resources, R.drawable.vera_intro_anim)
+                            val drawable = ImageDecoder.decodeDrawable(source)
+                            setImageDrawable(drawable)
+                            if (drawable is AnimatedImageDrawable) {
+                                drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                                drawable.start()
+                            } else if (drawable is Animatable) {
+                                (drawable as Animatable).start()
                             }
                         }
-
-                        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                            try {
-                                adjustVideoAspectRatio(this@apply, width, height, mediaPlayer.videoWidth, mediaPlayer.videoHeight)
-                            } catch (_: Exception) {}
-                        }
-
-                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                            try {
-                                mediaPlayer.setSurface(null)
-                            } catch (_: Exception) {}
-                            return true
-                        }
-
-                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     }
                 }
             }
@@ -303,21 +279,6 @@ fun VeraSplashScreen(
             )
         }
     }
-}
-
-private fun adjustVideoAspectRatio(textureView: TextureView, viewWidth: Int, viewHeight: Int, videoWidth: Int, videoHeight: Int) {
-    if (viewWidth <= 0 || viewHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) return
-    val scaleX = viewWidth.toFloat() / videoWidth
-    val scaleY = viewHeight.toFloat() / videoHeight
-    val maxScale = maxOf(scaleX, scaleY)
-    val matrix = Matrix()
-    matrix.setScale(
-        (videoWidth * maxScale) / viewWidth,
-        (videoHeight * maxScale) / viewHeight,
-        viewWidth / 2f,
-        viewHeight / 2f
-    )
-    textureView.setTransform(matrix)
 }
 
 fun generateChatTranscriptText(
