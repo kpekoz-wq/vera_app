@@ -624,6 +624,7 @@ class BluetoothObdManager {
     // Reactive StateFlow exposing Mode 22 Enhanced Proprietary Parameters
     private val _mode22Streams = MutableStateFlow<List<Mode22StreamData>>(emptyList())
     val mode22Streams: StateFlow<List<Mode22StreamData>> = _mode22Streams.asStateFlow()
+    private val cachedSupportedMode22Pids = mutableSetOf<String>()
 
     private var discoveredPidDefinitions: List<ObdPidDefinition> = ObdPidRegistry.DEFAULT_PIDS
 
@@ -2079,143 +2080,139 @@ class BluetoothObdManager {
 
         try {
             if (wasPolling) {
-                delay(300) // Flush in-flight serial polling frame
+                delay(200) // Flush in-flight serial polling frame
             }
-            sendAtCommand("AT", 100) // Sync handshake
+            sendAtCommand("AT", 80) // Sync handshake
 
-            // Target CAN Header (AT SH 7E0) for PCM
-            val headerCmd = "AT SH 7E0"
-            sendAtCommand(headerCmd, 150)
+            var currentHeader = ""
+            suspend fun ensureHeader(hdr: String) {
+                if (currentHeader != hdr) {
+                    sendAtCommand("AT SH $hdr", 60)
+                    currentHeader = hdr
+                }
+            }
 
-            for (pidDef in targetPids) {
-                val cmd1 = "${pidDef.servicePrefix}${pidDef.pidHex}"
-                val cmd2 = if (pidDef.servicePrefix == "22") "21${pidDef.pidHex}" else "22${pidDef.pidHex}"
+            // Prioritize already verified cached PIDs for this vehicle
+            val sortedPids = if (cachedSupportedMode22Pids.isNotEmpty()) {
+                targetPids.sortedByDescending { cachedSupportedMode22Pids.contains(it.pidHex) }
+            } else {
+                targetPids
+            }
 
-                var response = sendAtCommand(cmd1, 150)
-                var payloads = ObdParser.extractPayloads(response)
-
-                if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                    response = sendAtCommand(cmd2, 150)
-                    payloads = ObdParser.extractPayloads(response)
+            for (pidDef in sortedPids) {
+                // Route queries specifically to the relevant electronic control module
+                val targetHeaders: List<String> = when (pidDef.category) {
+                    "Transmission" -> listOf("7E0", "7E1")
+                    "Maintenance" -> {
+                        if (pidDef.pidHex.equals("404C", ignoreCase = true) || pidDef.pidHex.equals("DD01", ignoreCase = true)) {
+                            listOf("720", "7E0")
+                        } else {
+                            listOf("7E0")
+                        }
+                    }
+                    "Battery", "Electrical" -> {
+                        if (pidDef.pidHex.equals("042F", ignoreCase = true) || pidDef.pidHex.equals("042C", ignoreCase = true)) {
+                            listOf("7E0", "726")
+                        } else {
+                            listOf("7E0")
+                        }
+                    }
+                    else -> listOf("7E0") // Engine, Engine Oil, Boost, Fuel, Emissions, Climate are on PCM (7E0)
                 }
 
-                // Fallback 1: Try Hybrid / BCM Header (7E2) if 7E0 returned no valid payload
-                if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                    sendAtCommand("AT SH 7E2", 80)
-                    response = sendAtCommand(cmd1, 150)
-                    payloads = ObdParser.extractPayloads(response)
-                    if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                        response = sendAtCommand(cmd2, 150)
+                var foundValid = false
+
+                for (header in targetHeaders) {
+                    ensureHeader(header)
+                    val cmd1 = "${pidDef.servicePrefix}${pidDef.pidHex}"
+                    var response = sendAtCommand(cmd1, 100)
+                    var payloads = ObdParser.extractPayloads(response)
+
+                    // Fast-fail check: If ECU returned NRC 7F (Service Not Supported / Request Out of Range), do not retry
+                    val isExplicitRejection = payloads.any {
+                        it.isNotEmpty() && it[0] == 0x7F && (it.size < 3 || it[2] == 0x31 || it[2] == 0x12)
+                    }
+
+                    if (!isExplicitRejection && (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F })) {
+                        val altPrefix = if (pidDef.servicePrefix == "22") "21" else "22"
+                        response = sendAtCommand("$altPrefix${pidDef.pidHex}", 100)
                         payloads = ObdParser.extractPayloads(response)
                     }
-                    sendAtCommand("AT SH 7E0", 80)
-                }
 
-                // Fallback 2: Try TCM Header (7E1)
-                if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                    sendAtCommand("AT SH 7E1", 80)
-                    response = sendAtCommand(cmd1, 150)
-                    payloads = ObdParser.extractPayloads(response)
-                    sendAtCommand("AT SH 7E0", 80)
-                }
+                    for (payload in payloads) {
+                        if (payload.size >= 2 && (payload[0] == 0x61 || payload[0] == 0x62)) {
+                            val pidByteCount = pidDef.pidHex.length / 2
+                            var headerLen = 1 + pidByteCount
 
-                // Fallback 3: Try Instrument Cluster Header (720) on HS-CAN (e.g. Ford F-150 cluster odometer 404C, DD01)
-                if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                    sendAtCommand("AT SH 720", 80)
-                    response = sendAtCommand(cmd1, 150)
-                    payloads = ObdParser.extractPayloads(response)
-                    if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                        response = sendAtCommand(cmd2, 150)
-                        payloads = ObdParser.extractPayloads(response)
-                    }
-                    sendAtCommand("AT SH 7E0", 80)
-                }
-
-                // Fallback 4: Try Ford MS-CAN Multiplexer (AT SP B) on 726 / 720
-                if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                    sendAtCommand("AT SP B", 80)
-                    sendAtCommand("AT SH 726", 60)
-                    response = sendAtCommand(cmd1, 150)
-                    payloads = ObdParser.extractPayloads(response)
-                    if (payloads.isEmpty() || payloads.all { it.isEmpty() || it[0] == 0x7F }) {
-                        sendAtCommand("AT SH 720", 60)
-                        response = sendAtCommand(cmd1, 150)
-                        payloads = ObdParser.extractPayloads(response)
-                    }
-                    sendAtCommand("AT SP 6", 80) // Reset vLinker FS multiplexer back to HS-CAN
-                    sendAtCommand("AT SH 7E0", 60)
-                }
-
-                for (payload in payloads) {
-                    if (payload.size >= 2 && (payload[0] == 0x61 || payload[0] == 0x62)) {
-                        val pidByteCount = pidDef.pidHex.length / 2
-                        var headerLen = 1 + pidByteCount
-
-                        // Determine if payload includes full PID bytes after response service byte
-                        if (payload.size > pidByteCount + 1) {
-                            val pidHi = pidDef.pidHex.substring(0, 2).toIntOrNull(16) ?: 0
-                            if (payload[1] != pidHi) {
-                                // ECU response did not echo PID hi byte; adjust headerLen
+                            // Determine if payload includes full PID bytes after response service byte
+                            if (payload.size > pidByteCount + 1) {
+                                val pidHi = pidDef.pidHex.substring(0, 2).toIntOrNull(16) ?: 0
+                                if (payload[1] != pidHi) {
+                                    headerLen = 1
+                                }
+                            } else {
                                 headerLen = 1
                             }
-                        } else {
-                            headerLen = 1
-                        }
 
-                        val dataBytes = if (payload.size > headerLen) payload.copyOfRange(headerLen, payload.size) else intArrayOf()
-                        if (dataBytes.isNotEmpty()) {
-                            val rawVal = try {
-                                pidDef.parseValue(dataBytes)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to parse ${pidDef.name} (${pidDef.pidHex}): ${e.message}")
-                                null
-                            }
-
-                            if (rawVal != null && !rawVal.isNaN() && !rawVal.isInfinite()) {
-                                // Validate rawVal physical bounds to filter out unsupported/uninitialized ECU responses
-                                val isBogus = when (pidDef.unit) {
-                                    "kPa" -> rawVal > 50000.0 || rawVal < 0.0
-                                    "bar" -> rawVal > 500.0 || rawVal < 0.0
-                                    "°C" -> rawVal > 300.0 || rawVal < -50.0
-                                    "psi" -> rawVal > 5000.0 || rawVal < -15.0
-                                    "%" -> rawVal > 100.0 || rawVal < 0.0
-                                    "RPM" -> rawVal > 10000.0 || rawVal < -1000.0
-                                    "Ratio" -> rawVal > 25.0 || rawVal < 0.0
-                                    "V" -> rawVal > 500.0 || rawVal < 0.0
-                                    "km" -> rawVal > 2000000.0 || rawVal < 0.0
-                                    "Nm" -> rawVal > 2500.0 || rawVal < -500.0
-                                    "counts" -> rawVal > 10_000_000.0 || rawVal < 0.0
-                                    "mm" -> rawVal > 500.0 || rawVal < 0.0
-                                    "Gear" -> rawVal > 15.0 || rawVal < 0.0
-                                    "ppm" -> rawVal > 50000.0 || rawVal < 0.0
-                                    "mg/stroke" -> rawVal > 500.0 || rawVal < 0.0
-                                    "°" -> rawVal > 360.0 || rawVal < -360.0
-                                    else -> false
+                            val dataBytes = if (payload.size > headerLen) payload.copyOfRange(headerLen, payload.size) else intArrayOf()
+                            if (dataBytes.isNotEmpty()) {
+                                val rawVal = try {
+                                    pidDef.parseValue(dataBytes)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed to parse ${pidDef.name} (${pidDef.pidHex}): ${e.message}")
+                                    null
                                 }
 
-                                if (!isBogus) {
-                                    val formatted = String.format(java.util.Locale.US, "%.1f %s", rawVal, pidDef.unit)
-                                    results.add(
-                                        Mode22StreamData(
-                                            pid = pidDef,
-                                            formattedValue = formatted,
-                                            rawValue = rawVal
-                                        )
-                                    )
-                                    if ((pidDef.pidHex.equals("404C", ignoreCase = true) || pidDef.pidHex.equals("DD01", ignoreCase = true) || pidDef.pidHex.equals("115C", ignoreCase = true)) && rawVal in 10.0..1_500_000.0) {
-                                        _vehicleOdometerKm.value = rawVal
-                                        Log.i(TAG, "Mode 22 scan updated vehicle odometer: $rawVal km (${(rawVal * 0.621371).toInt()} miles)")
+                                if (rawVal != null && !rawVal.isNaN() && !rawVal.isInfinite()) {
+                                    // Validate rawVal physical bounds to filter out unsupported/uninitialized ECU responses
+                                    val isBogus = when (pidDef.unit) {
+                                        "kPa" -> rawVal > 50000.0 || rawVal < 0.0
+                                        "bar" -> rawVal > 500.0 || rawVal < 0.0
+                                        "°C" -> rawVal > 300.0 || rawVal < -50.0
+                                        "psi" -> rawVal > 5000.0 || rawVal < -15.0
+                                        "%" -> rawVal > 100.0 || rawVal < 0.0
+                                        "RPM" -> rawVal > 10000.0 || rawVal < -1000.0
+                                        "Ratio" -> rawVal > 25.0 || rawVal < 0.0
+                                        "V" -> rawVal > 500.0 || rawVal < 0.0
+                                        "km" -> rawVal > 2000000.0 || rawVal < 0.0
+                                        "Nm" -> rawVal > 2500.0 || rawVal < -500.0
+                                        "counts" -> rawVal > 10_000_000.0 || rawVal < 0.0
+                                        "mm" -> rawVal > 500.0 || rawVal < 0.0
+                                        "Gear" -> rawVal > 15.0 || rawVal < 0.0
+                                        "ppm" -> rawVal > 50000.0 || rawVal < 0.0
+                                        "mg/stroke" -> rawVal > 500.0 || rawVal < 0.0
+                                        "°" -> rawVal > 360.0 || rawVal < -360.0
+                                        else -> false
                                     }
-                                    Log.i(TAG, "Mode 21/22 RX: ${pidDef.name} = $formatted")
-                                    break
+
+                                    if (!isBogus) {
+                                        val formatted = String.format(java.util.Locale.US, "%.1f %s", rawVal, pidDef.unit)
+                                        results.add(
+                                            Mode22StreamData(
+                                                pid = pidDef,
+                                                formattedValue = formatted,
+                                                rawValue = rawVal
+                                            )
+                                        )
+                                        cachedSupportedMode22Pids.add(pidDef.pidHex)
+                                        if ((pidDef.pidHex.equals("404C", ignoreCase = true) || pidDef.pidHex.equals("DD01", ignoreCase = true) || pidDef.pidHex.equals("115C", ignoreCase = true)) && rawVal in 10.0..1_500_000.0) {
+                                            _vehicleOdometerKm.value = rawVal
+                                            Log.i(TAG, "Mode 22 scan updated vehicle odometer: $rawVal km (${(rawVal * 0.621371).toInt()} miles)")
+                                        }
+                                        Log.i(TAG, "Mode 22 RX [Header $header]: ${pidDef.name} = $formatted")
+                                        foundValid = true
+                                        break
+                                    }
                                 }
                             }
                         }
                     }
+
+                    if (foundValid) break
                 }
             }
         } finally {
-            sendAtCommand("AT SH 7DF", 150)
+            sendAtCommand("AT SH 7DF", 100)
             isPollingPaused = false
             if (wasPolling && pollingJob?.isActive != true) startPollingLoop()
         }
@@ -2307,6 +2304,7 @@ class BluetoothObdManager {
             _supportedStreams.value = emptyList()
             _mode06Results.value = emptyList()
             _mode22Streams.value = emptyList()
+            cachedSupportedMode22Pids.clear()
             _vehicleVin.value = null
             _vehicleDetails.value = null
             _vehicleOdometerKm.value = null

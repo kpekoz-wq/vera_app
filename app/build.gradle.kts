@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "2.5"
+        versionCode = 6
+        versionName = "2.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.5: Renamed header to 'VERA AI Chat' and placed AI model selector directly beneath it"
+                releaseNotes = "VERA v2.6: High-speed Mode 22 scanning (targeted ECU routing, NRC 7F fast-fail, and session caching)"
                 artifactType = "APK"
             }
         }
