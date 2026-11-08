@@ -3624,18 +3624,95 @@ fun VeraMainScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                    Column(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                         Text(
-                            text = "AI Mechanic & Diagnostics",
+                            text = "VERA AI Chat",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
+                            fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Text(
-                            text = "Interactive Assistant & Diagnostic Log",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+
+                        // Pulldown Model Selector
+                        var modelDropdownExpanded by remember { mutableStateOf(false) }
+                        val currentModel by viewModel.selectedChatModel.collectAsState()
+
+                        Box {
+                            Surface(
+                                modifier = Modifier.clickable { modelDropdownExpanded = true },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "AI Model",
+                                        modifier = Modifier.size(13.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = currentModel.displayName,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select AI Model",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = modelDropdownExpanded,
+                                onDismissRequest = { modelDropdownExpanded = false }
+                            ) {
+                                GeminiChatModel.entries.forEach { model ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = model.displayName,
+                                                        fontWeight = if (model == currentModel) FontWeight.Bold else FontWeight.Medium,
+                                                        fontSize = 13.sp,
+                                                        color = if (model == currentModel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (model == currentModel) {
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = "Active",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = model.subtitle,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.setChatModel(model)
+                                            modelDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Row(
@@ -3741,99 +3818,6 @@ fun VeraMainScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Diagnostic AI Model Pulldown Selector
-                        var modelDropdownExpanded by remember { mutableStateOf(false) }
-                        val currentModel by viewModel.selectedChatModel.collectAsState()
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box {
-                                Surface(
-                                    modifier = Modifier.clickable { modelDropdownExpanded = true },
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.AutoAwesome,
-                                            contentDescription = "AI Model",
-                                            modifier = Modifier.size(15.dp),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = currentModel.displayName,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.width(2.dp))
-                                        Icon(
-                                            imageVector = Icons.Default.ArrowDropDown,
-                                            contentDescription = "Select AI Model",
-                                            modifier = Modifier.size(18.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-
-                                DropdownMenu(
-                                    expanded = modelDropdownExpanded,
-                                    onDismissRequest = { modelDropdownExpanded = false }
-                                ) {
-                                    GeminiChatModel.entries.forEach { model ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Column(modifier = Modifier.padding(vertical = 2.dp)) {
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Text(
-                                                            text = model.displayName,
-                                                            fontWeight = if (model == currentModel) FontWeight.Bold else FontWeight.Medium,
-                                                            fontSize = 13.sp,
-                                                            color = if (model == currentModel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                                        )
-                                                        if (model == currentModel) {
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Icon(
-                                                                imageVector = Icons.Default.Check,
-                                                                contentDescription = "Active",
-                                                                tint = MaterialTheme.colorScheme.primary,
-                                                                modifier = Modifier.size(14.dp)
-                                                            )
-                                                        }
-                                                    }
-                                                    Text(
-                                                        text = model.subtitle,
-                                                        fontSize = 11.sp,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                                    )
-                                                }
-                                            },
-                                            onClick = {
-                                                viewModel.setChatModel(model)
-                                                modelDropdownExpanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            Text(
-                                text = "VERA Diagnostic AI",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                        }
                         if (isLiveSessionActive || isHandsFreeVoiceActive) {
                             Surface(
                                 modifier = Modifier
