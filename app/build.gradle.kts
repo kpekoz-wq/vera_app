@@ -49,6 +49,7 @@ extensions.configure<ApplicationExtension> {
             firebaseAppDistribution {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
+                groups = "beta-testers-vera"
                 releaseNotes = "VERA v2.1 with 180° upside-down rotation and multi-make PID coverage"
                 artifactType = "APK"
             }

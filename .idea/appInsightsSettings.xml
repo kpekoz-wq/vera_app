@@ -6,6 +6,14 @@
         <entry key="Firebase Crashlytics">
           <value>
             <InsightsFilterSettings>
+              <option name="connection">
+                <ConnectionSetting>
+                  <option name="appId" value="com.vera.app" />
+                  <option name="mobileSdkAppId" value="1:200348372358:android:ed39b182e2c68cde57b007" />
+                  <option name="projectId" value="ottoai-8a61f" />
+                  <option name="projectNumber" value="200348372358" />
+                </ConnectionSetting>
+              </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />
               <option name="timeIntervalDays" value="THIRTY_DAYS" />
               <option name="visibilityType" value="ALL" />

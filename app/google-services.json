@@ -23,6 +23,25 @@
           "other_platform_oauth_client": []
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:200348372358:android:ed39b182e2c68cde57b007",
+        "android_client_info": {
+          "package_name": "com.vera.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyedaF3B1MNogD9AzL4WsSZjhWyDPl-f4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
     }
   ],
   "configuration_version": "1"
