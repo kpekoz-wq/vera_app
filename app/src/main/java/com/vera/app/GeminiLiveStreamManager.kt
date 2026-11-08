@@ -201,8 +201,21 @@ class GeminiLiveStreamManager(private val context: Context) {
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 val err = "Gemini Live WebSocket Error: ${t.message}"
-                Log.e(TAG, err, t)
-                if (!isExplicitlyStopped && _isLiveSessionActive.value) {
+                Log.i(TAG, err)
+
+                // If user explicitly stopped, or if it's a normal shutdown/socket closure, suppress completely
+                if (isExplicitlyStopped) {
+                    return
+                }
+                val msg = t.message ?: ""
+                if (msg.contains("Socket closed", ignoreCase = true) ||
+                    msg.contains("Canceled", ignoreCase = true) ||
+                    t is java.io.InterruptedIOException ||
+                    (t is java.net.SocketException && msg.contains("closed", ignoreCase = true))) {
+                    return
+                }
+
+                if (_isLiveSessionActive.value) {
                     attemptReconnect("Connection failure: ${t.message}")
                 } else {
                     lastOnError?.invoke(t.message ?: "Connection failure")
@@ -212,7 +225,11 @@ class GeminiLiveStreamManager(private val context: Context) {
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "Gemini Live WebSocket closing: $reason ($code)")
-                if (code != 1000 && !isExplicitlyStopped && _isLiveSessionActive.value) {
+                if (isExplicitlyStopped || code == 1000) {
+                    stopLiveSession()
+                    return
+                }
+                if (_isLiveSessionActive.value) {
                     attemptReconnect("Server closing ($code: $reason)")
                 } else {
                     stopLiveSession()
@@ -221,7 +238,11 @@ class GeminiLiveStreamManager(private val context: Context) {
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "Gemini Live WebSocket closed ($code).")
-                if (code != 1000 && !isExplicitlyStopped && _isLiveSessionActive.value) {
+                if (isExplicitlyStopped || code == 1000) {
+                    _isLiveSessionActive.value = false
+                    return
+                }
+                if (_isLiveSessionActive.value) {
                     attemptReconnect("Socket closed ($code)")
                 } else {
                     _isLiveSessionActive.value = false
@@ -801,6 +822,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         audioRecord = null
 
         try {
+            webSocket?.close(1000, "User stopped live session")
             webSocket?.cancel()
         } catch (_: Exception) {}
         webSocket = null
@@ -812,6 +834,9 @@ class GeminiLiveStreamManager(private val context: Context) {
         reconnectAttempts = 0
         reconnectJob?.cancel()
         reconnectJob = null
+
+        // Suppress any error reporting on intentional stop
+        lastOnError = null
 
         _isLiveSessionActive.value = false
         _isGeminiSpeaking.value = false
@@ -838,8 +863,6 @@ class GeminiLiveStreamManager(private val context: Context) {
         isPlayingActive = false
         totalFramesWritten = 0L
 
-        webSocket?.close(1000, "User stopped live session")
-        webSocket = null
         Log.i(TAG, "Stopped Gemini Live Session.")
     }
 }

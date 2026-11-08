@@ -41,22 +41,22 @@ enum class GeminiChatModel(
     val fallbackIds: List<String>
 ) {
     FLASH(
-        id = "gemini-2.5-flash",
+        id = "gemini-3.8-flash",
         displayName = "Gemini 2.5 Flash",
         subtitle = "Fast, responsive & balanced (Default)",
-        fallbackIds = listOf("gemini-2.0-flash", "gemini-1.5-flash")
+        fallbackIds = listOf("gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-pro-preview")
     ),
     PRO(
-        id = "gemini-2.5-pro",
+        id = "gemini-3.1-pro-preview",
         displayName = "Gemini 2.5 Pro",
         subtitle = "Deep mechanical reasoning & Mode 06 analysis",
-        fallbackIds = listOf("gemini-1.5-pro", "gemini-2.5-flash")
+        fallbackIds = listOf("gemini-pro-latest", "gemini-3.8-flash", "gemini-3.5-flash")
     ),
     THINKING(
-        id = "gemini-2.0-flash-thinking-exp-01-21",
+        id = "gemini-3.1-pro-preview",
         displayName = "Gemini 2.0 Thinking",
         subtitle = "Step-by-step diagnostic reasoning tree",
-        fallbackIds = listOf("gemini-2.5-flash", "gemini-2.0-flash")
+        fallbackIds = listOf("gemini-3.8-flash", "gemini-3.5-flash")
     )
 }
 
@@ -1293,6 +1293,14 @@ class GeminiAgentViewModel : ViewModel() {
                                 })
                             }
 
+                            if (selected == GeminiChatModel.THINKING) {
+                                put("generationConfig", JSONObject().apply {
+                                    put("thinkingConfig", JSONObject().apply {
+                                        put("thinkingBudget", 2048)
+                                    })
+                                })
+                            }
+
                             val contentsArray = JSONArray().apply {
                                 val userContentObj = JSONObject().apply {
                                     put("role", "user")
@@ -1332,9 +1340,18 @@ class GeminiAgentViewModel : ViewModel() {
                                 val content = candidate.optJSONObject("content")
                                 val parts = content?.optJSONArray("parts")
                                 if (parts != null && parts.length() > 0) {
-                                    val aiText = parts.getJSONObject(0).optString("text", "No response text")
-                                    Log.i("GeminiApi", "Successfully received AI response from model $modelName")
-                                    return@withContext aiText
+                                    val textBuilder = StringBuilder()
+                                    for (i in 0 until parts.length()) {
+                                        val part = parts.getJSONObject(i)
+                                        if (part.has("text")) {
+                                            textBuilder.append(part.getString("text"))
+                                        }
+                                    }
+                                    val aiText = textBuilder.toString().trim()
+                                    if (aiText.isNotBlank()) {
+                                        Log.i("GeminiApi", "Successfully received AI response from model $modelName")
+                                        return@withContext aiText
+                                    }
                                 }
                             }
                             return@withContext "Received empty response from Gemini."
