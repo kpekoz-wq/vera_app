@@ -2655,11 +2655,11 @@ fun VeraMainScreen(
                             coroutineScope.launch { drawerState.close() }
                             val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
                                 data = Uri.parse("mailto:")
-                                putExtra(Intent.EXTRA_EMAIL, arrayOf("pekozy@gmail.com"))
+                                putExtra(Intent.EXTRA_EMAIL, arrayOf("kpekoz@gmail.com"))
                                 putExtra(Intent.EXTRA_SUBJECT, "VERA Diagnostic App - Beta Feedback")
                                 val body = buildString {
                                     appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (Android ${android.os.Build.VERSION.RELEASE})")
-                                    appendLine("App Version: 3.0 (Build 10)")
+                                    appendLine("App Version: ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})")
                                     if (vehicleDetails != null) appendLine("Vehicle: $vehicleDetails")
                                     if (vehicleVin != null) appendLine("VIN: $vehicleVin")
                                     appendLine()
