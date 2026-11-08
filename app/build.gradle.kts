@@ -48,9 +48,8 @@ extensions.configure<ApplicationExtension> {
         getByName("debug") {
             firebaseAppDistribution {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
-                // Optional: testers = "email@example.com"
-                // Optional: groups = "testers"
-                releaseNotes = "Automated VERA test build from Gradle"
+                testers = "kpekoz@gmail.com"
+                releaseNotes = "VERA v2.1 with 180° upside-down rotation and multi-make PID coverage"
                 artifactType = "APK"
             }
         }
@@ -126,4 +125,8 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+tasks.matching { it.name == "appDistributionUploadDebug" }.configureEach {
+    dependsOn("assembleDebug")
 }
