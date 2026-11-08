@@ -37,24 +37,28 @@ data class ChatMessage(
 enum class GeminiChatModel(
     val id: String,
     val displayName: String,
+    val shortName: String,
     val subtitle: String,
     val fallbackIds: List<String>
 ) {
     FLASH(
         id = "gemini-3.8-flash",
         displayName = "Gemini 2.5 Flash",
+        shortName = "2.5 Flash",
         subtitle = "Fast, responsive & balanced (Default)",
         fallbackIds = listOf("gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-pro-preview")
     ),
     PRO(
         id = "gemini-3.1-pro-preview",
         displayName = "Gemini 2.5 Pro",
+        shortName = "2.5 Pro",
         subtitle = "Deep mechanical reasoning & Mode 06 analysis",
         fallbackIds = listOf("gemini-pro-latest", "gemini-3.8-flash", "gemini-3.5-flash")
     ),
     THINKING(
         id = "gemini-3.1-pro-preview",
         displayName = "Gemini 2.0 Thinking",
+        shortName = "Thinking",
         subtitle = "Step-by-step diagnostic reasoning tree",
         fallbackIds = listOf("gemini-3.8-flash", "gemini-3.5-flash")
     )
