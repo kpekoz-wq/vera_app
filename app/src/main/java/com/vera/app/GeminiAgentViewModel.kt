@@ -130,8 +130,9 @@ class GeminiAgentViewModel : ViewModel() {
 
         // STRICT VOICE RULE: Only vocalize if live voice mode is active
         if (isVoiceModeActive) {
+            val isAdvisory = alert.severity == SentinelSeverity.ADVISORY || alert.severity == SentinelSeverity.INFO
             val liveInjected = if (_isHandsFreeVoiceActive.value) {
-                liveStreamManager?.injectDriverAlert(alert.spokenText) ?: false
+                liveStreamManager?.injectDriverAlert(alert.spokenText, isAdvisory) ?: false
             } else false
 
             if (!liveInjected) {
@@ -842,6 +843,9 @@ class GeminiAgentViewModel : ViewModel() {
                - When the driver asks you to check, read, or report a telemetry parameter repeatedly or periodically (e.g. "report my fuel trims every 20 seconds for a minute", "tell me my speed every 10 seconds", "watch coolant every 30s"):
                  * You MUST invoke the `schedule_periodic_telemetry_report` tool with the requested parameter, interval_seconds, and duration_seconds.
                  * Confirm briefly in one natural sentence that you have scheduled the recurring report.
+               - When delivering periodic sensor readings or gauge updates to the driver:
+                 * Speak naturally and casually, like a seasoned mechanic sitting in the passenger seat watching the dashboard gauges (e.g. "Fuel trims are sitting at +2% right now", "Coolant's at 195", "Speed is 55").
+                 * NEVER say "Periodic update:" or sound like an automated robot. Give the data in a natural conversational style.
                - When the driver asks you to watch or alert them if a sensor crosses a threshold (e.g. "let me know if my RPMs go over 2000", "warn me if coolant temp crosses 220", "alert me if speed goes over 80"):
                  * You MUST invoke the `set_telemetry_threshold_alert` tool with the parameter, comparison condition ('>', '<', '>=', '<='), and threshold_value.
                  * Confirm briefly in one natural sentence that you are monitoring that threshold.

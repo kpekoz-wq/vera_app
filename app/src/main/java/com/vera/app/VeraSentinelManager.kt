@@ -131,42 +131,86 @@ class VeraSentinelManager(
                 watcher.executedCount++
                 val isFinal = watcher.executedCount >= watcher.maxCount
                 val snapshot = getTelemetrySnapshot()
+                val count = watcher.executedCount
 
                 val paramKey = parameter.lowercase()
                 val (readingTitle, readingText, spokenText) = when {
                     paramKey.contains("fuel") || paramKey.contains("trim") -> {
                         val trim = snapshot["fuel_trim"] ?: "+0.0%"
-                        Triple("Fuel Trim Update", "Fuel Trim: $trim", "Periodic update: Fuel trim is $trim.")
+                        val spoken = when (count % 4) {
+                            1 -> "Fuel trims are sitting at $trim right now."
+                            2 -> "Checking your trims: they're hovering at $trim."
+                            3 -> "Fuel trim's at $trim."
+                            else -> "Watching fuel delivery: trims are $trim."
+                        }
+                        Triple("Fuel Trim", "Fuel Trim: $trim", spoken)
                     }
                     paramKey.contains("rpm") -> {
                         val rpm = snapshot["rpm"] ?: "0 RPM"
-                        Triple("RPM Update", "Engine RPM: $rpm", "Periodic update: Engine speed is $rpm.")
+                        val spoken = when (count % 4) {
+                            1 -> "You're turning $rpm right now."
+                            2 -> "Tach is reading $rpm."
+                            3 -> "Engine speed is holding at $rpm."
+                            else -> "Currently at $rpm."
+                        }
+                        Triple("Engine RPM", "Engine RPM: $rpm", spoken)
                     }
                     paramKey.contains("coolant") || paramKey.contains("temp") -> {
                         val temp = snapshot["coolant"] ?: "195°F"
-                        Triple("Coolant Update", "Coolant Temp: $temp", "Periodic update: Engine coolant temperature is $temp.")
+                        val spoken = when (count % 4) {
+                            1 -> "Coolant is sitting at $temp right now."
+                            2 -> "Looking at the temp gauge, coolant's at $temp."
+                            3 -> "Engine coolant is holding at $temp."
+                            else -> "Coolant's at $temp."
+                        }
+                        Triple("Coolant Temp", "Coolant Temp: $temp", spoken)
                     }
                     paramKey.contains("speed") -> {
                         val speed = snapshot["speed"] ?: "0 mph"
-                        Triple("Speed Update", "Vehicle Speed: $speed", "Periodic update: Vehicle speed is $speed.")
+                        val spoken = when (count % 4) {
+                            1 -> "Speed is $speed."
+                            2 -> "Cruising at $speed."
+                            3 -> "Speedometer is reading $speed."
+                            else -> "Holding at $speed right now."
+                        }
+                        Triple("Vehicle Speed", "Vehicle Speed: $speed", spoken)
                     }
                     paramKey.contains("trans") -> {
                         val trans = snapshot["trans_temp"] ?: "180°F"
-                        Triple("Transmission Temp Update", "Transmission Temp: $trans", "Periodic update: Transmission temperature is $trans.")
+                        val spoken = when (count % 4) {
+                            1 -> "Transmission temp is sitting at $trans."
+                            2 -> "Glancing at transmission fluid, we're at $trans."
+                            3 -> "Transmission is running at $trans."
+                            else -> "Trans fluid is holding at $trans."
+                        }
+                        Triple("Transmission Temp", "Transmission Temp: $trans", spoken)
                     }
                     paramKey.contains("volt") -> {
                         val volt = snapshot["voltage"] ?: "14.1V"
-                        Triple("Voltage Update", "Battery Voltage: $volt", "Periodic update: Battery charging voltage is $volt.")
+                        val spoken = when (count % 4) {
+                            1 -> "Battery's charging at $volt."
+                            2 -> "Alternator output is holding at $volt."
+                            3 -> "System voltage is $volt right now."
+                            else -> "Charging voltage is at $volt."
+                        }
+                        Triple("Battery Voltage", "Battery Voltage: $volt", spoken)
                     }
                     else -> {
                         val rpm = snapshot["rpm"] ?: "0"
                         val speed = snapshot["speed"] ?: "0"
                         val temp = snapshot["coolant"] ?: ""
-                        Triple("Telemetry Update", "RPM: $rpm, Speed: $speed, Coolant: $temp", "Periodic update: RPM is $rpm, speed is $speed, coolant is $temp.")
+                        val spoken = when (count % 3) {
+                            1 -> "You're at $speed, turning $rpm, with coolant at $temp."
+                            2 -> "Gauges show $speed, $rpm, and coolant at $temp."
+                            else -> "Running at $speed and $rpm, temp is $temp."
+                        }
+                        Triple("Live Telemetry", "RPM: $rpm, Speed: $speed, Coolant: $temp", spoken)
                     }
                 }
 
-                val finalSuffix = if (isFinal) " This completes your scheduled report." else ""
+                val finalSuffix = if (isFinal && watcher.maxCount > 1) {
+                    " That wraps up this check—let me know if you want me to keep tracking it."
+                } else ""
                 val alert = SentinelAlert(
                     severity = SentinelSeverity.ADVISORY,
                     title = readingTitle,
@@ -191,7 +235,7 @@ class VeraSentinelManager(
             put("interval_seconds", safeInterval)
             put("total_duration_seconds", safeDuration)
             put("report_count", calcMaxCount)
-            put("message", "I have scheduled a report for $parameter every $safeInterval seconds for the next $safeDuration seconds.")
+            put("message", "I'll keep an eye on your $parameter and give you an update every $safeInterval seconds for the next $safeDuration seconds.")
         }
     }
 

@@ -898,11 +898,15 @@ class GeminiLiveStreamManager(private val context: Context) {
         webSocket = null
     }
 
-    fun injectDriverAlert(alertText: String): Boolean {
+    fun injectDriverAlert(alertText: String, isAdvisory: Boolean = false): Boolean {
         val ws = webSocket ?: return false
         if (!_isLiveSessionActive.value) return false
         return try {
-            val alertPrompt = "CRITICAL IN-VEHICLE MECHANIC ALERT: $alertText. Announce this alert directly and naturally to the driver in one concise sentence as their master technician."
+            val alertPrompt = if (isAdvisory) {
+                "IN-VEHICLE GAUGE & SENSOR READING: $alertText. Announce this reading naturally and casually to the driver in one brief sentence, as a seasoned mechanic sitting in the passenger seat watching the dashboard gauges. Do NOT say 'periodic update' or sound robotic."
+            } else {
+                "SAFETY ALERT: $alertText. Alert the driver clearly and concisely in one sentence as their master technician riding shotgun."
+            }
             val alertObj = JSONObject().apply {
                 put("clientContent", JSONObject().apply {
                     put("turns", JSONArray().apply {
@@ -919,7 +923,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                 })
             }
             val sent = ws.send(alertObj.toString())
-            Log.i(TAG, "Injected driver alert into Gemini Live WebSocket (sent=$sent): $alertText")
+            Log.i(TAG, "Injected driver alert into Gemini Live WebSocket (sent=$sent, isAdvisory=$isAdvisory): $alertText")
             sent
         } catch (e: Exception) {
             Log.e(TAG, "Failed to inject driver alert into Gemini Live WebSocket", e)
