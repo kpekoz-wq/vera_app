@@ -633,6 +633,10 @@ class BluetoothObdManager {
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
 
+    private var wifiSocket: java.net.Socket? = null
+    var isWifiConnection = false
+        private set
+
     private var usbSerialPort: com.hoho.android.usbserial.driver.UsbSerialPort? = null
     private var usbDeviceConnection: android.hardware.usb.UsbDeviceConnection? = null
     var isUsbConnection = false
@@ -2289,6 +2293,11 @@ class BluetoothObdManager {
             Log.e(TAG, "Error closing socket", e)
         }
         try {
+            wifiSocket?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing Wi-Fi socket", e)
+        }
+        try {
             usbSerialPort?.close()
             usbDeviceConnection?.close()
         } catch (e: Exception) {
@@ -2297,6 +2306,8 @@ class BluetoothObdManager {
             inputStream = null
             outputStream = null
             socket = null
+            wifiSocket = null
+            isWifiConnection = false
             usbSerialPort = null
             usbDeviceConnection = null
             isUsbConnection = false
@@ -2315,8 +2326,9 @@ class BluetoothObdManager {
 
     data class ObdDeviceItem(
         val name: String,
-        val address: String, // MAC Address for Bluetooth, or "USB:<deviceId>" for USB OTG
-        val isUsb: Boolean = false
+        val address: String, // MAC Address for Bluetooth, "USB:<deviceId>" for USB OTG, or "WIFI:<host>:<port>"
+        val isUsb: Boolean = false,
+        val isWifi: Boolean = false
     )
 
     @SuppressLint("MissingPermission")
@@ -2359,7 +2371,17 @@ class BluetoothObdManager {
             Log.w(TAG, "Error listing USB devices", e)
         }
 
-        // 2. Add Paired Bluetooth Devices
+        // 2. Add Standard Wi-Fi OBD2 Adapter option (ELM327 Wi-Fi / Vgate / Veepeak)
+        list.add(
+            ObdDeviceItem(
+                name = "📶 Wi-Fi OBD2 (192.168.0.10:35000)",
+                address = "WIFI:192.168.0.10:35000",
+                isUsb = false,
+                isWifi = true
+            )
+        )
+
+        // 3. Add Paired Bluetooth Devices
         try {
             val btDevices = bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
             val sortedBt = btDevices.sortedBy { device ->
@@ -2371,13 +2393,56 @@ class BluetoothObdManager {
             }
             for (dev in sortedBt) {
                 val name = try { dev.name ?: "Unknown OBD" } catch (_: SecurityException) { "OBD Device" }
-                list.add(ObdDeviceItem(name = "📡 $name (${dev.address})", address = dev.address, isUsb = false))
+                list.add(ObdDeviceItem(name = "📡 $name (${dev.address})", address = dev.address, isUsb = false, isWifi = false))
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error listing Bluetooth devices", e)
         }
 
         return list
+    }
+
+    /**
+     * Connects to a Wi-Fi OBD2 Adapter (ELM327 Wi-Fi / Vgate Wi-Fi / Veepeak Wi-Fi).
+     * Connects via standard TCP socket (default: 192.168.0.10:35000).
+     */
+    suspend fun connectToWifiDevice(host: String = "192.168.0.10", port: Int = 35000): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            disconnect()
+            _connectionState.value = ConnectionState.Connecting("Wi-Fi OBD ($host:$port)")
+
+            Log.i(TAG, "Opening TCP socket to Wi-Fi OBD2 adapter at $host:$port...")
+            val s = java.net.Socket()
+            s.tcpNoDelay = true
+            s.connect(java.net.InetSocketAddress(host, port), 4000)
+
+            wifiSocket = s
+            inputStream = s.getInputStream()
+            outputStream = s.getOutputStream()
+            isWifiConnection = true
+            isUsbConnection = false
+            isDemoMode = false
+
+            delay(300)
+            startStreamReader()
+
+            initializeElm327()
+            discoverSupportedPids()
+            fetchVehicleVin()
+            fetchVehicleOdometer()
+
+            _connectionState.value = ConnectionState.Connected("📶 Wi-Fi OBD ($host:$port)")
+            startPollingLoop()
+
+            Log.i(TAG, "Successfully connected to Wi-Fi OBD2 adapter at $host:$port.")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error connecting to Wi-Fi OBD2 device at $host:$port", e)
+            disconnect()
+            val msg = e.localizedMessage ?: "Could not reach $host:$port. Make sure phone is connected to the OBD2 Wi-Fi network."
+            _connectionState.value = ConnectionState.Error("Wi-Fi OBD connection failed: $msg")
+            Result.failure(e)
+        }
     }
 
     /**
@@ -2423,6 +2488,7 @@ class BluetoothObdManager {
             usbSerialPort = port
             usbDeviceConnection = connection
             isUsbConnection = true
+            isWifiConnection = false
             isDemoMode = false
 
             delay(300)
@@ -2446,7 +2512,7 @@ class BluetoothObdManager {
     }
 
     /**
-     * Connects to a Bluetooth or USB OBD2 device.
+     * Connects to a Bluetooth, USB, or Wi-Fi OBD2 device.
      */
     suspend fun connectToDevice(macOrUsbAddress: String, context: android.content.Context? = null): Result<Unit> {
         return withContext(Dispatchers.IO) {
@@ -2454,6 +2520,21 @@ class BluetoothObdManager {
                 if (macOrUsbAddress.startsWith("USB:") && context != null) {
                     val deviceIdInt = macOrUsbAddress.substringAfter("USB:").toIntOrNull() ?: 0
                     return@withContext connectToUsbDevice(context, deviceIdInt)
+                }
+                if (macOrUsbAddress.startsWith("WIFI:", ignoreCase = true) ||
+                    macOrUsbAddress.startsWith("TCP:", ignoreCase = true) ||
+                    macOrUsbAddress.contains(":35000") ||
+                    (macOrUsbAddress.count { it == '.' } == 3 && macOrUsbAddress.any { it.isDigit() })) {
+                    val cleaned = macOrUsbAddress
+                        .removePrefix("WIFI:")
+                        .removePrefix("wifi:")
+                        .removePrefix("TCP:")
+                        .removePrefix("tcp:")
+                        .trim()
+                    val parts = cleaned.split(":")
+                    val host = parts.getOrNull(0)?.trim()?.ifBlank { "192.168.0.10" } ?: "192.168.0.10"
+                    val port = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 35000
+                    return@withContext connectToWifiDevice(host, port)
                 }
                 if (macOrUsbAddress == "DEMO_SIMULATOR_DIRTY" || macOrUsbAddress.contains("DIRTY", ignoreCase = true)) {
                     Log.i(TAG, "Connecting to Virtual Demo ECU Simulator (Dirty ECU - Cyl 5 Misfire)...")

@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "3.9"
+        versionCode = 20
+        versionName = "4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v3.9: Updated developer feedback message body format"
+                releaseNotes = "VERA v4.0: Native Wi-Fi OBD2 dongle compatibility (TCP 192.168.0.10:35000 and custom IP/Port)"
                 artifactType = "APK"
             }
         }

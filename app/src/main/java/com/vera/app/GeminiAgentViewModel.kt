@@ -1473,7 +1473,15 @@ class GeminiAgentViewModel : ViewModel() {
         viewModelScope.launch {
             _isConnecting.value = true
             val isUsb = macOrUsbAddress.startsWith("USB:")
-            val connTypeLabel = if (isUsb) "Wired USB OBD2 adapter (vLinker FS)" else "OBD2 adapter"
+            val isWifi = macOrUsbAddress.startsWith("WIFI:", ignoreCase = true) ||
+                         macOrUsbAddress.startsWith("TCP:", ignoreCase = true) ||
+                         macOrUsbAddress.contains(":35000") ||
+                         (macOrUsbAddress.count { it == '.' } == 3 && macOrUsbAddress.any { it.isDigit() })
+            val connTypeLabel = when {
+                isUsb -> "Wired USB OBD2 adapter (vLinker FS)"
+                isWifi -> "Wi-Fi OBD2 adapter (${macOrUsbAddress.removePrefix("WIFI:").removePrefix("wifi:")})"
+                else -> "OBD2 adapter"
+            }
             messages.add(ChatMessage("System", "Connecting to $connTypeLabel..."))
             val result = obdManager.connectToDevice(macOrUsbAddress, context)
             if (result.isSuccess) {

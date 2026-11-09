@@ -2868,7 +2868,8 @@ fun VeraMainScreen(
                             OutlinedTextField(
                                 value = macAddress,
                                 onValueChange = { macAddress = it },
-                                label = { Text("ELM327 MAC / USB ID", fontSize = 11.sp) },
+                                label = { Text("MAC / Wi-Fi IP / USB ID", fontSize = 11.sp) },
+                                placeholder = { Text("e.g. 192.168.0.10:35000, 00:1D:A5...", fontSize = 11.sp) },
                                 textStyle = TextStyle(fontSize = 12.sp),
                                 shape = RoundedCornerShape(10.dp),
                                 singleLine = true,
@@ -2889,7 +2890,7 @@ fun VeraMainScreen(
                                     value = selectedDeviceText,
                                     onValueChange = {},
                                     readOnly = true,
-                                    label = { Text("Select OBD2 Dongle (Wired/Bluetooth)", fontSize = 11.sp) },
+                                    label = { Text("Select OBD2 Dongle (BT / USB / Wi-Fi)", fontSize = 11.sp) },
                                     textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium),
                                     shape = RoundedCornerShape(10.dp),
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
@@ -2949,8 +2950,12 @@ fun VeraMainScreen(
                                                     Text(
                                                         device.name, 
                                                         fontSize = 12.sp,
-                                                        fontWeight = if (device.isUsb) FontWeight.ExtraBold else FontWeight.Normal,
-                                                        color = if (device.isUsb) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                        fontWeight = if (device.isUsb || device.isWifi) FontWeight.ExtraBold else FontWeight.Normal,
+                                                        color = when {
+                                                            device.isUsb -> MaterialTheme.colorScheme.primary
+                                                            device.isWifi -> Color(0xFF00E5FF)
+                                                            else -> MaterialTheme.colorScheme.onSurface
+                                                        }
                                                     ) 
                                                 },
                                                 onClick = {
@@ -2967,11 +2972,11 @@ fun VeraMainScreen(
                                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                                     )
 
-                                    // Option 3: Enter MAC Manually
+                                    // Option 3: Enter MAC / Wi-Fi IP Manually
                                     DropdownMenuItem(
                                         text = {
                                             Text(
-                                                "✏️ Enter MAC Address Manually...",
+                                                "✏️ Enter MAC or Wi-Fi IP Manually...",
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = MaterialTheme.colorScheme.primary
