@@ -285,7 +285,8 @@ class VeraSentinelManager(
         mode06Results: List<Mode06TestResult>,
         mode22Streams: List<Mode22StreamData>,
         unitSystem: UnitSystem,
-        isConnected: Boolean
+        isConnected: Boolean,
+        roadContext: RoadContext? = null
     ) {
         if (!isConnected) {
             connectionStartTime = 0L
@@ -528,7 +529,79 @@ class VeraSentinelManager(
             }
         }
 
-        // ── RULE 11: EVALUATE USER CUSTOM THRESHOLD WATCHERS ──
+        // ── RULE 11: UPHILL CLIMB STRESS & MISFIRE CORRELATOR (STEEP / MODERATE CLIMB) ──
+        if (roadContext != null && (roadContext.roadGradePercent >= 4.0 || roadContext.inclineStatus == InclineStatus.STEEP_CLIMB || roadContext.inclineStatus == InclineStatus.MODERATE_CLIMB)) {
+            val roadName = if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating...") roadContext.streetName else "this incline"
+            val gradeFmt = String.format(java.util.Locale.US, "%.1f", roadContext.roadGradePercent)
+
+            // A. Cylinder Misfires Under Incline Combustion Chamber Pressure
+            val failingMisfire = mode06Results.find { 
+                it.category.contains("Misfire", ignoreCase = true) && 
+                (it.status == Mode06Status.FAIL || (it.testValue > 5.0 && it.name.contains("Cylinder", ignoreCase = true)))
+            }
+            if (failingMisfire != null && canFireAlert("uphill_misfire_${failingMisfire.name}", 75_000L)) {
+                val cylName = failingMisfire.name.replace("Misfires", "").trim()
+                postAlert(
+                    SentinelAlert(
+                        severity = SentinelSeverity.WARNING,
+                        title = "Uphill Misfire: $cylName",
+                        message = "Misfires detected on $cylName while climbing $roadName at +$gradeFmt% grade (${metrics.engineLoad}% load).",
+                        spokenText = "Uphill Diagnostic Alert: I'm catching misfires on $cylName while pulling up $roadName at a $gradeFmt percent grade. Under combustion chamber pressure, the ignition coil or spark plug is breaking down.",
+                        parameter = "UPHILL_MISFIRE",
+                        valueFormatted = "${failingMisfire.testValue.toInt()} misfires"
+                    )
+                )
+            }
+
+            // B. Severe Fuel Starvation Under Incline Load (Fuel Trim >= +16%)
+            if (fuelTrim >= 16 && canFireAlert("uphill_lean_starvation", 90_000L)) {
+                postAlert(
+                    SentinelAlert(
+                        severity = SentinelSeverity.WARNING,
+                        title = "Uphill Lean Condition (+${fuelTrim}%)",
+                        message = "Fuel trims surged to +$fuelTrim% climbing $roadName at +$gradeFmt% grade.",
+                        spokenText = "Fuel Delivery Warning: Climbing $roadName at a $gradeFmt percent grade, combined fuel trims reached plus $fuelTrim percent. The computer is dumping extra fuel to prevent detonation under uphill load. Check fuel filter or pump delivery.",
+                        parameter = "UPHILL_FUEL_TRIM",
+                        valueFormatted = "+$fuelTrim%"
+                    )
+                )
+            }
+
+            // C. Uphill Transmission Temperature Surge
+            if (transTempF != null && transTempF >= 215 && canFireAlert("uphill_trans_surge", 90_000L)) {
+                val transFormatted = if (isMetric) "${((transTempF - 32) / 1.8).toInt()}°C" else "$transTempF°F"
+                postAlert(
+                    SentinelAlert(
+                        severity = SentinelSeverity.WARNING,
+                        title = "Uphill Transmission Overheat",
+                        message = "Transmission fluid reached $transFormatted on sustained $gradeFmt% climb on $roadName.",
+                        spokenText = "Transmission Thermal Alert: Pulling up $roadName at a $gradeFmt percent grade, transmission fluid reached $transFormatted. Drop to a lower gear or ease the throttle to reduce torque converter heat.",
+                        parameter = "UPHILL_TRANS_TEMP",
+                        valueFormatted = transFormatted
+                    )
+                )
+            }
+        }
+
+        // ── RULE 12: DOWNHILL COASTING & THERMAL OVERCOOLING WATCHDOG ──
+        if (roadContext != null && (roadContext.roadGradePercent <= -4.0 || roadContext.inclineStatus == InclineStatus.STEEP_DESCENT || roadContext.inclineStatus == InclineStatus.MODERATE_DESCENT)) {
+            val roadName = if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating...") roadContext.streetName else "this descent"
+            if (coolantF < 160 && driveSeconds >= 600 && canFireAlert("downhill_overcooling", 240_000L)) {
+                val tempText = if (isMetric) "$coolantC°C" else "$coolantF°F"
+                postAlert(
+                    SentinelAlert(
+                        severity = SentinelSeverity.ADVISORY,
+                        title = "Downhill Cooling Drop ($tempText)",
+                        message = "Coolant temperature dropped to $tempText while descending $roadName.",
+                        spokenText = "Thermostat Advisory: Descending $roadName, engine coolant dropped to $tempText. Your thermostat is likely sticking slightly open, overcooling the engine on downhills without combustion heat.",
+                        parameter = "DOWNHILL_COOLING",
+                        valueFormatted = tempText
+                    )
+                )
+            }
+        }
+
+        // ── RULE 13: EVALUATE USER CUSTOM THRESHOLD WATCHERS ──
         for ((_, watcher) in thresholdWatchers) {
             evaluateSingleThresholdWatcher(watcher, rpm, speedMph, coolantF, fuelTrim, voltageStream, isMetric)
         }

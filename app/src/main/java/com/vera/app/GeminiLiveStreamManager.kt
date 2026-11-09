@@ -398,6 +398,16 @@ class GeminiLiveStreamManager(private val context: Context) {
                             })
                         })
                     })
+                    put(JSONObject().apply {
+                        put("name", "evaluate_topographical_performance")
+                        put("description", "Evaluates vehicle combustion, exhaust, ignition coils, and fuel delivery performance specifically under the current road topography and grade (e.g. stress-testing misfires and fuel trims on an uphill climb, or evaluating cooling and deceleration fuel cut-off on a downhill descent). Invoke whenever the driver asks how the vehicle, engine, or exhaust is performing on a hill, grade, or descent.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("focus_area", stringParam("Optional focus area: 'exhaust', 'ignition_misfires', 'fuel_trims', 'cooling', 'all'"))
+                            })
+                        })
+                    })
                 })
             })
         }

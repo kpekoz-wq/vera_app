@@ -841,10 +841,15 @@ class GeminiAgentViewModel : ViewModel() {
                  * If the driver asks to monitor or alert on a sensor that is NOT broadcast over standard OBD2 (e.g. tire pressure on cars without OBD2 TPMS, oil quality percentage, blind spot radar), state honestly: "I cannot monitor that parameter because your vehicle's OBD2 stream does not broadcast it."
             5. GEOGRAPHIC, NAVIGATION & ROAD TOPOGRAPHY AWARENESS:
                - You have real-time awareness of the driver's geographic location, current street name, elevation, and road grade (% incline / slope).
-               - When the vehicle is climbing an uphill grade (e.g. 5% to 8%+ incline):
+               - When the driver asks to test or see how the car, engine, or exhaust performs on a hill or on a road (e.g. "take a left on Jones street and let's see how the exhaust performs on the way up the hill", "how is the car doing on this climb?"):
+                 * You MUST invoke the `evaluate_topographical_performance` tool to inspect combustion pressures, cylinder misfires, fuel trims, and exhaust under the active road grade.
+                 * Synthesize an authentic, expert mechanic verdict correlating the incline with engine load, fuel delivery, and misfires.
+               - When climbing an uphill grade (e.g. 5% to 8%+ incline):
                  * Engine load, intake air flow, and exhaust heat are expected to rise naturally under hill climb load.
-                 * You can use this road context when diagnosing the vehicle (e.g. "We're pulling up a 7% grade on Jones Street, so let's see how your exhaust, cooling, and fuel trims hold up under this uphill load", or "On this descent, engine braking should kick in").
-               - If the driver asks where they are, what street they are on, what their elevation is, or whether they are on an incline, answer accurately using your live road context.
+                 * High combustion chamber pressure stresses spark plugs and ignition coils—watch for cylinder misfires.
+               - When on a downhill descent:
+                 * Engine braking engages and deceleration fuel cut-off (DFCO) activates.
+               - If the driver asks where they are, what street they are on, what their elevation is, or whether they are on an incline, answer accurately using your live road context or the `get_road_topography` tool.
             6. SAFETY FIRST:
                - The driver is operating a vehicle. Never give instructions that require them to look away from the road or manipulate parts while driving.
         """.trimIndent()
@@ -1145,6 +1150,65 @@ class GeminiAgentViewModel : ViewModel() {
                         put("speed_mph", road.speedMph.roundToInt())
                         put("speed_kmh", road.speedKmh.roundToInt())
                         put("formatted_summary", road.formattedTopography)
+                    }
+                }
+                "evaluate_topographical_performance" -> {
+                    val road = locationManager?.roadContext?.value ?: RoadContext()
+                    val metrics = obdManager.metrics.value
+                    val streams = obdManager.supportedStreams.value
+                    val m06 = obdManager.mode06Results.value
+                    val m22 = obdManager.mode22Streams.value
+                    val isMetric = unitSystem.value == UnitSystem.METRIC
+
+                    val transStream = m22.find { it.pid.name.contains("Transmission", ignoreCase = true) }
+                    val transTemp = transStream?.formattedValue ?: "Normal"
+                    val volt = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
+
+                    val misfireSummary = m06.filter { it.category.contains("Misfire", ignoreCase = true) }
+                    val failingMisfires = misfireSummary.filter { it.status == Mode06Status.FAIL || it.testValue > 5.0 }
+
+                    val isUphill = road.roadGradePercent >= 3.5 || road.inclineStatus == InclineStatus.STEEP_CLIMB || road.inclineStatus == InclineStatus.MODERATE_CLIMB
+                    val isDownhill = road.roadGradePercent <= -3.0 || road.inclineStatus == InclineStatus.STEEP_DESCENT || road.inclineStatus == InclineStatus.MODERATE_DESCENT
+
+                    val mechanicVerdict = when {
+                        isUphill && failingMisfires.isNotEmpty() -> {
+                            val cyl = failingMisfires.first().name.replace("Misfires", "").trim()
+                            "Catching misfires on $cyl under ${metrics.engineLoad}% load climbing ${road.streetName} (+${road.roadGradePercent}% grade). Ignition breakdown under high combustion chamber pressure."
+                        }
+                        isUphill && metrics.fuelTrim >= 15 -> {
+                            "Fuel trims spiking lean (+${metrics.fuelTrim}%) under uphill climb on ${road.streetName}. Computer is dumping maximum fuel; check for fuel pump starvation or clogged filter under load."
+                        }
+                        isUphill -> {
+                            "Pulling smoothly up ${road.streetName} (+${road.roadGradePercent}% grade) at ${metrics.engineLoad}% engine load. Zero cylinder misfires, fuel trims holding steady at ${if (metrics.fuelTrim >= 0) "+" else ""}${metrics.fuelTrim}%, and catalytic/exhaust temps are stable."
+                        }
+                        isDownhill -> {
+                            "Descending ${road.streetName} (${road.roadGradePercent}% grade). Engine braking engaged, throttle closed (${metrics.throttlePosition}%), and fuel trims are stable."
+                        }
+                        else -> {
+                            "Cruising level on ${road.streetName} at ${if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"}. Engine load is moderate (${metrics.engineLoad}%), fuel trims normal (${metrics.fuelTrim}%), and combustion is clean."
+                        }
+                    }
+
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("road_location", road.formattedTopography)
+                        put("street_name", road.streetName)
+                        put("road_grade_percent", road.roadGradePercent)
+                        put("incline_status", road.inclineStatus.description)
+                        put("engine_load_percent", metrics.engineLoad)
+                        put("rpm", metrics.rpm)
+                        put("speed", if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph")
+                        put("coolant_temp", if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F")
+                        put("fuel_trim", "${if (metrics.fuelTrim >= 0) "+" else ""}${metrics.fuelTrim}%")
+                        put("transmission_temp", transTemp)
+                        put("battery_voltage", volt)
+                        put("active_misfires_detected", failingMisfires.isNotEmpty())
+                        if (failingMisfires.isNotEmpty()) {
+                            put("failing_misfire_monitors", JSONArray().apply {
+                                failingMisfires.forEach { put("${it.name}: ${it.testValue.toInt()} misfires (FAIL)") }
+                            })
+                        }
+                        put("mechanic_verdict", mechanicVerdict)
                     }
                 }
                 else -> {
@@ -1976,7 +2040,8 @@ class GeminiAgentViewModel : ViewModel() {
                     mode06Results = obdManager.mode06Results.value,
                     mode22Streams = obdManager.mode22Streams.value,
                     unitSystem = unitSystem.value,
-                    isConnected = isConn
+                    isConnected = isConn,
+                    roadContext = locationManager?.roadContext?.value
                 )
             }
         }
