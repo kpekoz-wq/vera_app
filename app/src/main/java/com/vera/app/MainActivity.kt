@@ -4002,46 +4002,6 @@ fun VeraMainScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        if (isLiveSessionActive || isHandsFreeVoiceActive) {
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                                    .clickable(enabled = isGeminiSpeaking) {
-                                        viewModel.interruptLivePlayback()
-                                    },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isGeminiSpeaking) Color(0xFF0F3254) else Color(0xFF0D1B2A),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Mic,
-                                        contentDescription = "Gemini Live Active",
-                                        tint = Color(0xFF00E5FF),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isGeminiSpeaking) "🔊 Gemini Speaking (Tap to Mute/Skip)" else "🎙️ 2-Way Gemini Live Active (Hands-Free)",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFF0F9FF),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        text = "Voice: $liveVoiceName",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color(0xFF7DD3FC)
-                                    )
-                                }
-                            }
-                        }
-
                         LazyColumn(
                             state = chatListState,
                             modifier = Modifier
@@ -4282,54 +4242,7 @@ fun VeraMainScreen(
 
             Spacer(modifier = Modifier.width(4.dp))
 
-            // Hands-Free 2-Way Voice Streaming Button (Gemini Live)
-            Surface(
-                onClick = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                        Toast.makeText(context, "Microphone permission required for voice mode.", Toast.LENGTH_SHORT).show()
-                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else if (isGeminiSpeaking) {
-                        viewModel.interruptLivePlayback()
-                    } else {
-                        viewModel.toggleHandsFreeVoiceMode()
-                    }
-                },
-                shape = RoundedCornerShape(18.dp),
-                color = if (isLiveSessionActive || isHandsFreeVoiceActive) {
-                    if (isGeminiSpeaking) Color(0xFF0284C7) else Color(0xFF00E5FF)
-                } else MaterialTheme.colorScheme.surfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (isLiveSessionActive || isHandsFreeVoiceActive) Color(0xFF00E5FF) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.height(36.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Mic,
-                        contentDescription = "Hands-Free Gemini Live Voice Mode",
-                        tint = if (isLiveSessionActive || isHandsFreeVoiceActive) Color(0xFF070D18) else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = when {
-                            isGeminiSpeaking -> "Speaking"
-                            isLiveSessionActive || isHandsFreeVoiceActive -> "Live"
-                            else -> "Voice"
-                        },
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = if (isLiveSessionActive || isHandsFreeVoiceActive) Color(0xFF070D18) else MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(4.dp))
-
+            // 1. Send Button (swapped to come before voice button)
             Button(
                 onClick = {
                     if (userPrompt.isNotBlank() || attachedFiles.isNotEmpty()) {
@@ -4370,6 +4283,77 @@ fun VeraMainScreen(
                     )
                 } else {
                     Text("Send", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // 2. Hands-Free 2-Way Voice Streaming Button (Gemini Live)
+            val isVoiceActive = isLiveSessionActive || isHandsFreeVoiceActive
+            val isListening = isVoiceActive && !isGeminiSpeaking
+
+            val infiniteTransition = rememberInfiniteTransition(label = "voicePulseTransition")
+            val pulseAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.45f,
+                targetValue = 1.0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1100, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "voiceListeningPulse"
+            )
+
+            val voiceBgColor = when {
+                isGeminiSpeaking -> Color(0xFF0284C7)
+                isListening -> Color(0xFF00E5FF).copy(alpha = pulseAlpha)
+                else -> MaterialTheme.colorScheme.surfaceVariant
+            }
+
+            val voiceBorderColor = when {
+                isGeminiSpeaking -> Color(0xFF38BDF8)
+                isListening -> Color(0xFF00E5FF).copy(alpha = (pulseAlpha + 0.2f).coerceAtMost(1f))
+                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+            }
+
+            val voiceContentColor = if (isVoiceActive) Color(0xFF070D18) else MaterialTheme.colorScheme.primary
+
+            Surface(
+                onClick = {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        Toast.makeText(context, "Microphone permission required for voice mode.", Toast.LENGTH_SHORT).show()
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else if (isGeminiSpeaking) {
+                        viewModel.interruptLivePlayback()
+                    } else {
+                        viewModel.toggleHandsFreeVoiceMode()
+                    }
+                },
+                shape = RoundedCornerShape(18.dp),
+                color = voiceBgColor,
+                border = androidx.compose.foundation.BorderStroke(1.dp, voiceBorderColor),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = "Hands-Free Gemini Live Voice Mode",
+                        tint = voiceContentColor,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = when {
+                            isGeminiSpeaking -> "Speaking"
+                            isListening -> "Listening"
+                            else -> "Voice"
+                        },
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = voiceContentColor
+                    )
                 }
             }
         }
