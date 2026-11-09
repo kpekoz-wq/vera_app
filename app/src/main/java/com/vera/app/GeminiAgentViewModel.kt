@@ -128,12 +128,15 @@ class GeminiAgentViewModel : ViewModel() {
         messages.add(ChatMessage("VERA", "$badge ${alert.title}\n${alert.message}"))
         autoSaveCurrentSession()
 
-        val liveInjected = if (_isHandsFreeVoiceActive.value) {
-            liveStreamManager?.injectDriverAlert(alert.spokenText) ?: false
-        } else false
+        // STRICT VOICE RULE: Only vocalize if live voice mode is active
+        if (isVoiceModeActive) {
+            val liveInjected = if (_isHandsFreeVoiceActive.value) {
+                liveStreamManager?.injectDriverAlert(alert.spokenText) ?: false
+            } else false
 
-        if (!liveInjected) {
-            speak(alert.spokenText)
+            if (!liveInjected) {
+                speak(alert.spokenText)
+            }
         }
     }
 
@@ -318,6 +321,8 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun speak(text: String) {
+        // STRICT VOICE RULE: Never vocalize unless live voice mode is active
+        if (!isVoiceModeActive) return
         if (!_isTtsEnabled.value) return
         stopSpeaking()
 
@@ -499,6 +504,9 @@ class GeminiAgentViewModel : ViewModel() {
 
     private val _isHandsFreeVoiceActive = MutableStateFlow(false)
     val isHandsFreeVoiceActive: StateFlow<Boolean> = _isHandsFreeVoiceActive.asStateFlow()
+
+    val isVoiceModeActive: Boolean
+        get() = _isHandsFreeVoiceActive.value || _isLiveSessionActive.value
 
     private var sessionManager: ChatSessionManager? = null
     private val _currentSessionId = MutableStateFlow(java.util.UUID.randomUUID().toString())
@@ -701,6 +709,7 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun stopGeminiLiveSession() {
+        stopSpeaking()
         _isHandsFreeVoiceActive.value = false
         isNewLiveTurn = true
         isNewUserTurn = true
@@ -792,6 +801,13 @@ class GeminiAgentViewModel : ViewModel() {
             You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
 
             $unitRules
+
+            CORE MISSION & ANTI-SYCOPHANCY PHILOSOPHY (DIAGNOSTIC TRUTH COMES FIRST):
+            - YOUR HIGHEST OBJECTIVE IS THE DIAGNOSTIC TRUTH AND THE MECHANICAL HEALTH OF THE VEHICLE.
+            - NEVER BE A "YES-MAN": Reflexive agreement, appeasement, or people-pleasing is dangerous in automotive diagnosis. App success depends entirely upon arriving at the unvarnished diagnostic truth and protecting the driver and vehicle.
+            - REMAIN OBJECTIVE AND NEUTRAL: You must be completely neutral to whether an answer is pleasant or what the user hoped to hear. If sensor data or mechanical principles contradict what the driver suspects, respectfully set the record straight with evidence. Never agree just to sound agreeable.
+            - BLUE-COLLAR MECHANIC PERSONA: Be pleasant, engaging, and witty in a seasoned blue-collar mechanic's typical style—warm, plainspoken, and practical, with grease-under-the-fingernails common sense. But never sacrifice diagnostic accuracy for charm.
+            - HONESTY ABOUT CAPABILITIES: If asked to perform an action outside your capabilities (actuation, physical vehicle control, monitoring sensors not on OBD2), immediately and clearly state your limits. Never say you will do something or promise future action unless you actually execute the tool.
 
             ELITE MECHANIC KNOWLEDGE & MASTER DIAGNOSTIC CAPABILITIES:
             - DEALERSHIP LEVEL WISDOM: Deep knowledge of OEM service manuals, factory technical service bulletins (TSBs), known pattern failures, engine architecture quirks (e.g. AFM/MDS lifters, VVT/cam phaser oil starvation, direct-injection carbon buildup, timing chain stretch, ground strap corrosion, heater core bypass tricks).
@@ -1984,6 +2000,8 @@ class GeminiAgentViewModel : ViewModel() {
                         $fileAttachmentContext
 
                         CRITICAL INSTRUCTION: Speak naturally in plain English like a real human mechanic riding shotgun. Do NOT recite raw sensor numbers, PIDs, temperatures, voltages, or test IDs out loud unless specifically requested.
+                        CORE MISSION & ANTI-SYCOPHANCY: Your highest objective is arriving at the unvarnished diagnostic truth and protecting the mechanical health of the vehicle. Do NOT be a "yes-man" or give reflexive affirmative answers. If the driver's hypothesis is contradicted by sensor data, or if an action is outside your capabilities, state the truth plainly and objectively.
+                        BLUE-COLLAR MECHANIC PERSONA: Speak naturally in plain English like a seasoned, sharp blue-collar mechanic riding shotgun—warm, engaging, and occasionally witty, but relentlessly focused on finding the root cause without throwing expensive parts at a problem.
                         Healthy verdict example: "Let me know if there's a specific problem you're experiencing, but from all the indicators I'm watching, everything looks great."
                         Issue verdict example: "I'm seeing some misfires on cylinder 3—maybe dirty spark plugs, fuel injectors, or a dirty throttle body. Try turning on the AC and see if it stops under load."
                         STRICT BOUNDARY RULE: You have read-only diagnostic access to vehicle engine and OBD2 data. If the user asks you to control physical vehicle actuators (radio, doors, AC, windows, clearing adaptation tables, flashing ECU), refuse honestly: state that you are a read-only diagnostic assistant and cannot actuate vehicle hardware.
@@ -1997,6 +2015,7 @@ class GeminiAgentViewModel : ViewModel() {
                         $fileAttachmentContext
 
                         CRITICAL INSTRUCTION: You are currently DISCONNECTED from the vehicle's OBD2 port. You have NO access to live vehicle telemetry, engine RPM, sensors, or trouble codes.
+                        - CORE MISSION & ANTI-SYCOPHANCY: Your highest objective is the diagnostic truth. Do not agree to actions you cannot perform or assume sensor values.
                         - If the driver asks about their current vehicle data, engine status, trouble codes, or vehicle health, YOU MUST EXPLICITLY TELL THEM that you are not connected to the vehicle's OBD2 adapter yet, and instruct them to connect an adapter or start Demo Mode in the app so you can read their live data.
                         - DO NOT claim, hallucinate, or assume that "everything looks fine", "all indicators look great", or that sensors are normal when disconnected.
                         - You CAN answer general automotive, repair, or mechanic questions, but clarify that you cannot see their specific vehicle's real-time data until connected.
@@ -2009,7 +2028,9 @@ class GeminiAgentViewModel : ViewModel() {
                 val aiResponseText = callGeminiApi(contextualPrompt, imagesBase64)
                 messages.add(ChatMessage("VERA", aiResponseText))
                 _isSendingMessage.value = false
-                speak(aiResponseText)
+                if (isVoiceModeActive) {
+                    speak(aiResponseText)
+                }
                 autoSaveCurrentSession()
 
             } catch (e: Throwable) {
