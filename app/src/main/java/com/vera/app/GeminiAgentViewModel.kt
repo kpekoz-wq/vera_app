@@ -594,7 +594,7 @@ class GeminiAgentViewModel : ViewModel() {
         messages.add(
             ChatMessage(
                 "System",
-                "Hands-free 2-way conversation is live.  Ask anything. Vera has full, live, read-only access to your vehicle's data."
+                "Hands-free conversation is live.  Ask anything! Vera has full, live, read-only access to your vehicle's data.  You can chat while you drive. Vera will keep your phone awake."
             )
         )
 
@@ -645,7 +645,7 @@ class GeminiAgentViewModel : ViewModel() {
         appContext?.let {
             VeraVoiceService.stopService(it)
         }
-        messages.add(ChatMessage("System", "⚡ Hands-Free Gemini Live Mode Ended."))
+        messages.add(ChatMessage("System", "Hands-free mode stopped"))
         autoSaveCurrentSession()
     }
 
