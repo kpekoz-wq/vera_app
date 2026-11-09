@@ -388,6 +388,16 @@ class GeminiLiveStreamManager(private val context: Context) {
                             })
                         })
                     })
+                    put(JSONObject().apply {
+                        put("name", "get_road_topography")
+                        put("description", "Returns the vehicle's current road location, street name, city, elevation above sea level, and real-time road slope / grade percentage (e.g. +7.2% steep uphill climb, level road, or downhill descent). Invoke when driver asks about their current road, hill incline, elevation, or location.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("detail_level", stringParam("Optional detail level, e.g. 'summary', 'full'"))
+                            })
+                        })
+                    })
                 })
             })
         }

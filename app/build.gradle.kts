@@ -120,6 +120,9 @@ dependencies {
     // OkHttp3 for Gemini Live Multimodal WebSocket Streaming
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Google Play Services Location & Fused Location Provider for Road Topography & Navigation
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

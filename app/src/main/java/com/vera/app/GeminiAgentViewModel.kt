@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -248,6 +249,29 @@ class GeminiAgentViewModel : ViewModel() {
 
     private val _isConnecting = MutableStateFlow(false)
     val isConnecting: StateFlow<Boolean> = _isConnecting.asStateFlow()
+
+    var locationManager: VeraLocationManager? = null
+        private set
+
+    private val _roadContext = MutableStateFlow(RoadContext())
+    val roadContext: StateFlow<RoadContext> = _roadContext.asStateFlow()
+
+    fun initLocationManager(context: Context) {
+        if (locationManager != null) return
+        val mgr = VeraLocationManager(context.applicationContext, viewModelScope)
+        locationManager = mgr
+        viewModelScope.launch {
+            mgr.roadContext.collect { rc ->
+                _roadContext.value = rc
+            }
+        }
+        if (obdManager.isDemoMode) {
+            mgr.setDemoMode(true, dirtyDirty = obdManager.vehicleVin.value?.contains("DIRTY") == true)
+        } else {
+            mgr.startTracking()
+        }
+        Log.i("GeminiAgentViewModel", "VeraLocationManager initialized and tracking started.")
+    }
 
     private val _isScanningDtcs = MutableStateFlow(false)
     val isScanningDtcs: StateFlow<Boolean> = _isScanningDtcs.asStateFlow()
@@ -860,7 +884,13 @@ class GeminiAgentViewModel : ViewModel() {
                - SUPPORTED SENSORS FOR PERIODIC REPORTS & ALERTS:
                  * You CAN schedule periodic reports or threshold alerts for: Engine RPM, Vehicle Speed, Coolant Temperature, Short & Long Term Fuel Trims, Mass Air Flow (MAF), Engine Load, Throttle Position, Battery Voltage, Mode 06 Cylinder Misfires, Mode 22 Transmission Temp, Mode 03 Confirmed DTCs, and Mode 07 Pending DTCs.
                  * If the driver asks to monitor or alert on a sensor that is NOT broadcast over standard OBD2 (e.g. tire pressure on cars without OBD2 TPMS, oil quality percentage, blind spot radar), state honestly: "I cannot monitor that parameter because your vehicle's OBD2 stream does not broadcast it."
-            5. SAFETY FIRST:
+            5. GEOGRAPHIC, NAVIGATION & ROAD TOPOGRAPHY AWARENESS:
+               - You have real-time awareness of the driver's geographic location, current street name, elevation, and road grade (% incline / slope).
+               - When the vehicle is climbing an uphill grade (e.g. 5% to 8%+ incline):
+                 * Engine load, intake air flow, and exhaust heat are expected to rise naturally under hill climb load.
+                 * You can use this road context when diagnosing the vehicle (e.g. "We're pulling up a 7% grade on Jones Street, so let's see how your exhaust, cooling, and fuel trims hold up under this uphill load", or "On this descent, engine braking should kick in").
+               - If the driver asks where they are, what street they are on, what their elevation is, or whether they are on an incline, answer accurately using your live road context.
+            6. SAFETY FIRST:
                - The driver is operating a vehicle. Never give instructions that require them to look away from the road or manipulate parts while driving.
         """.trimIndent()
     }
@@ -910,10 +940,16 @@ class GeminiAgentViewModel : ViewModel() {
         val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
         val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
 
+        val road = locationManager?.roadContext?.value
+        val roadText = if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating road..." && road.streetName != "Locating...") {
+            road.formattedTopography
+        } else "Determining GPS road position & elevation..."
+
         return """
             Vehicle: $vehicle (VIN: $vin)
             Odometer: $odoText
             Unit System Preference: ${if (isMetric) "METRIC (km/h, °C, kPa, km)" else "SAE (mph, °F, psi, miles)"}
+            Road & Topography: $roadText
             OBD2 Connection: Connected & Polling ECU
             Active DTCs: $dtcText
             Latest Telemetry: $streamsText
@@ -965,6 +1001,15 @@ class GeminiAgentViewModel : ViewModel() {
                         put("fuel_trim_percent", metrics.fuelTrim)
                         put("mass_air_flow_gs", metrics.maf)
                         put("vehicle", obdManager.vehicleDetails.value ?: "Vehicle")
+                        val road = locationManager?.roadContext?.value
+                        if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating...") {
+                            put("current_road", road.streetName)
+                            put("city", road.neighborhoodOrCity)
+                            put("road_grade_percent", road.roadGradePercent)
+                            put("incline_status", road.inclineStatus.description)
+                            put("elevation_feet", road.altitudeFeet.toInt())
+                            put("road_topography", road.formattedTopography)
+                        }
                         val odoKm = obdManager.vehicleOdometerKm.value
                         if (odoKm != null && odoKm > 0) {
                             if (isMetric) {
@@ -1130,6 +1175,22 @@ class GeminiAgentViewModel : ViewModel() {
                 "cancel_telemetry_alerts" -> {
                     val param = if (args.has("parameter")) args.getString("parameter") else "all"
                     sentinelManager.cancelAlerts(param)
+                }
+                "get_road_topography" -> {
+                    val road = locationManager?.roadContext?.value ?: RoadContext()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("street_name", road.streetName)
+                        put("city", road.neighborhoodOrCity)
+                        put("road_grade_percent", road.roadGradePercent)
+                        put("incline_status", road.inclineStatus.description)
+                        put("altitude_feet", road.altitudeFeet.roundToInt())
+                        put("altitude_meters", road.altitudeMeters.roundToInt())
+                        put("heading", road.headingCompass)
+                        put("speed_mph", road.speedMph.roundToInt())
+                        put("speed_kmh", road.speedKmh.roundToInt())
+                        put("formatted_summary", road.formattedTopography)
+                    }
                 }
                 else -> {
                     JSONObject().put("status", "unknown tool $name")
@@ -1679,6 +1740,14 @@ class GeminiAgentViewModel : ViewModel() {
             val result = obdManager.connectToDevice(macOrUsbAddress, context)
             if (result.isSuccess) {
                 messages.add(ChatMessage("System", "Successfully connected to $connTypeLabel."))
+                if (macOrUsbAddress == "DEMO_SIMULATOR_CLEAN") {
+                    locationManager?.setDemoMode(true, dirtyDirty = false)
+                } else if (macOrUsbAddress == "DEMO_SIMULATOR_DIRTY") {
+                    locationManager?.setDemoMode(true, dirtyDirty = true)
+                } else {
+                    locationManager?.setDemoMode(false)
+                    locationManager?.startTracking()
+                }
             } else {
                 val errorMsg = result.exceptionOrNull()?.message ?: "Connection failed"
                 messages.add(ChatMessage("System", "Failed to connect: $errorMsg"))
@@ -1690,6 +1759,7 @@ class GeminiAgentViewModel : ViewModel() {
     fun disconnectFromCar() {
         viewModelScope.launch {
             sentinelManager.resetSession()
+            locationManager?.setDemoMode(false)
             obdManager.disconnect()
             messages.add(ChatMessage("System", "Disconnected from OBD2 adapter."))
         }
@@ -1887,6 +1957,7 @@ class GeminiAgentViewModel : ViewModel() {
                         [Vehicle Telemetry Context - FOR INTERNAL DIAGNOSTIC REASONING ONLY]
                         VIN: $vin
                         Active DTCs: ${if (dtcs.isEmpty()) "None" else dtcs.joinToString(", ")}
+                        Road Topography & Location: ${roadContext.value.formattedTopography}
                         Telemetry Snapshot: $streamsSummary
                         Mode 06 Monitors: $m06Summary
                         Mode 22 PIDs: $m22Summary
