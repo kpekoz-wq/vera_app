@@ -59,6 +59,14 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Info
@@ -777,6 +785,107 @@ fun getDtcDiagnosticGuidance(code: String, description: String = ""): String {
         code == "P0420" || code == "P0430" -> "Catalyst System Efficiency Below Threshold. Inspect downstream O2 sensor output, exhaust leaks upstream of cat, or failing catalytic converter."
         code.startsWith("P04") -> "Emissions/EVAP System Fault. Check gas cap seal, EVAP purge solenoid valve, vent solenoid, and vacuum lines."
         else -> "Diagnostic trouble code recorded by engine control unit. Use VERA Assistant to analyze live telemetry and specific repair procedures."
+    }
+}
+
+@Composable
+fun DtcAwareMessageText(
+    text: String,
+    textColor: Color,
+    fontSize: TextUnit = 13.sp,
+    lineHeight: TextUnit = 17.sp,
+    onDtcClick: (String) -> Unit
+) {
+    val dtcRegex = remember { Regex("\\b([PCBU][0-9A-Fa-f]{4})\\b") }
+    val detectedDtcs = remember(text) {
+        dtcRegex.findAll(text)
+            .map { it.value.uppercase() }
+            .distinct()
+            .toList()
+    }
+
+    val annotatedString = remember(text, textColor) {
+        buildAnnotatedString {
+            var lastIndex = 0
+            val matches = dtcRegex.findAll(text).toList()
+            if (matches.isEmpty()) {
+                append(text)
+            } else {
+                for (match in matches) {
+                    val start = match.range.first
+                    val end = match.range.last + 1
+                    if (start > lastIndex) {
+                        append(text.substring(lastIndex, start))
+                    }
+                    val code = match.value.uppercase()
+                    pushLink(
+                        LinkAnnotation.Clickable(
+                            tag = "DTC_$code",
+                            styles = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = Color(0xFFFF5252),
+                                    fontWeight = FontWeight.ExtraBold,
+                                    textDecoration = TextDecoration.Underline
+                                )
+                            )
+                        ) {
+                            onDtcClick(code)
+                        }
+                    )
+                    append(match.value)
+                    pop()
+                    lastIndex = end
+                }
+                if (lastIndex < text.length) {
+                    append(text.substring(lastIndex))
+                }
+            }
+        }
+    }
+
+    Column {
+        Text(
+            text = annotatedString,
+            color = textColor,
+            fontSize = fontSize,
+            lineHeight = lineHeight
+        )
+
+        if (detectedDtcs.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(detectedDtcs) { dtcCode ->
+                    Surface(
+                        onClick = { onDtcClick(dtcCode) },
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(0.75.dp, Color(0xFFFF5252))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = dtcCode,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.sp,
+                                color = Color(0xFFFF5252)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Inspect ↗",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2386,6 +2495,17 @@ fun VeraMainScreen(
 
 
     var selectedDtcForDetail by remember { mutableStateOf<DtcDetails?>(null) }
+    val onDtcClick: (String) -> Unit = { code ->
+        val cleanCode = code.uppercase().trim()
+        val found = dtcDetails.find { it.code.equals(cleanCode, ignoreCase = true) }
+        if (found != null) {
+            selectedDtcForDetail = found
+        } else {
+            val knownDesc = ObdDtcRegistry.KNOWN_DESCRIPTIONS[cleanCode]
+                ?: "Diagnostic Trouble Code $cleanCode"
+            selectedDtcForDetail = DtcDetails(cleanCode, "Diagnostic Trouble Code", knownDesc)
+        }
+    }
     var selectedStreamForDetail by remember { mutableStateOf<LiveStreamData?>(null) }
     var selectedMode06ForDetail by remember { mutableStateOf<Mode06TestResult?>(null) }
     var showFullMode06Inspector by remember { mutableStateOf(false) }
@@ -4259,10 +4379,16 @@ fun VeraMainScreen(
                                                 thickness = 1.dp
                                             )
                                             Spacer(modifier = Modifier.height(6.dp))
-                                            Text(
+                                            DtcAwareMessageText(
                                                 text = cleanAlertText,
-                                                fontSize = 13.sp,
-                                                lineHeight = 17.sp
+                                                textColor = when {
+                                                    isCriticalAlert || isError -> Color(0xFFFFCDD2)
+                                                    isWarningAlert -> Color(0xFFFFF9C4)
+                                                    isAdvisoryAlert -> Color(0xFFE0F7FA)
+                                                    isInfoAlert -> Color(0xFFE1F5FE)
+                                                    else -> MaterialTheme.colorScheme.onSurface
+                                                },
+                                                onDtcClick = onDtcClick
                                             )
                                         }
                                     } else {
@@ -4279,10 +4405,10 @@ fun VeraMainScreen(
                                                 color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary
                                             )
                                             Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
+                                            DtcAwareMessageText(
                                                 text = msg.text,
-                                                fontSize = 13.sp,
-                                                lineHeight = 17.sp
+                                                textColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                                onDtcClick = onDtcClick
                                             )
                                         }
                                     }
@@ -4586,16 +4712,131 @@ fun VeraMainScreen(
 
     if (selectedDtcForDetail != null) {
         val dtc = selectedDtcForDetail!!
+        val makeModel = vehicleDetails?.split("•")?.take(3)?.joinToString(" ")?.trim() ?: ""
+        val googleSearchTerms = if (makeModel.isNotBlank()) {
+            "$makeModel ${dtc.code} trouble code causes symptoms repair"
+        } else {
+            "${dtc.code} OBD2 trouble code causes symptoms repair"
+        }
+        val googleSearchUrl = "https://www.google.com/search?q=" + java.net.URLEncoder.encode(googleSearchTerms, "UTF-8")
+        val obdCodesUrl = "https://www.obd-codes.com/${dtc.code.lowercase()}"
+
         AlertDialog(
             onDismissRequest = { selectedDtcForDetail = null },
             title = {
-                Text(text = "${dtc.code} (${dtc.category})", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.border(0.75.dp, Color(0xFFFF5252), RoundedCornerShape(8.dp))
+                    ) {
+                        Text(
+                            text = dtc.code,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 15.sp,
+                            color = Color(0xFFFF5252),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "[${dtc.category}]",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             },
             text = {
                 Column {
-                    Text(text = dtc.description, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        text = dtc.description,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text(text = getDtcDiagnosticGuidance(dtc.code, dtc.description), fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = getDtcDiagnosticGuidance(dtc.code, dtc.description),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                        thickness = 1.dp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "ONLINE TECHNICAL RESEARCH & WEBPAGES",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSearchUrl))
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open web browser", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Google ↗", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(obdCodesUrl))
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open web browser", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Public,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                                tint = Color(0xFF00E5FF)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("OBD-Codes ↗", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             },
             confirmButton = {
