@@ -2433,15 +2433,28 @@ fun VeraMainScreen(
     }
 
     // Auto-twirl expansion: when Mode 06 or Mode 22 data arrives, automatically expand panels
+    // Automatically collapse and clear panels when disconnected or data is reset
     LaunchedEffect(mode06Results.size) {
         if (mode06Results.isNotEmpty()) {
             isMode06Expanded = true
+        } else {
+            isMode06Expanded = false
         }
     }
 
     LaunchedEffect(mode22Streams.size, obdbSignalResults.size) {
         if (mode22Streams.isNotEmpty() || obdbSignalResults.isNotEmpty()) {
             isMode22Expanded = true
+        } else {
+            isMode22Expanded = false
+        }
+    }
+
+    LaunchedEffect(connectionStatus) {
+        if (connectionStatus != "Connected") {
+            isMode06Expanded = false
+            isMode22Expanded = false
+            isDtcExpanded = false
         }
     }
 

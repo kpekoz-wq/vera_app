@@ -87,6 +87,7 @@ class VeraSentinelManager(
         announcedConfirmedDtcs.clear()
         announcedPendingDtcs.clear()
         connectionStartTime = 0L
+        _alerts.value = emptyList()
         Log.i(TAG, "Sentinel session reset.")
     }
 

@@ -1490,10 +1490,16 @@ class GeminiAgentViewModel : ViewModel() {
         viewModelScope.launch {
             obdManager.connectionState.collect { state ->
                 _connectionStatus.value = when (state) {
-                    is BluetoothObdManager.ConnectionState.Disconnected -> "Disconnected"
+                    is BluetoothObdManager.ConnectionState.Disconnected -> {
+                        resetVehicleDiagnostics()
+                        "Disconnected"
+                    }
                     is BluetoothObdManager.ConnectionState.Connecting -> "Connecting..."
                     is BluetoothObdManager.ConnectionState.Connected -> "Connected"
-                    is BluetoothObdManager.ConnectionState.Error -> "Disconnected"
+                    is BluetoothObdManager.ConnectionState.Error -> {
+                        resetVehicleDiagnostics()
+                        "Disconnected"
+                    }
                 }
             }
         }
@@ -1758,8 +1764,20 @@ class GeminiAgentViewModel : ViewModel() {
         }
     }
 
+    fun resetVehicleDiagnostics() {
+        _troubleCodes.value = emptyList()
+        _dtcDetails.value = emptyList()
+        _hasScannedDtcs.value = false
+        _isScanningDtcs.value = false
+        _isScanningMode06.value = false
+        _isScanningMode22.value = false
+        _isScanningObdb.value = false
+        sentinelManager.resetSession()
+    }
+
     fun connectToCar(macOrUsbAddress: String, context: android.content.Context? = null) {
         viewModelScope.launch {
+            resetVehicleDiagnostics()
             _isConnecting.value = true
             val isUsb = macOrUsbAddress.startsWith("USB:")
             val isWifi = macOrUsbAddress.startsWith("WIFI:", ignoreCase = true) ||
@@ -1793,7 +1811,7 @@ class GeminiAgentViewModel : ViewModel() {
 
     fun disconnectFromCar() {
         viewModelScope.launch {
-            sentinelManager.resetSession()
+            resetVehicleDiagnostics()
             locationManager?.setDemoMode(false)
             obdManager.disconnect()
             messages.add(ChatMessage("System", "Disconnected from OBD2 adapter."))

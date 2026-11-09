@@ -700,6 +700,9 @@ class BluetoothObdManager {
                 Mode06TestResult("21", "Catalyst", "Catalyst Efficiency Bank 1", 1.85, 0.8, 2.0, "counts", Mode06Status.WARNING, "Catalyst Efficiency Bank 1: Measured 2 (Min: 0 | Max: 2) - Near Limit"),
                 Mode06TestResult("39", "EVAP System", "EVAP Leak Monitor (0.150\")", 12.0, 0.0, 500.0, "Pa", Mode06Status.PASS, "EVAP Leak Monitor: Measured 12 Pa (Min: 0 | Max: 500)")
             )
+            _mode22Streams.value = emptyList()
+            _obdbSignalResults.value = emptyMap()
+            cachedSupportedMode22Pids.clear()
         } else {
             _metrics.value = _metrics.value.copy(
                 dtcs = emptyList(),
@@ -709,6 +712,9 @@ class BluetoothObdManager {
                 engineLoad = 22
             )
             _mode06Results.value = emptyList()
+            _mode22Streams.value = emptyList()
+            _obdbSignalResults.value = emptyMap()
+            cachedSupportedMode22Pids.clear()
         }
 
         val demoOdoKm = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 184290.0 else 67450.0
@@ -807,6 +813,7 @@ class BluetoothObdManager {
      * Returns true if connection and ELM327 handshake succeed, false otherwise.
      */
     suspend fun connect(device: BluetoothDevice, secure: Boolean = true): Boolean = withContext(Dispatchers.IO) {
+        disconnect()
         if (bluetoothAdapter == null) {
             _connectionState.value = ConnectionState.Error("Bluetooth not supported")
             return@withContext false
@@ -2317,6 +2324,8 @@ class BluetoothObdManager {
             _mode06Results.value = emptyList()
             _mode22Streams.value = emptyList()
             cachedSupportedMode22Pids.clear()
+            _obdbLoadedResult.value = null
+            _obdbSignalResults.value = emptyMap()
             _vehicleVin.value = null
             _vehicleDetails.value = null
             _vehicleOdometerKm.value = null
@@ -2451,6 +2460,7 @@ class BluetoothObdManager {
      */
     suspend fun connectToUsbDevice(context: android.content.Context, deviceIdInt: Int): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            disconnect()
             val usbManager = context.getSystemService(android.content.Context.USB_SERVICE) as? android.hardware.usb.UsbManager
                 ?: return@withContext Result.failure(IllegalStateException("USB Manager not available"))
 
@@ -2518,6 +2528,7 @@ class BluetoothObdManager {
     suspend fun connectToDevice(macOrUsbAddress: String, context: android.content.Context? = null): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
+                disconnect()
                 if (macOrUsbAddress.startsWith("USB:") && context != null) {
                     val deviceIdInt = macOrUsbAddress.substringAfter("USB:").toIntOrNull() ?: 0
                     return@withContext connectToUsbDevice(context, deviceIdInt)
