@@ -83,7 +83,8 @@ data class RecordedDataSample(
     val elapsedSeconds: Double,
     val metricsSnapshot: BluetoothObdManager.VehicleMetrics,
     val streamSnapshots: List<LiveStreamData>,
-    val mode22Snapshots: List<Mode22StreamData>
+    val mode22Snapshots: List<Mode22StreamData>,
+    val roadContextSnapshot: RoadContext? = null
 )
 
 data class RecordedCsvResult(
@@ -1329,13 +1330,15 @@ class GeminiAgentViewModel : ViewModel() {
                 val metricsSnap = obdManager.metrics.value
                 val streamsSnap = obdManager.supportedStreams.value.toList()
                 val mode22Snap = obdManager.mode22Streams.value.toList()
+                val roadSnap = _roadContext.value
 
                 val sample = RecordedDataSample(
                     timestampMs = now,
                     elapsedSeconds = elapsedSec,
                     metricsSnapshot = metricsSnap,
                     streamSnapshots = streamsSnap,
-                    mode22Snapshots = mode22Snap
+                    mode22Snapshots = mode22Snap,
+                    roadContextSnapshot = roadSnap
                 )
 
                 var count = 0
@@ -1425,6 +1428,8 @@ class GeminiAgentViewModel : ViewModel() {
         val speedCol = if (isSae) "Speed_mph" else "Speed_kmh"
         val tempCol = if (isSae) "Coolant_Temp_F" else "Coolant_Temp_C"
         val iatCol = if (isSae) "Intake_Air_Temp_F" else "Intake_Air_Temp_C"
+        val altCol = if (isSae) "Altitude_ft" else "Altitude_m"
+        val gpsSpeedCol = if (isSae) "GPS_Speed_mph" else "GPS_Speed_kmh"
 
         val dynamicPidNames = samples.flatMap { s -> s.streamSnapshots.map { it.pid.name } }.distinct()
         val mode22PidNames = samples.flatMap { s -> s.mode22Snapshots.map { it.pid.name } }.distinct()
@@ -1432,6 +1437,14 @@ class GeminiAgentViewModel : ViewModel() {
         val headers = mutableListOf(
             "Time_ISO",
             "Elapsed_Sec",
+            "Latitude",
+            "Longitude",
+            altCol,
+            "Road_Grade_pct",
+            "Incline_Status",
+            "Heading",
+            gpsSpeedCol,
+            "Street_Name",
             "Engine_RPM",
             speedCol,
             tempCol,
@@ -1460,6 +1473,7 @@ class GeminiAgentViewModel : ViewModel() {
 
         for (sample in samples) {
             val m = sample.metricsSnapshot
+            val rc = sample.roadContextSnapshot
             val speedVal = if (isSae) m.speed * 0.621371 else m.speed.toDouble()
             val tempVal = if (isSae) (m.coolantTemp * 9.0 / 5.0) + 32.0 else m.coolantTemp.toDouble()
             val iatVal = if (isSae) (m.intakeAirTemp * 9.0 / 5.0) + 32.0 else m.intakeAirTemp.toDouble()
@@ -1467,6 +1481,32 @@ class GeminiAgentViewModel : ViewModel() {
             val rowMap = mutableMapOf<String, String>()
             rowMap["Time_ISO"] = isoFormat.format(java.util.Date(sample.timestampMs))
             rowMap["Elapsed_Sec"] = String.format(java.util.Locale.US, "%.2f", sample.elapsedSeconds)
+
+            // Geographic & Road Topography (Elevation, Grade %, Incline Status, Heading)
+            if (rc != null && (rc.latitude != 0.0 || rc.altitudeFeet != 0.0 || (rc.streetName.isNotBlank() && rc.streetName != "Locating..."))) {
+                rowMap["Latitude"] = if (rc.latitude != 0.0) String.format(java.util.Locale.US, "%.6f", rc.latitude) else ""
+                rowMap["Longitude"] = if (rc.longitude != 0.0) String.format(java.util.Locale.US, "%.6f", rc.longitude) else ""
+                val altVal = if (isSae) rc.altitudeFeet else rc.altitudeMeters
+                rowMap[altCol] = String.format(java.util.Locale.US, "%.1f", altVal)
+                rowMap["Road_Grade_pct"] = String.format(java.util.Locale.US, "%+.1f", rc.roadGradePercent)
+                rowMap["Incline_Status"] = "\"${rc.inclineStatus.description}\""
+                rowMap["Heading"] = rc.headingCompass
+                val gpsSpd = if (isSae) rc.speedMph else rc.speedKmh
+                rowMap[gpsSpeedCol] = String.format(java.util.Locale.US, "%.1f", gpsSpd)
+                val streetDisplay = if (rc.neighborhoodOrCity.isNotBlank()) "${rc.streetName}, ${rc.neighborhoodOrCity}" else rc.streetName
+                rowMap["Street_Name"] = "\"${streetDisplay.replace("\"", "\"\"")}\""
+            } else {
+                rowMap["Latitude"] = ""
+                rowMap["Longitude"] = ""
+                rowMap[altCol] = ""
+                rowMap["Road_Grade_pct"] = ""
+                rowMap["Incline_Status"] = ""
+                rowMap["Heading"] = ""
+                rowMap[gpsSpeedCol] = ""
+                rowMap["Street_Name"] = ""
+            }
+
+            // Engine & Vehicle Telemetry
             rowMap["Engine_RPM"] = m.rpm.toString()
             rowMap[speedCol] = String.format(java.util.Locale.US, "%.1f", speedVal)
             rowMap[tempCol] = String.format(java.util.Locale.US, "%.1f", tempVal)

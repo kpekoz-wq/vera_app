@@ -24,6 +24,8 @@ data class RoadContext(
     val streetName: String = "Locating...",
     val neighborhoodOrCity: String = "",
     val fullAddress: String = "",
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
     val altitudeMeters: Double = 0.0,
     val altitudeFeet: Double = 0.0,
     val roadGradePercent: Double = 0.0, // e.g. +6.5 for uphill climb, -4.0 for downhill descent
@@ -152,6 +154,8 @@ class VeraLocationManager(
                 streetName = "Jones St",
                 neighborhoodOrCity = "San Francisco, CA",
                 fullAddress = "Jones St & Sacramento St, San Francisco, CA",
+                latitude = 37.7925,
+                longitude = -122.4132,
                 altitudeMeters = 115.0,
                 altitudeFeet = 377.0,
                 roadGradePercent = demoGrade,
@@ -198,6 +202,8 @@ class VeraLocationManager(
         _roadContext.value = RoadContext(
             streetName = currentGeocodedStreet,
             neighborhoodOrCity = currentGeocodedCity,
+            latitude = location.latitude,
+            longitude = location.longitude,
             altitudeMeters = altMeters,
             altitudeFeet = altFeet,
             roadGradePercent = grade,
