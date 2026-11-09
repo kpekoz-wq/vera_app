@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "3.7"
+        versionCode = 18
+        versionName = "3.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v3.7: Updated hands-free start and stop system messages"
+                releaseNotes = "VERA v3.8: Aligned VERA AI Chat header with left edge of chat message bubbles"
                 artifactType = "APK"
             }
         }
