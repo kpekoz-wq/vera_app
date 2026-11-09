@@ -119,13 +119,18 @@ class GeminiAgentViewModel : ViewModel() {
         get() = sentinelManager.alerts
 
     private fun onSentinelAlertTriggered(alert: SentinelAlert) {
-        val badge = when (alert.severity) {
-            SentinelSeverity.CRITICAL -> "[CRITICAL ALERT]"
-            SentinelSeverity.WARNING -> "[WARNING]"
-            SentinelSeverity.ADVISORY -> "[ADVISORY]"
-            SentinelSeverity.INFO -> "[INFO]"
+        val chatContent = if (alert.severity == SentinelSeverity.ADVISORY) {
+            // For periodic telemetry advisory reports, chat naturally like an AI assistant in conversation
+            alert.spokenText
+        } else {
+            val badge = when (alert.severity) {
+                SentinelSeverity.CRITICAL -> "[CRITICAL ALERT]"
+                SentinelSeverity.WARNING -> "[WARNING]"
+                else -> "[INFO]"
+            }
+            "$badge ${alert.title}\n${alert.message}"
         }
-        messages.add(ChatMessage("VERA", "$badge ${alert.title}\n${alert.message}"))
+        messages.add(ChatMessage("VERA", chatContent))
         autoSaveCurrentSession()
 
         // STRICT VOICE RULE: Only vocalize if live voice mode is active

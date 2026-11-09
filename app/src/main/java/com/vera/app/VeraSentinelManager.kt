@@ -45,6 +45,7 @@ data class ScheduledWatcher(
     val durationSeconds: Int,     // 0 = indefinite until cancelled
     val maxCount: Int,
     var executedCount: Int = 0,
+    var lastPhraseIndex: Int = -1,
     var job: Job? = null
 )
 
@@ -131,85 +132,24 @@ class VeraSentinelManager(
                 watcher.executedCount++
                 val isFinal = watcher.executedCount >= watcher.maxCount
                 val snapshot = getTelemetrySnapshot()
-                val count = watcher.executedCount
 
-                val paramKey = parameter.lowercase()
-                val (readingTitle, readingText, spokenText) = when {
-                    paramKey.contains("fuel") || paramKey.contains("trim") -> {
-                        val trim = snapshot["fuel_trim"] ?: "+0.0%"
-                        val spoken = when (count % 4) {
-                            1 -> "Fuel trims are sitting at $trim right now."
-                            2 -> "Checking your trims: they're hovering at $trim."
-                            3 -> "Fuel trim's at $trim."
-                            else -> "Watching fuel delivery: trims are $trim."
-                        }
-                        Triple("Fuel Trim", "Fuel Trim: $trim", spoken)
-                    }
-                    paramKey.contains("rpm") -> {
-                        val rpm = snapshot["rpm"] ?: "0 RPM"
-                        val spoken = when (count % 4) {
-                            1 -> "You're turning $rpm right now."
-                            2 -> "Tach is reading $rpm."
-                            3 -> "Engine speed is holding at $rpm."
-                            else -> "Currently at $rpm."
-                        }
-                        Triple("Engine RPM", "Engine RPM: $rpm", spoken)
-                    }
-                    paramKey.contains("coolant") || paramKey.contains("temp") -> {
-                        val temp = snapshot["coolant"] ?: "195°F"
-                        val spoken = when (count % 4) {
-                            1 -> "Coolant is sitting at $temp right now."
-                            2 -> "Looking at the temp gauge, coolant's at $temp."
-                            3 -> "Engine coolant is holding at $temp."
-                            else -> "Coolant's at $temp."
-                        }
-                        Triple("Coolant Temp", "Coolant Temp: $temp", spoken)
-                    }
-                    paramKey.contains("speed") -> {
-                        val speed = snapshot["speed"] ?: "0 mph"
-                        val spoken = when (count % 4) {
-                            1 -> "Speed is $speed."
-                            2 -> "Cruising at $speed."
-                            3 -> "Speedometer is reading $speed."
-                            else -> "Holding at $speed right now."
-                        }
-                        Triple("Vehicle Speed", "Vehicle Speed: $speed", spoken)
-                    }
-                    paramKey.contains("trans") -> {
-                        val trans = snapshot["trans_temp"] ?: "180°F"
-                        val spoken = when (count % 4) {
-                            1 -> "Transmission temp is sitting at $trans."
-                            2 -> "Glancing at transmission fluid, we're at $trans."
-                            3 -> "Transmission is running at $trans."
-                            else -> "Trans fluid is holding at $trans."
-                        }
-                        Triple("Transmission Temp", "Transmission Temp: $trans", spoken)
-                    }
-                    paramKey.contains("volt") -> {
-                        val volt = snapshot["voltage"] ?: "14.1V"
-                        val spoken = when (count % 4) {
-                            1 -> "Battery's charging at $volt."
-                            2 -> "Alternator output is holding at $volt."
-                            3 -> "System voltage is $volt right now."
-                            else -> "Charging voltage is at $volt."
-                        }
-                        Triple("Battery Voltage", "Battery Voltage: $volt", spoken)
-                    }
-                    else -> {
-                        val rpm = snapshot["rpm"] ?: "0"
-                        val speed = snapshot["speed"] ?: "0"
-                        val temp = snapshot["coolant"] ?: ""
-                        val spoken = when (count % 3) {
-                            1 -> "You're at $speed, turning $rpm, with coolant at $temp."
-                            2 -> "Gauges show $speed, $rpm, and coolant at $temp."
-                            else -> "Running at $speed and $rpm, temp is $temp."
-                        }
-                        Triple("Live Telemetry", "RPM: $rpm, Speed: $speed, Coolant: $temp", spoken)
-                    }
-                }
+                val (readingTriple, newPhraseIdx) = generateSituationalReading(
+                    parameter = parameter,
+                    snapshot = snapshot,
+                    lastIndex = watcher.lastPhraseIndex
+                )
+                watcher.lastPhraseIndex = newPhraseIdx
+                val (readingTitle, readingText, spokenText) = readingTriple
 
+                val finalSignoffs = listOf(
+                    " That wraps up this check—let me know if you want me to keep tracking it.",
+                    " That's the last report on that run. Holler if you want another look.",
+                    " All set on this check. Let me know if you need anything else monitored.",
+                    " That finishes up our scheduled check. Everything's logged.",
+                    " That's the final reading for this stretch."
+                )
                 val finalSuffix = if (isFinal && watcher.maxCount > 1) {
-                    " That wraps up this check—let me know if you want me to keep tracking it."
+                    finalSignoffs.random()
                 } else ""
                 val alert = SentinelAlert(
                     severity = SentinelSeverity.ADVISORY,
@@ -236,6 +176,278 @@ class VeraSentinelManager(
             put("total_duration_seconds", safeDuration)
             put("report_count", calcMaxCount)
             put("message", "I'll keep an eye on your $parameter and give you an update every $safeInterval seconds for the next $safeDuration seconds.")
+        }
+    }
+
+    private fun pickNaturalPhrase(pool: List<String>, lastIndex: Int): Pair<String, Int> {
+        if (pool.isEmpty()) return "" to 0
+        val candidates = pool.indices.filter { it != lastIndex }
+        val chosen = if (candidates.isNotEmpty()) candidates.random() else pool.indices.random()
+        return pool[chosen] to chosen
+    }
+
+    private fun generateSituationalReading(
+        parameter: String,
+        snapshot: Map<String, String>,
+        lastIndex: Int
+    ): Pair<Triple<String, String, String>, Int> {
+        val paramKey = parameter.lowercase()
+        return when {
+            paramKey.contains("fuel") || paramKey.contains("trim") -> {
+                val trim = snapshot["fuel_trim"] ?: "+0.0%"
+                val trimVal = trim.replace("%", "").replace("+", "").trim().toDoubleOrNull() ?: 0.0
+                val pool = when {
+                    trimVal > 4.0 -> listOf(
+                        "PCM is adding a little extra fuel, trims are at $trim.",
+                        "Trims are creeping slightly positive at $trim.",
+                        "Fuel delivery is trimming up, currently at $trim.",
+                        "Computer is compensating with a bit more fuel at $trim.",
+                        "Watching trims: they're sitting on the positive side at $trim.",
+                        "Slightly lean condition being corrected, trims are $trim.",
+                        "Trims are hovering around $trim right now.",
+                        "Fuel trim is up at $trim, keeping an eye on it.",
+                        "PCM is giving it a bit more fuel, reading $trim.",
+                        "Trims are positive at $trim, watching if they settle under load."
+                    )
+                    trimVal < -4.0 -> listOf(
+                        "Computer is pulling a little fuel, trims are at $trim.",
+                        "Trims are dipping negative, sitting at $trim.",
+                        "PCM is trimming out some fuel, currently at $trim.",
+                        "Slightly rich mixture being dialed back, trims at $trim.",
+                        "Trims are running negative at $trim right now.",
+                        "Fuel delivery is trimming back down, reading $trim.",
+                        "Computer's cutting back fuel slightly, trims are $trim.",
+                        "Trims are hovering on the negative side at $trim.",
+                        "Pulling fuel at $trim, keeping an eye on it.",
+                        "Trims are at $trim as the computer balances the mixture."
+                    )
+                    else -> listOf(
+                        "Fuel trims are sitting right at $trim, dead-on where they belong.",
+                        "Trims are nice and flat at $trim, running clean.",
+                        "Fuel delivery is balanced, holding at $trim.",
+                        "Computer's happy—fuel trims are hovering around $trim.",
+                        "Right in the sweet spot on fuel delivery at $trim.",
+                        "Trims look great, sitting steady at $trim.",
+                        "Everything's dialed in nicely, fuel trim is $trim.",
+                        "PCM isn't having to correct anything, trims are at $trim.",
+                        "Trims are clean and steady at $trim.",
+                        "Fuel trims are holding right around $trim."
+                    )
+                }
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Fuel Trim", "Fuel Trim: $trim", phrase) to chosenIdx
+            }
+            paramKey.contains("rpm") -> {
+                val rpm = snapshot["rpm"] ?: "0 RPM"
+                val rpmVal = rpm.replace("RPM", "").replace(",", "").trim().toDoubleOrNull() ?: 0.0
+                val pool = when {
+                    rpmVal < 1050.0 -> listOf(
+                        "Idling smooth and steady at $rpm.",
+                        "Idle is settled right in at $rpm.",
+                        "Sitting at a calm idle, $rpm.",
+                        "Idle speed is right where it belongs at $rpm.",
+                        "Resting easy at idle, turning $rpm.",
+                        "Engine's idling comfortably at $rpm.",
+                        "Smooth idle on the tach, reading $rpm.",
+                        "Tach is settled down at $rpm.",
+                        "Engine speed is holding at a steady $rpm idle.",
+                        "Currently idling at $rpm."
+                    )
+                    rpmVal > 2800.0 -> listOf(
+                        "Tach is up to $rpm right now.",
+                        "Engine's spinning at $rpm under load.",
+                        "You're pulling $rpm.",
+                        "Engine speed is up at $rpm.",
+                        "Revving at $rpm right now.",
+                        "Tach is reading $rpm.",
+                        "Working the engine a bit, tach is at $rpm.",
+                        "Spinning at $rpm.",
+                        "Holding $rpm under throttle.",
+                        "Engine's up at $rpm."
+                    )
+                    else -> listOf(
+                        "Cruising along at $rpm.",
+                        "Tach is sitting right around $rpm.",
+                        "Engine's humming smoothly at $rpm.",
+                        "Holding steady at $rpm.",
+                        "Turning $rpm right now.",
+                        "Engine speed is right at $rpm.",
+                        "You're at $rpm on the tach.",
+                        "Operating right in the power band at $rpm.",
+                        "Tach is holding around $rpm.",
+                        "Engine's turning about $rpm under this driving load."
+                    )
+                }
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Engine RPM", "Engine RPM: $rpm", phrase) to chosenIdx
+            }
+            paramKey.contains("coolant") || paramKey.contains("temp") -> {
+                val temp = snapshot["coolant"] ?: "195°F"
+                val tempVal = temp.replace("°F", "").replace("°C", "").trim().toDoubleOrNull() ?: 195.0
+                val isF = !temp.contains("°C")
+                val isHot = (isF && tempVal > 218.0) || (!isF && tempVal > 103.0)
+                val isWarming = (isF && tempVal < 170.0) || (!isF && tempVal < 77.0)
+                val pool = when {
+                    isHot -> listOf(
+                        "Coolant is running a bit on the warm side at $temp.",
+                        "Watching temp closely, it's up to $temp.",
+                        "Coolant gauge is reading a little elevated at $temp.",
+                        "Engine's running warm right now at $temp.",
+                        "Temp is creeping up, currently at $temp.",
+                        "Watching coolant temp: it's at $temp.",
+                        "Coolant is sitting higher than usual at $temp.",
+                        "Keeping an eye on cooling: we're at $temp.",
+                        "Temp gauge is showing $temp.",
+                        "Engine's warm at $temp, making sure it stabilizes."
+                    )
+                    isWarming -> listOf(
+                        "Engine is still warming up, coolant is at $temp.",
+                        "Still coming up to operating temperature, currently $temp.",
+                        "Coolant's climbing as it warms, sitting at $temp.",
+                        "Engine's still on the cooler side at $temp.",
+                        "Warming up nicely, coolant gauge is at $temp.",
+                        "Temp is at $temp, still reaching full operating temperature.",
+                        "Coolant is at $temp and rising normally.",
+                        "Still getting up to temp, reading $temp.",
+                        "Coolant's at $temp right now.",
+                        "Engine warming cycle: currently at $temp."
+                    )
+                    else -> listOf(
+                        "Coolant is right at normal operating temp, sitting at $temp.",
+                        "Temp gauge looks solid, holding steady at $temp.",
+                        "Engine temp is right in the sweet spot at $temp.",
+                        "Coolant's sitting pretty at $temp.",
+                        "Cooling system is doing its job, sitting at $temp.",
+                        "Temp is completely nominal at $temp.",
+                        "Looking at the gauge, coolant is at $temp.",
+                        "Temperature is right where we want it, $temp.",
+                        "Thermostat's holding it right at $temp.",
+                        "Engine's fully warmed up and sitting at $temp."
+                    )
+                }
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Coolant Temp", "Coolant Temp: $temp", phrase) to chosenIdx
+            }
+            paramKey.contains("speed") -> {
+                val speed = snapshot["speed"] ?: "0 mph"
+                val speedVal = speed.replace("mph", "").replace("km/h", "").trim().toDoubleOrNull() ?: 0.0
+                val pool = if (speedVal <= 1.0) {
+                    listOf(
+                        "Sitting stopped right now.",
+                        "At a complete standstill, zero speed.",
+                        "Vehicle is stationary at a stop.",
+                        "Stopped at zero speed right now.",
+                        "Sitting parked or stopped.",
+                        "At a standstill.",
+                        "Vehicle's stopped right now.",
+                        "Holding at a full stop.",
+                        "Zero speed, stationary.",
+                        "Sitting stopped right now."
+                    )
+                } else {
+                    listOf(
+                        "Cruising at $speed.",
+                        "Speed is holding at $speed.",
+                        "Rolling along at $speed.",
+                        "Speedometer is reading $speed.",
+                        "Holding a steady $speed.",
+                        "You're at $speed right now.",
+                        "Traveling at $speed.",
+                        "Speed is currently $speed.",
+                        "Maintaining $speed.",
+                        "Cruising smoothly at $speed."
+                    )
+                }
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Vehicle Speed", "Vehicle Speed: $speed", phrase) to chosenIdx
+            }
+            paramKey.contains("trans") -> {
+                val trans = snapshot["trans_temp"] ?: "180°F"
+                val transVal = trans.replace("°F", "").replace("°C", "").trim().toDoubleOrNull() ?: 180.0
+                val isF = !trans.contains("°C")
+                val isElevated = (isF && transVal > 200.0) || (!isF && transVal > 93.0)
+                val pool = if (isElevated) {
+                    listOf(
+                        "Transmission is running a bit warm at $trans.",
+                        "Trans fluid temp is slightly elevated at $trans.",
+                        "Watching transmission temp: it's up to $trans.",
+                        "Transmission fluid is at $trans right now.",
+                        "Keeping an eye on the trans cooler, reading $trans.",
+                        "Transmission temp is on the higher side at $trans.",
+                        "Fluid temp is climbing, currently at $trans.",
+                        "Watching the transmission: sitting at $trans.",
+                        "Trans temp is $trans, keeping an eye on it.",
+                        "Transmission is working a bit warm at $trans."
+                    )
+                } else {
+                    listOf(
+                        "Transmission temp looks solid at $trans.",
+                        "Fluid is running cool and happy at $trans.",
+                        "Trans temp is holding steady at $trans.",
+                        "Transmission is sitting at $trans, well within normal range.",
+                        "Fluid temperature is right where it needs to be at $trans.",
+                        "Transmission is running nice and cool at $trans.",
+                        "Trans fluid looks healthy at $trans.",
+                        "Glancing at the transmission gauge, it's at $trans.",
+                        "Trans temp is completely normal at $trans.",
+                        "Holding steady at $trans on the transmission."
+                    )
+                }
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Transmission Temp", "Transmission Temp: $trans", phrase) to chosenIdx
+            }
+            paramKey.contains("volt") -> {
+                val volt = snapshot["voltage"] ?: "14.1V"
+                val voltVal = volt.replace("V", "").trim().toDoubleOrNull() ?: 14.1
+                val pool = if (voltVal < 13.2) {
+                    listOf(
+                        "Voltage is sitting a bit low at $volt.",
+                        "Battery is reading $volt, charging output looks low.",
+                        "System voltage is down at $volt right now.",
+                        "Voltage is at $volt, keep an eye on the charging system.",
+                        "Alternator isn't putting out high voltage, sitting at $volt.",
+                        "Electrical bus is reading $volt.",
+                        "Battery voltage is resting at $volt.",
+                        "Reading $volt on the electrical system.",
+                        "Voltage is lower than normal at $volt.",
+                        "Watching battery voltage: currently at $volt."
+                    )
+                } else {
+                    listOf(
+                        "Alternator is charging nicely at $volt.",
+                        "Battery and charging system are solid at $volt.",
+                        "System voltage is holding strong at $volt.",
+                        "Alternator output is healthy at $volt.",
+                        "Charging system is right on the money at $volt.",
+                        "Voltage is looking great at $volt.",
+                        "Electrical system is steady at $volt.",
+                        "Voltage is sitting right at $volt.",
+                        "Alternator's doing its job, showing $volt.",
+                        "Solid 12-volt bus reading $volt right now."
+                    )
+                }
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Battery Voltage", "Battery Voltage: $volt", phrase) to chosenIdx
+            }
+            else -> {
+                val rpm = snapshot["rpm"] ?: "0"
+                val speed = snapshot["speed"] ?: "0"
+                val temp = snapshot["coolant"] ?: ""
+                val pool = listOf(
+                    "You're rolling at $speed, tach is reading $rpm, and coolant's sitting at $temp.",
+                    "Speed is $speed, turning $rpm, with the temp gauge at $temp.",
+                    "Holding $speed at $rpm, and engine temp looks good at $temp.",
+                    "Cruising at $speed, engine's humming at $rpm, coolant at $temp.",
+                    "Dashboard check: $speed, $rpm on the tach, and coolant's at $temp.",
+                    "Currently at $speed, turning $rpm, and engine is running at $temp.",
+                    "Sitting at $speed and $rpm, with coolant steady at $temp.",
+                    "Gauges look healthy: $speed, $rpm, and temp is $temp.",
+                    "Running smooth at $speed, $rpm, and coolant's right at $temp.",
+                    "Telemetry looks clean: $speed on the speedometer, $rpm, coolant holding at $temp."
+                )
+                val (phrase, chosenIdx) = pickNaturalPhrase(pool, lastIndex)
+                Triple("Live Telemetry", "RPM: $rpm, Speed: $speed, Coolant: $temp", phrase) to chosenIdx
+            }
         }
     }
 

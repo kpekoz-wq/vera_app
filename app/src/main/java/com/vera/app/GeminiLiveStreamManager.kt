@@ -903,7 +903,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         if (!_isLiveSessionActive.value) return false
         return try {
             val alertPrompt = if (isAdvisory) {
-                "IN-VEHICLE GAUGE & SENSOR READING: $alertText. Announce this reading naturally and casually to the driver in one brief sentence, as a seasoned mechanic sitting in the passenger seat watching the dashboard gauges. Do NOT say 'periodic update' or sound robotic."
+                "IN-VEHICLE GAUGE & SENSOR READING: $alertText. Announce this reading naturally and casually to the driver in one brief conversational sentence, the way an AI mechanic chats. Do NOT say 'periodic update' or sound robotic."
             } else {
                 "SAFETY ALERT: $alertText. Alert the driver clearly and concisely in one sentence as their master technician riding shotgun."
             }
