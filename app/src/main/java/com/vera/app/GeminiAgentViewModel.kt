@@ -156,51 +156,6 @@ class GeminiAgentViewModel : ViewModel() {
         )
     }
 
-    init {
-        if (messages.isEmpty()) {
-            messages.add(
-                ChatMessage(
-                    sender = "VERA",
-                    text = "Hello! I am VERA, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
-                )
-            )
-        }
-
-        // 1. Hook Sentinel Telemetry Evaluator to live metrics stream
-        viewModelScope.launch {
-            obdManager.metrics.collect { metrics ->
-                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
-                sentinelManager.evaluateTelemetry(
-                    metrics = metrics,
-                    streams = obdManager.supportedStreams.value,
-                    dtcDetails = _dtcDetails.value,
-                    mode06Results = obdManager.mode06Results.value,
-                    mode22Streams = obdManager.mode22Streams.value,
-                    unitSystem = unitSystem.value,
-                    isConnected = isConn
-                )
-            }
-        }
-
-        // 2. Periodic Silent DTC Polling while driving (checks Mode 03 & Mode 07 every 45s)
-        viewModelScope.launch {
-            while (isActive) {
-                delay(45_000L)
-                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
-                if (isConn) {
-                    try {
-                        val scanned = obdManager.scanAllDtcModes()
-                        if (scanned.isNotEmpty() || _dtcDetails.value.isNotEmpty()) {
-                            _dtcDetails.value = scanned
-                        }
-                    } catch (e: Exception) {
-                        Log.w("GeminiAgentViewModel", "Silent DTC periodic scan error", e)
-                    }
-                }
-            }
-        }
-    }
-
     private val _connectionStatus = MutableStateFlow("Disconnected")
     val connectionStatus: StateFlow<String> get() = _connectionStatus
 
@@ -1996,6 +1951,51 @@ class GeminiAgentViewModel : ViewModel() {
             } catch (e: Throwable) {
                 messages.add(ChatMessage("Error", "Gemini Request Error: ${e.message ?: e.toString()}"))
                 _isSendingMessage.value = false
+            }
+        }
+    }
+
+    init {
+        if (messages.isEmpty()) {
+            messages.add(
+                ChatMessage(
+                    sender = "VERA",
+                    text = "Hello! I am VERA, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
+                )
+            )
+        }
+
+        // 1. Hook Sentinel Telemetry Evaluator to live metrics stream (all StateFlows guaranteed initialized)
+        viewModelScope.launch {
+            obdManager.metrics.collect { metrics ->
+                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                sentinelManager.evaluateTelemetry(
+                    metrics = metrics,
+                    streams = obdManager.supportedStreams.value,
+                    dtcDetails = _dtcDetails.value,
+                    mode06Results = obdManager.mode06Results.value,
+                    mode22Streams = obdManager.mode22Streams.value,
+                    unitSystem = unitSystem.value,
+                    isConnected = isConn
+                )
+            }
+        }
+
+        // 2. Periodic Silent DTC Polling while driving (checks Mode 03 & Mode 07 every 45s)
+        viewModelScope.launch {
+            while (isActive) {
+                delay(45_000L)
+                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                if (isConn) {
+                    try {
+                        val scanned = obdManager.scanAllDtcModes()
+                        if (scanned.isNotEmpty() || _dtcDetails.value.isNotEmpty()) {
+                            _dtcDetails.value = scanned
+                        }
+                    } catch (e: Exception) {
+                        Log.w("GeminiAgentViewModel", "Silent DTC periodic scan error", e)
+                    }
+                }
             }
         }
     }
