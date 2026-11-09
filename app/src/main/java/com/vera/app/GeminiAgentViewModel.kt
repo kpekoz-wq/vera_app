@@ -586,7 +586,6 @@ class GeminiAgentViewModel : ViewModel() {
             VeraVoiceService.startService(it)
         }
 
-        val voice = mgr.voiceName.value
         val summary = buildTelemetrySnapshotForLive()
         val historyContext = buildRecentConversationContextForLive(maxMessages = 20)
         isNewLiveTurn = true
@@ -595,7 +594,7 @@ class GeminiAgentViewModel : ViewModel() {
         messages.add(
             ChatMessage(
                 "System",
-                "🎙️ Hands-Free Gemini Live Active (Voice: $voice).\nReal-time 2-way conversation running. Speak naturally—VERA has full live read-only telemetry access to your vehicle."
+                "Hands-free 2-way conversation is live.  Ask anything. Vera has full, live, read-only access to your vehicle's data."
             )
         )
 

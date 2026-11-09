@@ -4292,12 +4292,13 @@ fun VeraMainScreen(
             val isVoiceActive = isLiveSessionActive || isHandsFreeVoiceActive
             val isListening = isVoiceActive && !isGeminiSpeaking
 
+            // Full brightness at start (1.0f), then smooth slow fade to 0.15f, then back to full brightness
             val infiniteTransition = rememberInfiniteTransition(label = "voicePulseTransition")
             val pulseAlpha by infiniteTransition.animateFloat(
-                initialValue = 0.45f,
-                targetValue = 1.0f,
+                initialValue = 1.0f,
+                targetValue = 0.18f,
                 animationSpec = infiniteRepeatable(
-                    animation = tween(1100, easing = FastOutSlowInEasing),
+                    animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse
                 ),
                 label = "voiceListeningPulse"
@@ -4311,11 +4312,15 @@ fun VeraMainScreen(
 
             val voiceBorderColor = when {
                 isGeminiSpeaking -> Color(0xFF38BDF8)
-                isListening -> Color(0xFF00E5FF).copy(alpha = (pulseAlpha + 0.2f).coerceAtMost(1f))
+                isListening -> Color(0xFF00E5FF).copy(alpha = (pulseAlpha + 0.25f).coerceAtMost(1f))
                 else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
             }
 
-            val voiceContentColor = if (isVoiceActive) Color(0xFF070D18) else MaterialTheme.colorScheme.primary
+            val voiceContentColor = when {
+                isGeminiSpeaking -> Color(0xFF070D18)
+                isListening -> if (pulseAlpha > 0.55f) Color(0xFF070D18) else Color(0xFF00E5FF)
+                else -> MaterialTheme.colorScheme.primary
+            }
 
             Surface(
                 onClick = {
