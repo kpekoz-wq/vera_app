@@ -179,6 +179,13 @@ class VeraSentinelManager(
         }
     }
 
+    fun hasActiveWatcher(parameter: String): Boolean {
+        val clean = parameter.lowercase().trim()
+        return scheduledWatchers.values.any { w ->
+            w.job?.isActive == true && (clean == "all" || w.parameter.contains(clean, ignoreCase = true) || clean.contains(w.parameter, ignoreCase = true))
+        }
+    }
+
     private fun pickNaturalPhrase(pool: List<String>, lastIndex: Int): Pair<String, Int> {
         if (pool.isEmpty()) return "" to 0
         val candidates = pool.indices.filter { it != lastIndex }

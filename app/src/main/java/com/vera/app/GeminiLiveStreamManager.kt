@@ -7,6 +7,10 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -46,12 +50,15 @@ class GeminiLiveStreamManager(private val context: Context) {
     }
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // Indefinite streaming connection
-        .writeTimeout(15, TimeUnit.SECONDS)
-        .pingInterval(15, TimeUnit.SECONDS) // Send WebSocket PING every 15s to keep cellular NAT & towers alive
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .pingInterval(8, TimeUnit.SECONDS) // Send WebSocket PING every 8s for prompt dead-socket detection in rural areas
         .retryOnConnectionFailure(true)
         .build()
+
+    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private var webSocket: WebSocket? = null
     private var audioRecord: AudioRecord? = null
@@ -164,6 +171,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         _isLiveSessionActive.value = true
         _isGeminiSpeaking.value = true // Initial state: suppress mic while connecting and greeting
 
+        registerNetworkCallbackIfNeeded()
         initAudioPlayer()
         connectWebSocket(isReconnect = false)
     }
@@ -178,6 +186,7 @@ class GeminiLiveStreamManager(private val context: Context) {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.i(TAG, "Gemini Live WebSocket opened successfully (isReconnect=$isReconnect).")
                 reconnectAttempts = 0
+                isReconnecting = false
 
                 // 1. Send Setup Frame FIRST with Voice, Tools, & Vehicle System Instructions
                 sendSetupFrame(ws, lastSystemInstruction, lastTelemetrySummary, lastConversationHistory, _voiceName.value)
@@ -856,19 +865,62 @@ class GeminiLiveStreamManager(private val context: Context) {
         ws.send(responseObj.toString())
     }
 
+    private fun registerNetworkCallbackIfNeeded() {
+        if (networkCallback != null) return
+        val cm = connectivityManager ?: return
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    Log.i(TAG, "Cellular/Wi-Fi network connection became available.")
+                    if (!isExplicitlyStopped && isReconnecting && _isLiveSessionActive.value) {
+                        scope.launch {
+                            delay(600) // Brief cellular transport stabilization
+                            if (!isExplicitlyStopped && isReconnecting && _isLiveSessionActive.value) {
+                                Log.i(TAG, "Network restored while driving. Fast-tracking live auto-reconnect...")
+                                reconnectJob?.cancel()
+                                tearDownSocketAndMic()
+                                connectWebSocket(isReconnect = true)
+                            }
+                        }
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    Log.w(TAG, "Cellular/Wi-Fi network connection lost while driving.")
+                }
+            }
+            cm.registerNetworkCallback(request, callback)
+            networkCallback = callback
+            Log.i(TAG, "Registered network connectivity callback for hands-free live driving.")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register network callback: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val cb = networkCallback ?: return
+        val cm = connectivityManager ?: return
+        try {
+            cm.unregisterNetworkCallback(cb)
+        } catch (_: Exception) {}
+        networkCallback = null
+    }
+
     private fun attemptReconnect(reason: String) {
         if (isExplicitlyStopped || !_isLiveSessionActive.value) return
 
-        if (reconnectAttempts >= 5) {
-            Log.e(TAG, "Max reconnect attempts (5) reached while driving. Stopping live session.")
-            lastOnError?.invoke("Network connection lost while driving: $reason")
-            stopLiveSession()
-            return
-        }
-
         reconnectAttempts++
         isReconnecting = true
-        val backoffMs = (reconnectAttempts * 1500L).coerceAtMost(6000L)
+        // Fast retries for momentary blips (1.5s, 3s, 4.5s), then steady 8s periodic probing
+        // while networkCallback also actively listens for signal restoration to fast-track reconnect.
+        val backoffMs = if (reconnectAttempts <= 3) {
+            reconnectAttempts * 1500L
+        } else {
+            8000L
+        }
         Log.w(TAG, "Cellular/network disconnect ($reason). Auto-reconnecting attempt #$reconnectAttempts in ${backoffMs}ms...")
 
         reconnectJob?.cancel()
@@ -940,6 +992,8 @@ class GeminiLiveStreamManager(private val context: Context) {
 
         // Suppress any error reporting on intentional stop
         lastOnError = null
+
+        unregisterNetworkCallback()
 
         _isLiveSessionActive.value = false
         _isGeminiSpeaking.value = false

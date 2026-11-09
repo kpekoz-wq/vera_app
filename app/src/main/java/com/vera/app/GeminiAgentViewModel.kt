@@ -698,6 +698,10 @@ class GeminiAgentViewModel : ViewModel() {
                     isNewLiveTurn = true
                     isNewUserTurn = true
                     autoSaveCurrentSession()
+                    val lastUserMsg = messages.lastOrNull { it.sender == "User" }?.text
+                    if (!lastUserMsg.isNullOrBlank()) {
+                        checkAndExecuteLocalMonitoringIntent(lastUserMsg)
+                    }
                 }
             },
             onToolCall = { toolName, callId, args ->
@@ -1245,6 +1249,122 @@ class GeminiAgentViewModel : ViewModel() {
             Log.e("GeminiAgentViewModel", "Error in live tool $name", e)
             JSONObject().put("error", e.message ?: "Failed to execute tool")
         }
+    }
+
+    fun checkAndExecuteLocalMonitoringIntent(userText: String): Boolean {
+        val lower = userText.lowercase().trim()
+
+        // 1. Check for cancellation
+        if (lower.contains("stop monitor") || lower.contains("cancel monitor") ||
+            lower.contains("stop watch") || lower.contains("cancel watch") ||
+            lower.contains("stop checking") || lower.contains("stop reporting") ||
+            lower == "stop" || lower == "cancel") {
+            sentinelManager.cancelAlerts("all")
+            val msg = "I've stopped the recurring monitoring reports."
+            messages.add(ChatMessage("VERA", msg))
+            autoSaveCurrentSession()
+            if (isVoiceModeActive) {
+                val liveInjected = if (_isHandsFreeVoiceActive.value) {
+                    liveStreamManager?.injectDriverAlert(msg, isAdvisory = true) ?: false
+                } else false
+                if (!liveInjected) speak(msg)
+            }
+            return true
+        }
+
+        // 2. Check for scheduling / periodic intent keywords
+        val isMonitoringIntent = lower.contains("monitor") || lower.contains("watch") ||
+                lower.contains("track") || lower.contains("report") || lower.contains("update") ||
+                lower.contains("check") || lower.contains("keep an eye")
+
+        val hasRecurringKeyword = lower.contains("every") || lower.contains("each") ||
+                lower.contains("periodic") || lower.contains("regular") || lower.contains("interval") ||
+                lower.contains("second") || lower.contains("minute")
+
+        if (!isMonitoringIntent || !hasRecurringKeyword) return false
+
+        // Extract parameter
+        val parameter = when {
+            lower.contains("fuel") || lower.contains("trim") -> "fuel_trim"
+            lower.contains("rpm") || lower.contains("tach") || lower.contains("rev") || lower.contains("engine speed") -> "rpm"
+            lower.contains("coolant") || lower.contains("water temp") || lower.contains("engine temp") || (lower.contains("temp") && !lower.contains("trans")) -> "coolant"
+            lower.contains("speed") || lower.contains("mph") || lower.contains("kmh") -> "speed"
+            lower.contains("trans") || lower.contains("transmission") -> "trans_temp"
+            lower.contains("volt") || lower.contains("battery") || lower.contains("alternator") -> "voltage"
+            else -> "all"
+        }
+
+        if (sentinelManager.hasActiveWatcher(parameter)) {
+            // Already actively tracking this parameter from a concurrent call
+            return false
+        }
+
+        // Extract interval seconds (e.g. "every 20 seconds", "every 15s", "every 10 sec", "every minute")
+        var intervalSeconds = 20
+        val intervalMatch = Regex("""(?:every|each)\s+(\d+)\s*(?:s|sec|secs|seconds?)?""").find(lower)
+        if (intervalMatch != null) {
+            val num = intervalMatch.groupValues[1].toIntOrNull()
+            if (num != null && num > 0) intervalSeconds = num
+        } else if (lower.contains("every minute") || lower.contains("each minute")) {
+            intervalSeconds = 60
+        } else if (lower.contains("every half minute") || lower.contains("every 30")) {
+            intervalSeconds = 30
+        }
+
+        // Extract duration seconds (e.g. "for a minute", "for 2 minutes", "for 60 seconds")
+        var durationSeconds = 60
+        val durationMatchSec = Regex("""for\s+(\d+)\s*(?:s|sec|secs|seconds?)""").find(lower)
+        val durationMatchMin = Regex("""for\s+(\d+)\s*(?:m|min|mins|minutes?)""").find(lower)
+        if (durationMatchSec != null) {
+            val num = durationMatchSec.groupValues[1].toIntOrNull()
+            if (num != null && num > 0) durationSeconds = num
+        } else if (durationMatchMin != null) {
+            val num = durationMatchMin.groupValues[1].toIntOrNull()
+            if (num != null && num > 0) durationSeconds = num * 60
+        } else if (lower.contains("for a minute") || lower.contains("for one minute")) {
+            durationSeconds = 60
+        } else if (lower.contains("for 2 minutes") || lower.contains("for two minutes")) {
+            durationSeconds = 120
+        } else if (intervalSeconds >= 30) {
+            durationSeconds = intervalSeconds * 3
+        }
+
+        val safeDuration = durationSeconds.coerceAtLeast(intervalSeconds)
+
+        val readableParam = when (parameter) {
+            "fuel_trim" -> "fuel trims"
+            "rpm" -> "engine RPM"
+            "coolant" -> "coolant temperature"
+            "speed" -> "vehicle speed"
+            "trans_temp" -> "transmission temperature"
+            "voltage" -> "battery voltage"
+            else -> "gauges"
+        }
+
+        Log.i("GeminiAgentViewModel", "Local Monitoring Intent Triggered: param=$parameter, interval=${intervalSeconds}s, duration=${safeDuration}s")
+
+        sentinelManager.schedulePeriodicReport(
+            parameter = parameter,
+            intervalSeconds = intervalSeconds,
+            durationSeconds = safeDuration,
+            repeatCount = 0,
+            currentUnit = unitSystem.value,
+            getTelemetrySnapshot = { buildTelemetrySnapshotMap() }
+        )
+
+        val confirmMsg = "I'll keep an eye on your $readableParam and give you an update every $intervalSeconds seconds."
+        messages.add(ChatMessage("VERA", confirmMsg))
+        autoSaveCurrentSession()
+
+        if (isVoiceModeActive) {
+            val liveInjected = if (_isHandsFreeVoiceActive.value) {
+                liveStreamManager?.injectDriverAlert(confirmMsg, isAdvisory = true) ?: false
+            } else false
+            if (!liveInjected) {
+                speak(confirmMsg)
+            }
+        }
+        return true
     }
 
     val liveVoiceName: StateFlow<String>
@@ -1981,6 +2101,11 @@ class GeminiAgentViewModel : ViewModel() {
 
         val displayMsg = (userText + attachmentLabel).trim()
         messages.add(ChatMessage("User", displayMsg))
+
+        if (allAttachments.isEmpty() && checkAndExecuteLocalMonitoringIntent(userText)) {
+            // Local monitoring intent satisfied immediately on device with zero latency
+            return
+        }
 
         viewModelScope.launch {
             try {
