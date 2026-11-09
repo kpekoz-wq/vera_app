@@ -2663,7 +2663,7 @@ fun VeraMainScreen(
                                     if (vehicleDetails != null) appendLine("Vehicle: $vehicleDetails")
                                     if (vehicleVin != null) appendLine("VIN: $vehicleVin")
                                     appendLine()
-                                    appendLine("--- Your Feedback / Feature Request / Bug Report ---")
+                                    appendLine("Hey Kenan, I have some feedback about Vera...")
                                     appendLine()
                                 }
                                 putExtra(Intent.EXTRA_TEXT, body)
