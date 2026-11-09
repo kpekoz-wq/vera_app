@@ -594,7 +594,7 @@ class GeminiAgentViewModel : ViewModel() {
         messages.add(
             ChatMessage(
                 "System",
-                "Hands-free conversation is live.  Ask anything! Vera has full, live, read-only access to your vehicle's data.  You can chat while you drive. Vera will keep your phone awake."
+                "Hands-free 2-way conversation is live.  Ask anything. Vera has full, live, read-only access to your vehicle's data."
             )
         )
 
@@ -746,14 +746,19 @@ class GeminiAgentViewModel : ViewModel() {
                - Speak naturally, warmly, and conversationally, like a seasoned, sharp mechanic sitting in the passenger seat.
                - Keep spoken answers concise (1 to 3 sentences) so the driver stays focused on the road.
                - NEVER recite raw PIDs, sensor codes, raw voltages, or test IDs out loud unless the driver explicitly asks for exact numbers.
-               - Give clear plain-English verdicts:
-                 * Healthy vehicle: "Everything is purring smoothly—coolant, fuel trims, and battery voltage are right in the sweet spot."
-                 * Issue detected: "I'm catching a misfire on cylinder three under load. Before buying new parts, once we're parked we'll swap the coil with cylinder one to see if the misfire follows it."
-            2. MANDATORY REAL-TIME TELEMETRY RETRIEVAL:
+            2. MANDATORY REAL-TIME TELEMETRY RETRIEVAL & GROUNDING:
                - Vehicle telemetry (RPM, coolant temperature, speed, fuel trims, error codes, odometer mileage) changes dynamically while driving.
-               - Whenever the driver asks about their engine, mileage, odometer, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_vehicle_info`, `get_live_data`, `get_dtcs`, `get_mode06_results`, `get_obdb_signals`) BEFORE GIVING YOUR ANSWER.
+               - If OBD2 is DISCONNECTED:
+                 * You DO NOT have access to live vehicle telemetry, engine RPM, coolant temperature, speed, battery voltage, or trouble codes.
+                 * You MUST NEVER state "everything looks fine", "all indicators look great", or guess sensor values when disconnected.
+                 * If the driver asks about their vehicle's health, data, speed, RPM, codes, or engine while disconnected, you MUST explicitly tell them: "We're not connected to your vehicle's OBD2 port right now, so I cannot see your live data or trouble codes. Please connect your OBD2 adapter or select Demo Mode in the app."
+               - If OBD2 is CONNECTED:
+                 * Whenever the driver asks about their engine, mileage, odometer, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_vehicle_info`, `get_live_data`, `get_dtcs`, `get_mode06_results`, `get_obdb_signals`) BEFORE GIVING YOUR ANSWER.
+                 * Ground your diagnostic verdict strictly in the returned live data.
+                 * Healthy verdict (ONLY when connected with normal data): "Everything is purring smoothly—coolant, fuel trims, and battery voltage are right in the sweet spot."
+                 * Issue verdict: "I'm catching a misfire on cylinder five under load. Before buying new parts, once we're parked we'll swap the coil with cylinder one to see if the misfire follows it."
                - ALWAYS obey the active unit system ($unitRules) when speaking numbers out loud!
-               - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info`.
+               - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info` when connected.
             3. SAFETY FIRST:
                - The driver is operating a vehicle. Never give instructions that require them to look away from the road or manipulate parts while driving.
         """.trimIndent()
@@ -761,6 +766,23 @@ class GeminiAgentViewModel : ViewModel() {
 
     private fun buildTelemetrySnapshotForLive(): String {
         val isConnected = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+        val currentUnit = unitSystem.value
+        val isMetric = currentUnit == UnitSystem.METRIC
+
+        if (!isConnected) {
+            return """
+                OBD2 CONNECTION STATUS: DISCONNECTED (NOT CONNECTED TO VEHICLE)
+                Vehicle: None detected (Disconnected)
+                VIN: None (Disconnected)
+                Odometer: Unavailable (Disconnected)
+                Active DTCs: UNAVAILABLE - Disconnected from vehicle ECU
+                Live Telemetry: UNAVAILABLE - Disconnected from vehicle ECU
+                Mode 06 Monitors: UNAVAILABLE - Disconnected from vehicle ECU
+                
+                DIRECTIVE: The OBD2 adapter is currently DISCONNECTED. You DO NOT have live vehicle telemetry or error codes. Do NOT say everything looks fine or that indicators look great. If asked about live vehicle data, inform the driver that you are not connected to the vehicle yet.
+            """.trimIndent()
+        }
+
         val metrics = obdManager.metrics.value
         val dtcs = troubleCodes.value
         val vin = obdManager.vehicleVin.value ?: "Scanning/Pending"
@@ -768,8 +790,6 @@ class GeminiAgentViewModel : ViewModel() {
         val m06 = obdManager.mode06Results.value
         val streams = obdManager.supportedStreams.value
         val odoKm = obdManager.vehicleOdometerKm.value
-        val currentUnit = unitSystem.value
-        val isMetric = currentUnit == UnitSystem.METRIC
 
         val streamsText = if (streams.isNotEmpty()) {
             streams.take(15).joinToString(", ") { s ->
@@ -788,13 +808,12 @@ class GeminiAgentViewModel : ViewModel() {
         } else "Not detected"
         val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
         val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
-        val connStatus = if (isConnected) "Connected & Polling ECU" else "Adapter in negotiation (invoke get_live_data or get_vehicle_info for live status)"
 
         return """
             Vehicle: $vehicle (VIN: $vin)
             Odometer: $odoText
             Unit System Preference: ${if (isMetric) "METRIC (km/h, °C, kPa, km)" else "SAE (mph, °F, psi, miles)"}
-            OBD2 Connection: $connStatus
+            OBD2 Connection: Connected & Polling ECU
             Active DTCs: $dtcText
             Latest Telemetry: $streamsText
             Mode 06 Monitors: $m06Text
@@ -804,16 +823,23 @@ class GeminiAgentViewModel : ViewModel() {
     private fun executeLiveTool(name: String, callId: String, @Suppress("UNUSED_PARAMETER") args: JSONObject): JSONObject {
         Log.i("GeminiAgentViewModel", "Executing live tool: $name ($callId)")
         return try {
+            val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
             when (name) {
                 "get_live_data" -> {
+                    if (!isConn) {
+                        return JSONObject().apply {
+                            put("connected", false)
+                            put("status", "DISCONNECTED")
+                            put("error", "OBD2 adapter is not connected to the vehicle. No live telemetry available. Instruct user to connect to the vehicle OBD2 adapter or launch Demo Mode.")
+                        }
+                    }
                     val metrics = obdManager.metrics.value
                     val streams = obdManager.supportedStreams.value
-                    val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
                     val voltage = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
-                        put("connected", isConn)
+                        put("connected", true)
                         put("driver_unit_system", if (isMetric) "METRIC (State speeds in km/h, temps in °C, pressures in kPa, distances in km)" else "SAE (State speeds in mph, temps in °F, pressures in psi, distances in miles)")
                         put("rpm", metrics.rpm)
                         put("is_engine_running", metrics.rpm > 300)
@@ -862,9 +888,17 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
                 "get_dtcs" -> {
+                    if (!isConn) {
+                        return JSONObject().apply {
+                            put("connected", false)
+                            put("status", "DISCONNECTED")
+                            put("error", "OBD2 adapter is not connected. Diagnostic trouble codes cannot be read.")
+                        }
+                    }
                     val dtcs = dtcDetails.value
                     val codes = troubleCodes.value
                     JSONObject().apply {
+                        put("connected", true)
                         put("active_trouble_codes_count", codes.size)
                         put("codes", JSONArray(codes))
                         val detailsArr = JSONArray()
@@ -879,8 +913,16 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
                 "get_mode06_results" -> {
+                    if (!isConn) {
+                        return JSONObject().apply {
+                            put("connected", false)
+                            put("status", "DISCONNECTED")
+                            put("error", "OBD2 adapter is not connected. Mode 06 component monitors cannot be read.")
+                        }
+                    }
                     val m06 = obdManager.mode06Results.value
                     JSONObject().apply {
+                        put("connected", true)
                         put("monitors_count", m06.size)
                         val monArr = JSONArray()
                         for (m in m06) {
@@ -898,10 +940,21 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
                 "get_vehicle_info" -> {
+                    if (!isConn) {
+                        return JSONObject().apply {
+                            put("connected", false)
+                            put("status", "DISCONNECTED")
+                            put("vin", "None (Disconnected)")
+                            put("vehicle_details", "No vehicle connected")
+                            put("odometer", "Unavailable")
+                            put("error", "OBD2 adapter is not connected to vehicle.")
+                        }
+                    }
                     val odoKm = obdManager.vehicleOdometerKm.value
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
+                        put("connected", true)
                         put("vin", obdManager.vehicleVin.value ?: "Not available")
                         put("vehicle_details", obdManager.vehicleDetails.value ?: "Not available")
                         put("driver_unit_system", if (isMetric) "METRIC (State distance in km)" else "SAE (State distance in miles)")
@@ -921,10 +974,18 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
                 "get_obdb_signals" -> {
+                    if (!isConn) {
+                        return JSONObject().apply {
+                            put("connected", false)
+                            put("status", "DISCONNECTED")
+                            put("error", "OBD2 adapter is not connected. Custom Mode 22 signals unavailable.")
+                        }
+                    }
                     val m22 = obdManager.mode22Streams.value
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
+                        put("connected", true)
                         put("driver_unit_system", if (isMetric) "METRIC (State temps in °C, pressures in kPa, distances in km)" else "SAE (State temps in °F, pressures in psi, distances in miles)")
                         val arr = JSONArray()
                         for (p in m22) {
@@ -1708,11 +1769,13 @@ class GeminiAgentViewModel : ViewModel() {
                 } else {
                     """
                         [Vehicle OBD2 Status: DISCONNECTED]
+                        [Live Telemetry: UNAVAILABLE - No connection to vehicle ECU]
                         $fileAttachmentContext
 
-                        CRITICAL INSTRUCTION: Speak naturally in plain English like a real human mechanic riding shotgun. Do NOT recite raw sensor numbers, PIDs, temperatures, voltages, or test IDs out loud unless specifically requested.
-                        Healthy verdict example: "Let me know if there's a specific problem you're experiencing, but from all the indicators I'm watching, everything looks great."
-                        Issue verdict example: "I'm seeing some misfires on cylinder 3—maybe dirty spark plugs, fuel injectors, or a dirty throttle body. Try turning on the AC and see if it stops under load."
+                        CRITICAL INSTRUCTION: You are currently DISCONNECTED from the vehicle's OBD2 port. You have NO access to live vehicle telemetry, engine RPM, sensors, or trouble codes.
+                        - If the driver asks about their current vehicle data, engine status, trouble codes, or vehicle health, YOU MUST EXPLICITLY TELL THEM that you are not connected to the vehicle's OBD2 adapter yet, and instruct them to connect an adapter or start Demo Mode in the app so you can read their live data.
+                        - DO NOT claim, hallucinate, or assume that "everything looks fine", "all indicators look great", or that sensors are normal when disconnected.
+                        - You CAN answer general automotive, repair, or mechanic questions, but clarify that you cannot see their specific vehicle's real-time data until connected.
 
                         Driver Question: $userText
                     """.trimIndent()
