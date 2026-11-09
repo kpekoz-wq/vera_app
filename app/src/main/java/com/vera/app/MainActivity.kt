@@ -40,19 +40,25 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -2028,8 +2034,8 @@ fun VeraMainScreen(
     val availableDevices = remember(expanded) { viewModel.getAvailableDevices(context) }
     var unitDropdownExpanded by remember { mutableStateOf(false) }
 
-    val demoCleanLabel = "🚗 Demo: Clean ECU (Healthy Vehicle)"
-    val demoDirtyLabel = "⚠️ Demo: Dirty ECU (Cyl 5 Misfire & P0305)"
+    val demoCleanLabel = "Demo: Clean ECU (Healthy Vehicle)"
+    val demoDirtyLabel = "Demo: Dirty ECU (Cyl 5 Misfire & P0305)"
 
     var selectedDeviceText by remember { 
         mutableStateOf(
@@ -2137,14 +2143,14 @@ fun VeraMainScreen(
                     "com.vera.app.USB_PERMISSION" -> {
                         val granted = intent.getBooleanExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, false)
                         if (granted) {
-                            Toast.makeText(context, "🔌 USB Permission granted! Connecting to Vgate vLinker FS...", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "USB Permission granted! Connecting to Vgate vLinker FS...", Toast.LENGTH_SHORT).show()
                             viewModel.connectToCar(macAddress, context)
                         } else {
                             Toast.makeText(context, "USB Permission denied.", Toast.LENGTH_SHORT).show()
                         }
                     }
                     android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                        Toast.makeText(context, "🔌 Wired USB OBD2 Adapter Connected!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Wired USB OBD2 Adapter Connected!", Toast.LENGTH_SHORT).show()
                         val available = viewModel.getAvailableDevices(context)
                         val usbDev = available.find { it.isUsb }
                         if (usbDev != null) {
@@ -2153,7 +2159,7 @@ fun VeraMainScreen(
                         }
                     }
                     android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                        Toast.makeText(context, "🔌 Wired USB OBD2 Adapter Disconnected.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Wired USB OBD2 Adapter Disconnected.", Toast.LENGTH_SHORT).show()
                         viewModel.disconnectFromCar()
                     }
                 }
@@ -2870,12 +2876,20 @@ fun VeraMainScreen(
                                 onValueChange = { macAddress = it },
                                 label = { Text("MAC / Wi-Fi IP / USB ID", fontSize = 11.sp) },
                                 placeholder = { Text("e.g. 192.168.0.10:35000, 00:1D:A5...", fontSize = 11.sp) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
                                 textStyle = TextStyle(fontSize = 12.sp),
                                 shape = RoundedCornerShape(10.dp),
                                 singleLine = true,
                                 trailingIcon = {
                                     TextButton(onClick = { useManualInput = false }) {
-                                        Text("Devices 📋", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Text("Devices", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                     }
                                 },
                                 modifier = Modifier.weight(1f)
@@ -2891,6 +2905,26 @@ fun VeraMainScreen(
                                     onValueChange = {},
                                     readOnly = true,
                                     label = { Text("Select OBD2 Dongle (BT / USB / Wi-Fi)", fontSize = 11.sp) },
+                                    leadingIcon = {
+                                        val (icon, tint) = when {
+                                            macAddress == "DEMO_SIMULATOR_CLEAN" || selectedDeviceText == demoCleanLabel ->
+                                                Icons.Default.DirectionsCar to Color(0xFF00E676)
+                                            macAddress == "DEMO_SIMULATOR_DIRTY" || selectedDeviceText == demoDirtyLabel ->
+                                                Icons.Default.Warning to Color(0xFFFF5252)
+                                            macAddress.startsWith("USB:") || selectedDeviceText.contains("USB", ignoreCase = true) ->
+                                                Icons.Default.Usb to MaterialTheme.colorScheme.primary
+                                            macAddress.startsWith("WIFI:") || selectedDeviceText.contains("Wi-Fi", ignoreCase = true) ->
+                                                Icons.Default.Wifi to Color(0xFF00E5FF)
+                                            else ->
+                                                Icons.Default.Bluetooth to Color(0xFF80D8FF)
+                                        }
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = null,
+                                            tint = tint,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    },
                                     textStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium),
                                     shape = RoundedCornerShape(10.dp),
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
@@ -2904,6 +2938,14 @@ fun VeraMainScreen(
                                 ) {
                                     // Option 1: Virtual Clean ECU Simulator
                                     DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.DirectionsCar,
+                                                contentDescription = null,
+                                                tint = Color(0xFF00E676),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        },
                                         text = {
                                             Text(
                                                 demoCleanLabel,
@@ -2922,6 +2964,14 @@ fun VeraMainScreen(
 
                                     // Option 2: Virtual Dirty ECU Simulator (Faulty Cyl 5 Misfire & P0305)
                                     DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Warning,
+                                                contentDescription = null,
+                                                tint = Color(0xFFFF5252),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        },
                                         text = {
                                             Text(
                                                 demoDirtyLabel,
@@ -2945,7 +2995,20 @@ fun VeraMainScreen(
                                         )
 
                                         availableDevices.forEach { device ->
+                                            val (deviceIcon, deviceColor) = when {
+                                                device.isUsb -> Icons.Default.Usb to MaterialTheme.colorScheme.primary
+                                                device.isWifi -> Icons.Default.Wifi to Color(0xFF00E5FF)
+                                                else -> Icons.Default.Bluetooth to Color(0xFF80D8FF)
+                                            }
                                             DropdownMenuItem(
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = deviceIcon,
+                                                        contentDescription = null,
+                                                        tint = deviceColor,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                },
                                                 text = { 
                                                     Text(
                                                         device.name, 
@@ -2974,9 +3037,17 @@ fun VeraMainScreen(
 
                                     // Option 3: Enter MAC / Wi-Fi IP Manually
                                     DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        },
                                         text = {
                                             Text(
-                                                "✏️ Enter MAC or Wi-Fi IP Manually...",
+                                                "Enter MAC or Wi-Fi IP Manually...",
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = MaterialTheme.colorScheme.primary

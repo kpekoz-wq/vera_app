@@ -2364,7 +2364,7 @@ class BluetoothObdManager {
                         dev.vendorId == 0x10C4 -> "Wired CP210x USB OBD2"
                         else -> "Wired USB OBD2 (${dev.manufacturerName ?: "vLinker FS"})"
                     }
-                    list.add(ObdDeviceItem(name = "🔌 $devName", address = "USB:${dev.deviceId}", isUsb = true))
+                    list.add(ObdDeviceItem(name = devName, address = "USB:${dev.deviceId}", isUsb = true))
                 }
             }
         } catch (e: Exception) {
@@ -2374,7 +2374,7 @@ class BluetoothObdManager {
         // 2. Add Standard Wi-Fi OBD2 Adapter option (ELM327 Wi-Fi / Vgate / Veepeak)
         list.add(
             ObdDeviceItem(
-                name = "📶 Wi-Fi OBD2 (192.168.0.10:35000)",
+                name = "Wi-Fi OBD2 (192.168.0.10:35000)",
                 address = "WIFI:192.168.0.10:35000",
                 isUsb = false,
                 isWifi = true
@@ -2393,7 +2393,7 @@ class BluetoothObdManager {
             }
             for (dev in sortedBt) {
                 val name = try { dev.name ?: "Unknown OBD" } catch (_: SecurityException) { "OBD Device" }
-                list.add(ObdDeviceItem(name = "📡 $name (${dev.address})", address = dev.address, isUsb = false, isWifi = false))
+                list.add(ObdDeviceItem(name = "$name (${dev.address})", address = dev.address, isUsb = false, isWifi = false))
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error listing Bluetooth devices", e)
@@ -2431,7 +2431,7 @@ class BluetoothObdManager {
             fetchVehicleVin()
             fetchVehicleOdometer()
 
-            _connectionState.value = ConnectionState.Connected("📶 Wi-Fi OBD ($host:$port)")
+            _connectionState.value = ConnectionState.Connected("Wi-Fi OBD ($host:$port)")
             startPollingLoop()
 
             Log.i(TAG, "Successfully connected to Wi-Fi OBD2 adapter at $host:$port.")
@@ -2500,7 +2500,7 @@ class BluetoothObdManager {
             fetchVehicleOdometer()
 
             val devName = device.manufacturerName ?: "Vgate vLinker FS USB"
-            _connectionState.value = ConnectionState.Connected("🔌 $devName")
+            _connectionState.value = ConnectionState.Connected("USB: $devName")
 
             startPollingLoop()
             Result.success(Unit)
