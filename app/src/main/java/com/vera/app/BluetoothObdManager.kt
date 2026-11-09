@@ -1887,7 +1887,8 @@ class BluetoothObdManager {
             val dtcs = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) {
                 listOf(
                     DtcDetails("P0305", "Stored / Active", "Cylinder 5 Misfire Detected"),
-                    DtcDetails("P0171", "Stored / Active", "System Too Lean (Bank 1)")
+                    DtcDetails("P0171", "Stored / Active", "System Too Lean (Bank 1)"),
+                    DtcDetails("P0442", "Pending", "EVAP System Small Leak (0.040 in) Detected")
                 )
             } else {
                 emptyList()

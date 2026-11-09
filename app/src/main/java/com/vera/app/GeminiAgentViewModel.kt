@@ -15,9 +15,13 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -105,6 +109,52 @@ class GeminiAgentViewModel : ViewModel() {
 
     val messages = mutableStateListOf<ChatMessage>()
 
+    val sentinelManager: VeraSentinelManager by lazy {
+        VeraSentinelManager(viewModelScope) { alert ->
+            onSentinelAlertTriggered(alert)
+        }
+    }
+    val sentinelAlerts: StateFlow<List<SentinelAlert>>
+        get() = sentinelManager.alerts
+
+    private fun onSentinelAlertTriggered(alert: SentinelAlert) {
+        val badge = when (alert.severity) {
+            SentinelSeverity.CRITICAL -> "🚨 [CRITICAL ALERT]"
+            SentinelSeverity.WARNING -> "⚠️ [WARNING]"
+            SentinelSeverity.ADVISORY -> "ℹ️ [ADVISORY]"
+            SentinelSeverity.INFO -> "📋 [INFO]"
+        }
+        messages.add(ChatMessage("VERA", "$badge ${alert.title}\n${alert.message}"))
+        autoSaveCurrentSession()
+
+        val liveInjected = if (_isHandsFreeVoiceActive.value) {
+            liveStreamManager?.injectDriverAlert(alert.spokenText) ?: false
+        } else false
+
+        if (!liveInjected) {
+            speak(alert.spokenText)
+        }
+    }
+
+    fun buildTelemetrySnapshotMap(): Map<String, String> {
+        val metrics = obdManager.metrics.value
+        val streams = obdManager.supportedStreams.value
+        val isMetric = unitSystem.value == UnitSystem.METRIC
+        val volt = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
+        val trans = obdManager.mode22Streams.value.find { it.pid.name.contains("Transmission", ignoreCase = true) }?.formattedValue ?: "180°F"
+        val spd = if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"
+        val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
+        val trim = if (metrics.fuelTrim >= 0) "+${metrics.fuelTrim}%" else "${metrics.fuelTrim}%"
+        return mapOf(
+            "rpm" to "${metrics.rpm} RPM",
+            "speed" to spd,
+            "coolant" to temp,
+            "fuel_trim" to trim,
+            "voltage" to volt,
+            "trans_temp" to trans
+        )
+    }
+
     init {
         if (messages.isEmpty()) {
             messages.add(
@@ -113,6 +163,40 @@ class GeminiAgentViewModel : ViewModel() {
                     text = "Hello! I am VERA, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
                 )
             )
+        }
+
+        // 1. Hook Sentinel Telemetry Evaluator to live metrics stream
+        viewModelScope.launch {
+            obdManager.metrics.collect { metrics ->
+                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                sentinelManager.evaluateTelemetry(
+                    metrics = metrics,
+                    streams = obdManager.supportedStreams.value,
+                    dtcDetails = _dtcDetails.value,
+                    mode06Results = obdManager.mode06Results.value,
+                    mode22Streams = obdManager.mode22Streams.value,
+                    unitSystem = unitSystem.value,
+                    isConnected = isConn
+                )
+            }
+        }
+
+        // 2. Periodic Silent DTC Polling while driving (checks Mode 03 & Mode 07 every 45s)
+        viewModelScope.launch {
+            while (isActive) {
+                delay(45_000L)
+                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                if (isConn) {
+                    try {
+                        val scanned = obdManager.scanAllDtcModes()
+                        if (scanned.isNotEmpty() || _dtcDetails.value.isNotEmpty()) {
+                            _dtcDetails.value = scanned
+                        }
+                    } catch (e: Exception) {
+                        Log.w("GeminiAgentViewModel", "Silent DTC periodic scan error", e)
+                    }
+                }
+            }
         }
     }
 
@@ -759,7 +843,16 @@ class GeminiAgentViewModel : ViewModel() {
                  * Issue verdict: "I'm catching a misfire on cylinder five under load. Before buying new parts, once we're parked we'll swap the coil with cylinder one to see if the misfire follows it."
                - ALWAYS obey the active unit system ($unitRules) when speaking numbers out loud!
                - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info` when connected.
-            3. SAFETY FIRST:
+            3. AUTONOMOUS SENTINEL & SCHEDULING DIRECTIVES:
+               - When the driver asks you to check, read, or report a telemetry parameter repeatedly or periodically (e.g. "report my fuel trims every 20 seconds for a minute", "tell me my speed every 10 seconds", "watch coolant every 30s"):
+                 * You MUST invoke the `schedule_periodic_telemetry_report` tool with the requested parameter, interval_seconds, and duration_seconds.
+                 * Confirm briefly in one natural sentence that you have scheduled the recurring report.
+               - When the driver asks you to watch or alert them if a sensor crosses a threshold (e.g. "let me know if my RPMs go over 2000", "warn me if coolant temp crosses 220", "alert me if speed goes over 80"):
+                 * You MUST invoke the `set_telemetry_threshold_alert` tool with the parameter, comparison condition ('>', '<', '>=', '<='), and threshold_value.
+                 * Confirm briefly in one natural sentence that you are monitoring that threshold.
+               - When the driver asks to cancel or stop active timers, watchers, or alerts (e.g. "stop reporting", "cancel alerts", "stop watching"):
+                 * You MUST invoke the `cancel_telemetry_alerts` tool.
+            4. SAFETY FIRST:
                - The driver is operating a vehicle. Never give instructions that require them to look away from the road or manipulate parts while driving.
         """.trimIndent()
     }
@@ -998,6 +1091,37 @@ class GeminiAgentViewModel : ViewModel() {
                         }
                         put("custom_pids", arr)
                     }
+                }
+                "schedule_periodic_telemetry_report" -> {
+                    val param = args.optString("parameter", "fuel_trim")
+                    val interval = args.optInt("interval_seconds", 20)
+                    val duration = args.optInt("duration_seconds", 60)
+                    val repeatCount = args.optInt("repeat_count", 0)
+                    sentinelManager.schedulePeriodicReport(
+                        parameter = param,
+                        intervalSeconds = interval,
+                        durationSeconds = duration,
+                        repeatCount = repeatCount,
+                        currentUnit = unitSystem.value,
+                        getTelemetrySnapshot = { buildTelemetrySnapshotMap() }
+                    )
+                }
+                "set_telemetry_threshold_alert" -> {
+                    val param = args.optString("parameter", "rpm")
+                    val condition = args.optString("condition", ">")
+                    val threshold = args.optDouble("threshold_value", 2000.0)
+                    val customMsg = if (args.has("custom_message")) args.getString("custom_message") else null
+                    sentinelManager.setThresholdAlert(
+                        parameter = param,
+                        condition = condition,
+                        threshold = threshold,
+                        customMessage = customMsg,
+                        currentUnit = unitSystem.value
+                    )
+                }
+                "cancel_telemetry_alerts" -> {
+                    val param = if (args.has("parameter")) args.getString("parameter") else "all"
+                    sentinelManager.cancelAlerts(param)
                 }
                 else -> {
                     JSONObject().put("status", "unknown tool $name")
@@ -1557,6 +1681,7 @@ class GeminiAgentViewModel : ViewModel() {
 
     fun disconnectFromCar() {
         viewModelScope.launch {
+            sentinelManager.resetSession()
             obdManager.disconnect()
             messages.add(ChatMessage("System", "Disconnected from OBD2 adapter."))
         }

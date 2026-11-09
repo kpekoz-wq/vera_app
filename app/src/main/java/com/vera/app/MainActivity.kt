@@ -4094,6 +4094,9 @@ fun VeraMainScreen(
                             val isUser = msg.sender == "User"
                             val isError = msg.sender == "Error"
                             val isSystem = msg.sender == "System"
+                            val isCriticalAlert = msg.text.contains("🚨 [CRITICAL ALERT]")
+                            val isWarningAlert = msg.text.contains("⚠️ [WARNING]")
+                            val isAdvisoryAlert = msg.text.contains("ℹ️ [ADVISORY]")
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -4106,21 +4109,27 @@ fun VeraMainScreen(
                                     },
                                     color = when {
                                         isUser -> MaterialTheme.colorScheme.primaryContainer
-                                        isError -> Color(0xFF3E1010)
+                                        isError || isCriticalAlert -> Color(0xFF3E1010)
+                                        isWarningAlert -> Color(0xFF2E2410)
+                                        isAdvisoryAlert -> Color(0xFF0C242A)
                                         isSystem -> MaterialTheme.colorScheme.surface
                                         else -> MaterialTheme.colorScheme.surface
                                     },
                                     contentColor = when {
                                         isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-                                        isError -> Color(0xFFFF8A80)
+                                        isError || isCriticalAlert -> Color(0xFFFF8A80)
+                                        isWarningAlert -> Color(0xFFFFE082)
+                                        isAdvisoryAlert -> Color(0xFF80D8FF)
                                         else -> MaterialTheme.colorScheme.onSurface
                                     },
                                     modifier = Modifier
                                         .widthIn(max = 280.dp)
                                         .border(
-                                            width = if (isError) 1.dp else 1.dp,
+                                            width = if (isError || isCriticalAlert || isWarningAlert || isAdvisoryAlert) 1.5.dp else 1.dp,
                                             color = when {
-                                                isError -> Color(0xFFFF5252)
+                                                isError || isCriticalAlert -> Color(0xFFFF5252)
+                                                isWarningAlert -> Color(0xFFFFD54F)
+                                                isAdvisoryAlert -> Color(0xFF00E5FF)
                                                 isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                                                 else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                                             },

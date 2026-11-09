@@ -284,6 +284,18 @@ class GeminiLiveStreamManager(private val context: Context) {
                 put("description", desc)
             }
         }
+        val numberParam = { desc: String ->
+            JSONObject().apply {
+                put("type", "NUMBER")
+                put("description", desc)
+            }
+        }
+        val intParam = { desc: String ->
+            JSONObject().apply {
+                put("type", "INTEGER")
+                put("description", desc)
+            }
+        }
 
         val toolsArray = JSONArray().apply {
             put(JSONObject().apply {
@@ -335,6 +347,44 @@ class GeminiLiveStreamManager(private val context: Context) {
                             put("type", "OBJECT")
                             put("properties", JSONObject().apply {
                                 put("signal_name", stringParam("Signal requested, e.g. 'transmission_temp', 'oil_pressure', 'all'"))
+                            })
+                        })
+                    })
+                    put(JSONObject().apply {
+                        put("name", "schedule_periodic_telemetry_report")
+                        put("description", "Schedules a repeating periodic telemetry voice report at a specified interval (e.g. read fuel trims every 20 seconds for 1 minute). Invoke whenever driver asks to check or read a sensor repeatedly or on an interval.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("parameter", stringParam("The sensor or telemetry parameter to report, e.g. 'fuel_trim', 'rpm', 'speed', 'coolant', 'voltage', 'all'"))
+                                put("interval_seconds", intParam("Interval between spoken reports in seconds (minimum 5, default 20)"))
+                                put("duration_seconds", intParam("Total duration to run in seconds, or 0 for ongoing until driver says stop"))
+                                put("repeat_count", intParam("Optional number of times to report, e.g. 3 times"))
+                            })
+                            put("required", JSONArray().apply { put("parameter"); put("interval_seconds") })
+                        })
+                    })
+                    put(JSONObject().apply {
+                        put("name", "set_telemetry_threshold_alert")
+                        put("description", "Sets a real-time threshold alert on a vehicle telemetry parameter (e.g. alert if RPM > 2000, or alert if coolant temp > 220). Invoke when driver asks to be notified or alerted when a reading reaches or exceeds a value.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("parameter", stringParam("Telemetry parameter to monitor, e.g. 'rpm', 'speed', 'coolant_temp', 'engine_load', 'fuel_trim', 'battery_voltage'"))
+                                put("condition", stringParam("Comparison operator: '>', '<', '>=', '<='"))
+                                put("threshold_value", numberParam("Numeric threshold value (e.g. 2000 for RPM, 220 for coolant temp, 75 for speed)"))
+                                put("custom_message", stringParam("Optional custom alert message or context"))
+                            })
+                            put("required", JSONArray().apply { put("parameter"); put("condition"); put("threshold_value") })
+                        })
+                    })
+                    put(JSONObject().apply {
+                        put("name", "cancel_telemetry_alerts")
+                        put("description", "Cancels active periodic telemetry reports or custom threshold alerts. Invoke when driver says 'stop reporting', 'cancel alert', or 'stop watching'.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("parameter", stringParam("Optional parameter name to cancel (e.g. 'fuel_trim', 'rpm'), or 'all' to cancel all active watchers"))
                             })
                         })
                     })
@@ -826,6 +876,35 @@ class GeminiLiveStreamManager(private val context: Context) {
             webSocket?.cancel()
         } catch (_: Exception) {}
         webSocket = null
+    }
+
+    fun injectDriverAlert(alertText: String): Boolean {
+        val ws = webSocket ?: return false
+        if (!_isLiveSessionActive.value) return false
+        return try {
+            val alertPrompt = "CRITICAL IN-VEHICLE MECHANIC ALERT: $alertText. Announce this alert directly and naturally to the driver in one concise sentence as their master technician."
+            val alertObj = JSONObject().apply {
+                put("clientContent", JSONObject().apply {
+                    put("turns", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("text", alertPrompt)
+                                })
+                            })
+                        })
+                    })
+                    put("turnComplete", true)
+                })
+            }
+            val sent = ws.send(alertObj.toString())
+            Log.i(TAG, "Injected driver alert into Gemini Live WebSocket (sent=$sent): $alertText")
+            sent
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inject driver alert into Gemini Live WebSocket", e)
+            false
+        }
     }
 
     fun stopLiveSession() {
