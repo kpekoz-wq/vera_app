@@ -119,10 +119,10 @@ class GeminiAgentViewModel : ViewModel() {
 
     private fun onSentinelAlertTriggered(alert: SentinelAlert) {
         val badge = when (alert.severity) {
-            SentinelSeverity.CRITICAL -> "🚨 [CRITICAL ALERT]"
-            SentinelSeverity.WARNING -> "⚠️ [WARNING]"
-            SentinelSeverity.ADVISORY -> "ℹ️ [ADVISORY]"
-            SentinelSeverity.INFO -> "📋 [INFO]"
+            SentinelSeverity.CRITICAL -> "[CRITICAL ALERT]"
+            SentinelSeverity.WARNING -> "[WARNING]"
+            SentinelSeverity.ADVISORY -> "[ADVISORY]"
+            SentinelSeverity.INFO -> "[INFO]"
         }
         messages.add(ChatMessage("VERA", "$badge ${alert.title}\n${alert.message}"))
         autoSaveCurrentSession()

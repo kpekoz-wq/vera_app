@@ -59,6 +59,11 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.DirectionsCar
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -2908,9 +2913,9 @@ fun VeraMainScreen(
                                     leadingIcon = {
                                         val (icon, tint) = when {
                                             macAddress == "DEMO_SIMULATOR_CLEAN" || selectedDeviceText == demoCleanLabel ->
-                                                Icons.Default.DirectionsCar to Color(0xFF00E676)
+                                                Icons.Outlined.DirectionsCar to Color(0xFF00E676)
                                             macAddress == "DEMO_SIMULATOR_DIRTY" || selectedDeviceText == demoDirtyLabel ->
-                                                Icons.Default.Warning to Color(0xFFFF5252)
+                                                Icons.Outlined.WarningAmber to Color(0xFFFF5252)
                                             macAddress.startsWith("USB:") || selectedDeviceText.contains("USB", ignoreCase = true) ->
                                                 Icons.Default.Usb to MaterialTheme.colorScheme.primary
                                             macAddress.startsWith("WIFI:") || selectedDeviceText.contains("Wi-Fi", ignoreCase = true) ->
@@ -2940,7 +2945,7 @@ fun VeraMainScreen(
                                     DropdownMenuItem(
                                         leadingIcon = {
                                             Icon(
-                                                imageVector = Icons.Default.DirectionsCar,
+                                                imageVector = Icons.Outlined.DirectionsCar,
                                                 contentDescription = null,
                                                 tint = Color(0xFF00E676),
                                                 modifier = Modifier.size(18.dp)
@@ -2966,7 +2971,7 @@ fun VeraMainScreen(
                                     DropdownMenuItem(
                                         leadingIcon = {
                                             Icon(
-                                                imageVector = Icons.Default.Warning,
+                                                imageVector = Icons.Outlined.WarningAmber,
                                                 contentDescription = null,
                                                 tint = Color(0xFFFF5252),
                                                 modifier = Modifier.size(18.dp)
@@ -4094,9 +4099,19 @@ fun VeraMainScreen(
                             val isUser = msg.sender == "User"
                             val isError = msg.sender == "Error"
                             val isSystem = msg.sender == "System"
-                            val isCriticalAlert = msg.text.contains("🚨 [CRITICAL ALERT]")
-                            val isWarningAlert = msg.text.contains("⚠️ [WARNING]")
-                            val isAdvisoryAlert = msg.text.contains("ℹ️ [ADVISORY]")
+                            val isCriticalAlert = msg.text.contains("[CRITICAL ALERT]")
+                            val isWarningAlert = msg.text.contains("[WARNING]")
+                            val isAdvisoryAlert = msg.text.contains("[ADVISORY]")
+                            val isInfoAlert = msg.text.contains("[INFO]")
+                            val isAlert = isCriticalAlert || isWarningAlert || isAdvisoryAlert || isInfoAlert
+
+                            val alertAccentColor = when {
+                                isCriticalAlert || isError -> Color(0xFFFF5252)
+                                isWarningAlert -> Color(0xFFFFD54F)
+                                isAdvisoryAlert -> Color(0xFF00E5FF)
+                                isInfoAlert -> Color(0xFF80D8FF)
+                                else -> MaterialTheme.colorScheme.primary
+                            }
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -4109,51 +4124,110 @@ fun VeraMainScreen(
                                     },
                                     color = when {
                                         isUser -> MaterialTheme.colorScheme.primaryContainer
-                                        isError || isCriticalAlert -> Color(0xFF3E1010)
-                                        isWarningAlert -> Color(0xFF2E2410)
-                                        isAdvisoryAlert -> Color(0xFF0C242A)
+                                        isError || isCriticalAlert -> Color(0xFF330E0E)
+                                        isWarningAlert -> Color(0xFF261D0A)
+                                        isAdvisoryAlert -> Color(0xFF0A1F26)
+                                        isInfoAlert -> Color(0xFF0D1E2C)
                                         isSystem -> MaterialTheme.colorScheme.surface
                                         else -> MaterialTheme.colorScheme.surface
                                     },
                                     contentColor = when {
                                         isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-                                        isError || isCriticalAlert -> Color(0xFFFF8A80)
-                                        isWarningAlert -> Color(0xFFFFE082)
-                                        isAdvisoryAlert -> Color(0xFF80D8FF)
+                                        isError || isCriticalAlert -> Color(0xFFFFCDD2)
+                                        isWarningAlert -> Color(0xFFFFF9C4)
+                                        isAdvisoryAlert -> Color(0xFFE0F7FA)
+                                        isInfoAlert -> Color(0xFFE1F5FE)
                                         else -> MaterialTheme.colorScheme.onSurface
                                     },
                                     modifier = Modifier
                                         .widthIn(max = 280.dp)
                                         .border(
-                                            width = if (isError || isCriticalAlert || isWarningAlert || isAdvisoryAlert) 1.5.dp else 1.dp,
+                                            width = if (isAlert || isError) 1.5.dp else 1.dp,
                                             color = when {
-                                                isError || isCriticalAlert -> Color(0xFFFF5252)
-                                                isWarningAlert -> Color(0xFFFFD54F)
-                                                isAdvisoryAlert -> Color(0xFF00E5FF)
+                                                isAlert || isError -> alertAccentColor
                                                 isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                                                 else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                                             },
                                             shape = RoundedCornerShape(14.dp)
                                         )
                                 ) {
-                                    Column(modifier = Modifier.padding(10.dp)) {
-                                        Text(
-                                            text = when (msg.sender) {
-                                                "User" -> "You"
-                                                "VERA", "OttoAI" -> "VERA Mechanic"
-                                                "VERA (Live)", "OttoAI (Live)" -> "VERA (Live)"
-                                                else -> msg.sender
-                                            },
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 11.sp,
-                                            color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = msg.text,
-                                            fontSize = 13.sp,
-                                            lineHeight = 17.sp
-                                        )
+                                    if (isAlert) {
+                                        val alertBadgeTitle = when {
+                                            isCriticalAlert -> "CRITICAL ALERT"
+                                            isWarningAlert -> "SYSTEM WARNING"
+                                            isAdvisoryAlert -> "ADVISORY"
+                                            else -> "SYSTEM INFO"
+                                        }
+                                        val alertIcon = when {
+                                            isCriticalAlert -> Icons.Outlined.ErrorOutline
+                                            isWarningAlert -> Icons.Outlined.WarningAmber
+                                            isAdvisoryAlert -> Icons.Outlined.Info
+                                            else -> Icons.Outlined.NotificationsActive
+                                        }
+                                        val cleanAlertText = msg.text
+                                            .replace("🚨", "")
+                                            .replace("⚠️", "")
+                                            .replace("ℹ️", "")
+                                            .replace("📋", "")
+                                            .replace("[CRITICAL ALERT]", "")
+                                            .replace("[WARNING]", "")
+                                            .replace("[ADVISORY]", "")
+                                            .replace("[INFO]", "")
+                                            .trimStart()
+
+                                        Column(modifier = Modifier.padding(11.dp)) {
+                                            // Modern flat header with vector outline icon
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Icon(
+                                                    imageVector = alertIcon,
+                                                    contentDescription = null,
+                                                    tint = alertAccentColor,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = alertBadgeTitle,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    letterSpacing = 1.2.sp,
+                                                    color = alertAccentColor
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(5.dp))
+                                            HorizontalDivider(
+                                                color = alertAccentColor.copy(alpha = 0.25f),
+                                                thickness = 1.dp
+                                            )
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text(
+                                                text = cleanAlertText,
+                                                fontSize = 13.sp,
+                                                lineHeight = 17.sp
+                                            )
+                                        }
+                                    } else {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text(
+                                                text = when (msg.sender) {
+                                                    "User" -> "You"
+                                                    "VERA", "OttoAI" -> "VERA Mechanic"
+                                                    "VERA (Live)", "OttoAI (Live)" -> "VERA (Live)"
+                                                    else -> msg.sender
+                                                },
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp,
+                                                color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = msg.text,
+                                                fontSize = 13.sp,
+                                                lineHeight = 17.sp
+                                            )
+                                        }
                                     }
                                 }
                             }

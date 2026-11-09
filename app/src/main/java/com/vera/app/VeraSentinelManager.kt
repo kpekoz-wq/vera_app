@@ -616,7 +616,7 @@ class VeraSentinelManager(
         currentList.add(0, alert)
         _alerts.value = currentList.take(50) // Keep last 50 alerts in history
 
-        Log.i(TAG, "🚨 [SENTINEL ALERT] [${alert.severity}] ${alert.title}: ${alert.message}")
+        Log.i(TAG, "[SENTINEL ALERT] [${alert.severity}] ${alert.title}: ${alert.message}")
         onAlertTriggered(alert)
     }
 }
