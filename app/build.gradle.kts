@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v4.0: Native Wi-Fi OBD2 dongle compatibility (TCP 192.168.0.10:35000 and custom IP/Port)"
+                releaseNotes = "VERA v4.2: Remote kill switch protection, drive session download & replay, Advanced Dynamics updates, Hey Vera wake-word controls"
                 artifactType = "APK"
             }
         }
