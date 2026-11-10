@@ -310,6 +310,7 @@ class GeminiAgentViewModel : ViewModel() {
         val mgr = VeraLocationManager(
             context = context.applicationContext,
             scope = viewModelScope,
+            isObdConnected = { obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode },
             getVehicleSpeedKmh = { obdManager.metrics.value.speed }
         )
         locationManager = mgr

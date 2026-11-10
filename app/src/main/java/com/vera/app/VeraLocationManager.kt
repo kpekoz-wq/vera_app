@@ -90,6 +90,7 @@ enum class InclineStatus(val description: String, val stationaryDescription: Str
 class VeraLocationManager(
     private val context: Context,
     private val scope: CoroutineScope,
+    private val isObdConnected: () -> Boolean = { false },
     private val getVehicleSpeedKmh: () -> Int = { 0 }
 ) : SensorEventListener {
     companion object {
@@ -107,8 +108,10 @@ class VeraLocationManager(
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    // Optional hardware sensors: if phone or Android head unit lacks an accelerometer, gracefully falls back to null
     private val linearAccelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val rawAccelSensor = if (linearAccelSensor == null) sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) else null
+    val hasAccelerometer: Boolean get() = linearAccelSensor != null || rawAccelSensor != null
 
     @Volatile private var currentPhoneAccelMps2 = 0.0
     @Volatile private var recentDynamicAccelVariance = 0.0
@@ -230,20 +233,25 @@ class VeraLocationManager(
     private fun processNewLocation(location: Location) {
         if (isDemoMode) return // Demo overrides live GPS
 
-        val obdSpeedKmh = getVehicleSpeedKmh()
+        val obdConnected = isObdConnected()
+        val obdSpeedKmh = if (obdConnected) getVehicleSpeedKmh() else 0
         val obdSpeedMph = obdSpeedKmh * 0.621371
 
         val rawGpsSpeedMps = if (location.hasSpeed()) location.speed else 0f
         val gpsSpeedMph = (rawGpsSpeedMps * 2.23694).toDouble()
-        val speedMph = if (obdSpeedKmh > 0) obdSpeedMph else gpsSpeedMph
-        val speedKmh = if (obdSpeedKmh > 0) obdSpeedKmh.toDouble() else (rawGpsSpeedMps * 3.6).toDouble()
+        val speedMph = if (obdConnected) obdSpeedMph else gpsSpeedMph
+        val speedKmh = if (obdConnected) obdSpeedKmh.toDouble() else (rawGpsSpeedMps * 3.6).toDouble()
 
-        // Vehicle motion determination:
-        // 1. If OBD2 is connected and reporting: speed >= 3 km/h is moving; 0 is stationary.
-        // 2. If OBD2 is not connected: GPS speed >= 2.5 mph (1.1 m/s) is moving.
-        // 3. Speeds below this threshold are classified as PARKED / STATIONARY (e.g. sitting in driveway).
-        val isMoving = if (obdSpeedKmh > 0) {
-            obdSpeedKmh >= 3
+        // Multi-Tier Motion Determination:
+        // Tier 1: Car's official OBD2 Speedometer (PID 010D).
+        //         Available on every OBD2 vehicle since 1996 and readable by any cheap $5 BT dongle.
+        //         - speedometer >= 2 km/h (~1.2 mph) -> definitively MOVING.
+        //         - speedometer == 0 km/h -> definitively STATIONARY / PARKED.
+        // Tier 2: Phone GPS Speedometer fallback (when OBD2 is disconnected or not yet connected):
+        //         - GPS speed >= 2.5 mph -> MOVING.
+        //         - GPS speed < 2.0 mph -> STATIONARY / PARKED.
+        val isMoving = if (obdConnected) {
+            obdSpeedKmh >= 2
         } else {
             gpsSpeedMph >= 2.5
         }
