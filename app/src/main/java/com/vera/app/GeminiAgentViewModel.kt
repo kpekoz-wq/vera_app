@@ -112,6 +112,15 @@ class GeminiAgentViewModel : ViewModel() {
 
     private val geminiApiKey = BuildConfig.GEMINI_API_KEY
 
+    val isKillSwitchDeactivated: StateFlow<Boolean> = VeraKillSwitch.isDeactivated
+    val killSwitchMessage: StateFlow<String?> = VeraKillSwitch.deactivationMessage
+
+    fun checkKillSwitch(context: Context) {
+        viewModelScope.launch {
+            VeraKillSwitch.checkRemoteKillSwitch(context)
+        }
+    }
+
     val messages = mutableStateListOf<ChatMessage>()
 
     val sentinelManager: VeraSentinelManager by lazy {
@@ -431,7 +440,7 @@ class GeminiAgentViewModel : ViewModel() {
             var audioPlaySuccess = false
             val cacheDir = appContext?.cacheDir
 
-            if (geminiApiKey.isNotBlank() && cacheDir != null) {
+            if (!VeraKillSwitch.isDeactivated.value && geminiApiKey.isNotBlank() && cacheDir != null) {
                 // Use Gemini Native Voice models to output smooth human voice matching selected voice
                 val ttsModels = listOf("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts")
                 for (modelName in ttsModels) {
@@ -1222,6 +1231,12 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun startGeminiLiveSession() {
+        if (VeraKillSwitch.isDeactivated.value) {
+            val msg = VeraKillSwitch.deactivationMessage.value ?: "This test build of VERA has expired or been disabled."
+            messages.add(ChatMessage("Error", "⛔ $msg"))
+            stopGeminiLiveSession()
+            return
+        }
         if (geminiApiKey.isBlank()) {
             messages.add(ChatMessage("Error", "GEMINI_API_KEY is not set in local.properties."))
             return
@@ -2700,6 +2715,11 @@ class GeminiAgentViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
+                if (VeraKillSwitch.isDeactivated.value) {
+                    val msg = VeraKillSwitch.deactivationMessage.value ?: "This test build of VERA has expired or been disabled."
+                    messages.add(ChatMessage("Error", "⛔ $msg"))
+                    return@launch
+                }
                 if (geminiApiKey.isBlank()) {
                     messages.add(ChatMessage("Error", "GEMINI_API_KEY is not set in local.properties."))
                     return@launch

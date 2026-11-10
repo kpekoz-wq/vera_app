@@ -2241,11 +2241,15 @@ fun VeraMainScreen(
     val savedSessions by viewModel.savedSessions.collectAsState()
     val currentSessionId by viewModel.currentSessionId.collectAsState()
 
+    val isKillSwitchDeactivated by viewModel.isKillSwitchDeactivated.collectAsState()
+    val killSwitchMessage by viewModel.killSwitchMessage.collectAsState()
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         viewModel.initSessionManager(context)
+        viewModel.checkKillSwitch(context)
     }
 
     DisposableEffect(isLiveSessionActive) {
@@ -3571,6 +3575,44 @@ fun VeraMainScreen(
                 }
             }
         }
+        }
+
+        // Deactivation / Kill Switch Banner
+        if (isKillSwitchDeactivated) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Test Build Deactivated",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Test Build Decommissioned",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = killSwitchMessage ?: "This test build of VERA has expired or been disabled by the developer. AI features are offline.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.9f)
+                        )
+                    }
+                }
+            }
         }
 
         // 2. UNIFIED SINGLE SCROLL COLUMN (Section Headers + Chat Card)
