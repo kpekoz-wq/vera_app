@@ -1529,23 +1529,24 @@ class GeminiAgentViewModel : ViewModel() {
                - Speak naturally, warmly, and conversationally, like a seasoned, sharp mechanic sitting in the passenger seat.
                - Keep spoken answers concise (1 to 3 sentences) so the driver stays focused on the road.
                - NEVER recite raw PIDs, sensor codes, raw voltages, or test IDs out loud unless the driver explicitly asks for exact numbers.
-            2. MANDATORY REAL-TIME TELEMETRY RETRIEVAL & GROUNDING:
-               - Vehicle telemetry (RPM, coolant temperature, speed, fuel trims, error codes, odometer mileage) changes dynamically while driving.
+            2. REAL-TIME TELEMETRY GROUNDING & ULTRA-LOW LATENCY:
+               - Vehicle telemetry changes dynamically while driving.
+               - LIVE PROMPT SNAPSHOT (IMMEDIATE LOW-LATENCY ANSWERS):
+                 * You already receive the live real-time telemetry snapshot directly in your prompt below! This includes speed, RPM, coolant, fuel trims, battery voltage, road grade, active DTCs, AND Mode 22 Custom PIDs (including Transmission Commanded Gear, transmission fluid temp, oil pressure, and turbo boost).
+                 * ULTRA-LOW LATENCY RULE: When the driver asks about current speed, RPM, temperatures, fuel trims, battery voltage, error status, or transmission gear, YOU CAN AND SHOULD ANSWER IMMEDIATELY USING THIS PROMPT SNAPSHOT without calling a tool! This eliminates unnecessary 10-15s tool round-trip delay and keeps your voice answers snappy (under 2 seconds).
+                 * Only invoke tools (`get_dtcs`, `get_mode06_results`, `schedule_periodic_telemetry_report`, `set_telemetry_threshold_alert`, `cancel_telemetry_alerts`) when the driver specifically requests a fresh deep DTC scan, Mode 06 test execution, or scheduling a recurring sentinel watchdog.
+               - TRANSMISSION COMMANDED GEAR & PARK POSITION:
+                 * On Ford and GM automatic transmissions, Mode 22 PID 11B3 (Commanded Gear) measures the PCM hydraulic shift solenoid commanded circuit.
+                 * When the vehicle is STATIONARY / PARKED (speed 0 mph), the PCM commands hydraulic state 2 as the baseline for the Park/Neutral interlock. If the driver is parked and asks what gear they are in, tell them the transmission is in Park (or Neutral) and explain that state 2 is the stationary hydraulic solenoid baseline, NOT forward 2nd gear!
                - If OBD2 is DISCONNECTED:
                  * You DO NOT have access to live vehicle telemetry, engine RPM, coolant temperature, speed, battery voltage, or trouble codes.
                  * You MUST NEVER state "everything looks fine", "all indicators look great", or guess sensor values when disconnected.
                  * If the driver asks about their vehicle's health, data, speed, RPM, codes, or engine while disconnected, you MUST explicitly tell them: "We're not connected to your vehicle's OBD2 port right now, so I cannot see your live data or trouble codes. Please connect your OBD2 adapter or select Demo Mode in the app."
-               - If OBD2 is CONNECTED:
-                 * Whenever the driver asks about their engine, mileage, odometer, temperatures, speed, RPM, battery, check engine light, trouble codes, or vehicle health, YOU MUST FIRST EXECUTE THE CORRESPONDING TOOL (`get_vehicle_info`, `get_live_data`, `get_dtcs`, `get_mode06_results`, `get_obdb_signals`) BEFORE GIVING YOUR ANSWER.
-                 * Ground your diagnostic verdict strictly in the returned live data.
-                 * Healthy verdict (ONLY when connected with normal data): "Everything is purring smoothly—coolant, fuel trims, and battery voltage are right in the sweet spot."
-                 * Issue verdict: "I'm catching a misfire on cylinder five under load. Before buying new parts, once we're parked we'll swap the coil with cylinder one to see if the misfire follows it."
                - ALWAYS obey the active unit system ($unitRules) when speaking numbers out loud!
-               - NEVER state that you cannot access vehicle data or guess numbers without first executing `get_live_data` or `get_vehicle_info` when connected.
             3. AUTONOMOUS SENTINEL & SCHEDULING DIRECTIVES:
                - When the driver asks you to check, read, or report a telemetry parameter repeatedly or periodically (e.g. "report my fuel trims every 20 seconds for a minute", "tell me my speed every 10 seconds", "watch coolant every 30s"):
                  * You MUST invoke the `schedule_periodic_telemetry_report` tool with the requested parameter, interval_seconds, and duration_seconds.
-                 * Confirm briefly in one natural sentence that you have scheduled the recurring report.
+                 * CRITICAL BURST PREVENTION: In your spoken answer acknowledging the schedule, YOU MUST ONLY CONFIRM ONCE IN A SINGLE BRIEF SENTENCE (e.g., "Got it, I'll keep an eye on your fuel trims and report every 10 seconds."). ABSOLUTELY DO NOT simulate, loop, or recite multiple updates in this turn! The background watchdog service will independently speak each reading at each timed interval.
                - When delivering periodic sensor readings or gauge updates to the driver:
                  * Speak naturally and casually, like a seasoned mechanic sitting in the passenger seat watching the dashboard gauges (e.g. "Fuel trims are sitting at +2% right now", "Coolant's at 195", "Speed is 55").
                  * NEVER say "Periodic update:" or sound like an automated robot. Give the data in a natural conversational style.
@@ -1604,7 +1605,12 @@ class GeminiAgentViewModel : ViewModel() {
         val vehicle = obdManager.vehicleDetails.value ?: "Vehicle"
         val m06 = obdManager.mode06Results.value
         val streams = obdManager.supportedStreams.value
+        val m22Streams = obdManager.mode22Streams.value
         val odoKm = obdManager.vehicleOdometerKm.value
+
+        val road = locationManager?.roadContext?.value
+        val obdSpeedMph = (metrics.speed * 0.621371).toInt()
+        val isVehicleMoving = (road?.isMoving == true) || (obdSpeedMph >= 3)
 
         val streamsText = if (streams.isNotEmpty()) {
             streams.take(15).joinToString(", ") { s ->
@@ -1617,6 +1623,13 @@ class GeminiAgentViewModel : ViewModel() {
             "RPM: ${metrics.rpm}, Speed: $spd, Coolant: $temp"
         }
 
+        val m22Text = if (m22Streams.isNotEmpty()) {
+            m22Streams.joinToString(", ") { p ->
+                val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(p.rawValue, p.pid, currentUnit, isVehicleMoving)
+                "${p.pid.name}: $fmtVal $fmtUnit"
+            }
+        } else "None polled yet"
+
         val odoText = if (odoKm != null && odoKm > 0) {
             if (isMetric) String.format(java.util.Locale.US, "%,.0f km", odoKm)
             else String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371)
@@ -1624,9 +1637,6 @@ class GeminiAgentViewModel : ViewModel() {
         val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
         val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
 
-        val road = locationManager?.roadContext?.value
-        val obdSpeedMph = (metrics.speed * 0.621371).toInt()
-        val isVehicleMoving = (road?.isMoving == true) || (obdSpeedMph >= 3)
         val motionStateText = if (isVehicleMoving) {
             val spdText = if (isMetric) "${metrics.speed} km/h" else "$obdSpeedMph mph"
             "DRIVING / IN MOTION ($spdText)"
@@ -1647,6 +1657,7 @@ class GeminiAgentViewModel : ViewModel() {
             OBD2 Connection: Connected & Polling ECU
             Active DTCs: $dtcText
             Latest Telemetry: $streamsText
+            Mode 22 Custom PIDs (Transmission Gear & Temps, Oil Pressure, Boost): $m22Text
             Mode 06 Monitors: $m06Text
         """.trimIndent()
     }
@@ -1724,6 +1735,21 @@ class GeminiAgentViewModel : ViewModel() {
                                 })
                             }
                             put("supported_streams", streamsArr)
+                        }
+                        val m22 = obdManager.mode22Streams.value
+                        if (m22.isNotEmpty()) {
+                            val roadSnap = locationManager?.roadContext?.value
+                            val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
+                            val m22Arr = JSONArray()
+                            for (p in m22) {
+                                val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(p.rawValue, p.pid, currentUnit, isMoving)
+                                m22Arr.put(JSONObject().apply {
+                                    put("name", p.pid.name)
+                                    put("category", p.pid.category)
+                                    put("value", "$fmtVal $fmtUnit".trim())
+                                })
+                            }
+                            put("custom_mode22_pids", m22Arr)
                         }
                     }
                 }
@@ -3067,6 +3093,39 @@ class GeminiAgentViewModel : ViewModel() {
                     } catch (e: Exception) {
                         Log.w("GeminiAgentViewModel", "Silent DTC periodic scan error", e)
                     }
+                }
+            }
+        }
+
+        // 3. Continuous Background Flight Data Logging while connected
+        viewModelScope.launch {
+            val sessionStartTimeMs = System.currentTimeMillis()
+            while (isActive) {
+                delay(1000L)
+                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                if (isConn && !_isRecording.value) {
+                    val now = System.currentTimeMillis()
+                    val elapsedSec = (now - sessionStartTimeMs) / 1000.0
+                    val metricsSnap = obdManager.metrics.value
+                    val streamsSnap = obdManager.supportedStreams.value.toList()
+                    val mode22Snap = obdManager.mode22Streams.value.toList()
+                    val roadSnap = locationManager?.roadContext?.value ?: RoadContext()
+
+                    val sample = RecordedDataSample(
+                        timestampMs = now,
+                        elapsedSeconds = elapsedSec,
+                        metricsSnapshot = metricsSnap,
+                        streamSnapshots = streamsSnap,
+                        mode22Snapshots = mode22Snap,
+                        roadContextSnapshot = roadSnap
+                    )
+                    synchronized(recordedSamples) {
+                        if (recordedSamples.size >= 3600) {
+                            recordedSamples.removeAt(0)
+                        }
+                        recordedSamples.add(sample)
+                    }
+                    _recordedSamplesFlow.value = synchronized(recordedSamples) { recordedSamples.toList() }
                 }
             }
         }

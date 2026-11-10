@@ -538,7 +538,8 @@ fun getFileName(context: Context, uri: Uri): String {
 fun formatMode22ValueWithUnit(
     rawValue: Double,
     pid: Mode22PidDefinition,
-    unitSystem: UnitSystem
+    unitSystem: UnitSystem,
+    isVehicleMoving: Boolean = false
 ): Pair<String, String> {
     return when (pid.unit) {
         "°C" -> {
@@ -634,7 +635,24 @@ fun formatMode22ValueWithUnit(
         "Ratio" -> Pair(String.format(java.util.Locale.US, "%.2f", rawValue), "Ratio")
         "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "%")
         "°" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "°")
-        "Gear" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "Gear")
+        "Gear" -> {
+            val gearInt = rawValue.toInt()
+            val gearLabel = when (gearInt) {
+                0 -> if (!isVehicleMoving) "Neutral (Cmd 0)" else "Neutral"
+                1 -> "1st"
+                2 -> if (!isVehicleMoving) "Park (Cmd 2)" else "2nd"
+                3 -> "3rd"
+                4 -> "4th"
+                5 -> "5th"
+                6 -> "6th"
+                7 -> "7th"
+                8 -> "8th"
+                9 -> "9th"
+                10 -> "10th"
+                else -> "$gearInt"
+            }
+            Pair(gearLabel, "Gear")
+        }
         "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "counts")
         "ppm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawValue), "ppm")
         "mg/stroke" -> Pair(String.format(java.util.Locale.US, "%.1f", rawValue), "mg/stroke")
@@ -1770,7 +1788,8 @@ fun MultiStreamLiveGraphView(
                 val rawPid = pidKey.removePrefix("22_")
                 val m22 = mode22Streams.find { it.pid.pidHex.equals(rawPid, ignoreCase = true) }
                 if (m22 != null) {
-                    val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m22.rawValue, m22.pid, unitSystem)
+                    val isMoving = metrics.speed > 2
+                    val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m22.rawValue, m22.pid, unitSystem, isMoving)
                     MultiStreamPlotItem(
                         pidHex = pidKey,
                         name = m22.pid.name,
@@ -4915,7 +4934,8 @@ fun VeraMainScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 items(mode22Streams) { stream ->
-                                    val (valStr, unitStr) = formatMode22ValueWithUnit(stream.rawValue, stream.pid, unitSystem)
+                                    val isMoving = metrics.speed > 2
+                                    val (valStr, unitStr) = formatMode22ValueWithUnit(stream.rawValue, stream.pid, unitSystem, isMoving)
                                     val pidKey = "22_${stream.pid.pidHex}"
                                     val isSelected = selectedStreamPids.contains(pidKey)
                                     SleekMetricTile(

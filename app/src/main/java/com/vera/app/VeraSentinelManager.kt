@@ -170,12 +170,13 @@ class VeraSentinelManager(
         scheduledWatchers[watcherId] = watcher
 
         return JSONObject().apply {
-            put("status", "SCHEDULED")
+            put("status", "SCHEDULED_ACTIVE_BACKGROUND_SERVICE")
             put("parameter", parameter)
             put("interval_seconds", safeInterval)
             put("total_duration_seconds", safeDuration)
             put("report_count", calcMaxCount)
             put("message", "I'll keep an eye on your $parameter and give you an update every $safeInterval seconds for the next $safeDuration seconds.")
+            put("instruction_for_ai", "Acknowledge in ONE brief sentence (e.g. 'Got it, watching your $parameter every $safeInterval seconds.'). DO NOT output any sensor readings or loop in this turn! The background watchdog service will speak each reading separately at each future interval.")
         }
     }
 

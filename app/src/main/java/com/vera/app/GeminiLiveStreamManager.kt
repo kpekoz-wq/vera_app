@@ -151,6 +151,11 @@ class GeminiLiveStreamManager(private val context: Context) {
     private var isReconnecting = false
     private var reconnectAttempts = 0
 
+    @Volatile private var geminiSpeechStartTimeMs: Long = 0L
+    @Volatile private var speechEndTimeMs: Long = 0L
+    @Volatile private var lastSpeechDetectedTimeMs: Long = 0L
+    @Volatile private var latestMicRms: Double = 0.0
+
     @SuppressLint("MissingPermission")
     fun startLiveSession(
         apiKey: String,
@@ -575,8 +580,35 @@ class GeminiLiveStreamManager(private val context: Context) {
 
                 val readBytes = record.read(readBuffer, 0, readBuffer.size)
                 if (readBytes > 0) {
-                    // Suppress microphone transmission while Gemini is speaking to eliminate acoustic feedback and self-interruption
-                    if (_isGeminiSpeaking.value) {
+                    // 1. Calculate RMS energy of incoming PCM chunk
+                    var sumSquares = 0.0
+                    val numSamples = readBytes / 2
+                    for (i in 0 until readBytes step 2) {
+                        val sample = (readBuffer[i].toInt() and 0xFF) or (readBuffer[i + 1].toInt() shl 8)
+                        val shortSample = sample.toShort()
+                        sumSquares += (shortSample * shortSample).toDouble()
+                    }
+                    val rms = if (numSamples > 0) Math.sqrt(sumSquares / numSamples) else 0.0
+                    latestMicRms = rms
+
+                    val now = System.currentTimeMillis()
+                    // 2. Suppress microphone transmission while Gemini is speaking plus 400ms acoustic decay to eliminate feedback
+                    if (_isGeminiSpeaking.value || (now - speechEndTimeMs) < 400L) {
+                        accumStream.reset()
+                        continue
+                    }
+
+                    // 3. RMS Noise Gate for vehicle cabin:
+                    // Low cabin rumble / road tire noise is typically 50 - 380 RMS.
+                    // Human speech is typically 450 - 2500+ RMS.
+                    val isSpeechEnergy = rms >= 450.0
+                    if (isSpeechEnergy) {
+                        lastSpeechDetectedTimeMs = now
+                    }
+                    val inSpeechHangover = (now - lastSpeechDetectedTimeMs) < 500L
+
+                    if (!isSpeechEnergy && !inSpeechHangover) {
+                        // Discard low background engine hum so server VAD does not trigger false speech or interruptions
                         accumStream.reset()
                         continue
                     }
@@ -687,9 +719,10 @@ class GeminiLiveStreamManager(private val context: Context) {
                     if (System.currentTimeMillis() - startTime > 8000L) break
                     delay(40)
                 }
-                delay(250) // Acoustic settling delay
+                delay(350) // Acoustic settling delay
             }
             _isGeminiSpeaking.value = false
+            speechEndTimeMs = System.currentTimeMillis()
         }
     }
 
@@ -709,6 +742,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         turnCompletionJob?.cancel()
         turnCompletionJob = null
         _isGeminiSpeaking.value = false
+        speechEndTimeMs = System.currentTimeMillis()
         Log.i(TAG, "Audio playback queue flushed.")
     }
 
@@ -734,6 +768,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                     sendInitialGreetingTrigger(ws)
                 } else {
                     _isGeminiSpeaking.value = false
+                    speechEndTimeMs = System.currentTimeMillis()
                     isReconnecting = false
                     Log.i(TAG, "Silently reconnected to Gemini Live while driving. Resuming listening for driver.")
                 }
@@ -745,8 +780,18 @@ class GeminiLiveStreamManager(private val context: Context) {
             if (serverContent != null) {
                 val isInterrupted = serverContent.optBoolean("interrupted", false)
                 if (isInterrupted) {
-                    Log.i(TAG, "Gemini Live interrupted by user speech. Flushing playback.")
-                    flushPlaybackQueue()
+                    val now = System.currentTimeMillis()
+                    val speakingDurationMs = now - geminiSpeechStartTimeMs
+                    val hadRecentLoudSpeech = (now - lastSpeechDetectedTimeMs) < 700L && latestMicRms > 900.0
+
+                    // Debounce false barge-in: If the model has only been speaking for under 1200ms and the mic didn't detect loud speech,
+                    // it's acoustic feedback or buffered cabin noise, NOT a deliberate user interruption!
+                    if (speakingDurationMs < 1200L && !hadRecentLoudSpeech) {
+                        Log.i(TAG, "Suppressed false barge-in interruption (speaking for ${speakingDurationMs}ms, rms=$latestMicRms)")
+                    } else {
+                        Log.i(TAG, "Gemini Live interrupted by user speech ($speakingDurationMs ms into speech). Flushing playback.")
+                        flushPlaybackQueue()
+                    }
                 }
 
                 // 1a. User speech transcription (from inputAudioTranscription)
@@ -782,6 +827,9 @@ class GeminiLiveStreamManager(private val context: Context) {
                 if (modelTurn != null) {
                     turnCompletionJob?.cancel()
                     turnCompletionJob = null
+                    if (!_isGeminiSpeaking.value) {
+                        geminiSpeechStartTimeMs = System.currentTimeMillis()
+                    }
                     _isGeminiSpeaking.value = true
 
                     val parts = modelTurn.optJSONArray("parts")

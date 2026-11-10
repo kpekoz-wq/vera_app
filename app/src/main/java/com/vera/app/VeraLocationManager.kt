@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -97,7 +99,6 @@ class VeraLocationManager(
         private const val TAG = "VeraLocationManager"
         private const val LOCATION_INTERVAL_MS = 2000L
         private const val FASTEST_INTERVAL_MS = 1000L
-        private const val MIN_DISTANCE_FOR_GRADE_METERS = 12.0
     }
 
     private val fusedLocationClient: FusedLocationProviderClient =
@@ -108,13 +109,20 @@ class VeraLocationManager(
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-    // Optional hardware sensors: if phone or Android head unit lacks an accelerometer, gracefully falls back to null
+    // Optional hardware sensors: accelerometer, linear acceleration, barometer, and gravity
     private val linearAccelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-    private val rawAccelSensor = if (linearAccelSensor == null) sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) else null
+    private val rawAccelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val pressureSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PRESSURE)
+    private val gravitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY) ?: rawAccelSensor
+
     val hasAccelerometer: Boolean get() = linearAccelSensor != null || rawAccelSensor != null
+    val hasBarometer: Boolean get() = pressureSensor != null
 
     @Volatile private var currentPhoneAccelMps2 = 0.0
     @Volatile private var recentDynamicAccelVariance = 0.0
+    @Volatile private var latestBaroAltitudeMeters: Double = 0.0
+    @Volatile private var hasBarometerReading: Boolean = false
+    @Volatile private var smoothedPitchDegrees: Double = 0.0
 
     private val _roadContext = MutableStateFlow(RoadContext())
     val roadContext: StateFlow<RoadContext> = _roadContext.asStateFlow()
@@ -123,7 +131,12 @@ class VeraLocationManager(
     private var isDemoMode = false
 
     // Historical window for noise-resistant road grade calculation
-    private val locationHistory = mutableListOf<Location>()
+    private data class AltitudeHistoryPoint(
+        val location: Location,
+        val altitudeMeters: Double,
+        val timestampMs: Long
+    )
+    private val altitudeHistory = mutableListOf<AltitudeHistoryPoint>()
     private var smoothedGrade = 0.0
 
     // Geocoding throttling
@@ -140,18 +153,50 @@ class VeraLocationManager(
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        val x = event.values[0]
-        val y = event.values[1]
-        val z = event.values[2]
-        if (event.sensor.type == Sensor.TYPE_LINEAR_ACCELERATION) {
-            val mag = sqrt((x * x + y * y + z * z).toDouble())
-            currentPhoneAccelMps2 = mag
-            recentDynamicAccelVariance = (0.85 * recentDynamicAccelVariance) + (0.15 * mag)
-        } else if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            val totalMag = sqrt((x * x + y * y + z * z).toDouble())
-            val dynMag = abs(totalMag - 9.80665)
-            currentPhoneAccelMps2 = dynMag
-            recentDynamicAccelVariance = (0.85 * recentDynamicAccelVariance) + (0.15 * dynMag)
+        when (event.sensor.type) {
+            Sensor.TYPE_PRESSURE -> {
+                val hpa = event.values[0]
+                if (hpa in 300.0f..1150.0f) {
+                    // Standard hypsometric formula for barometric altitude in meters (0.1m relative resolution)
+                    val alt = 44330.0 * (1.0 - (hpa / 1013.25).toDouble().pow(0.190295))
+                    latestBaroAltitudeMeters = alt
+                    hasBarometerReading = true
+                }
+            }
+            Sensor.TYPE_GRAVITY -> {
+                val x = event.values[0].toDouble()
+                val y = event.values[1].toDouble()
+                val z = event.values[2].toDouble()
+                val norm = sqrt(x * x + z * z)
+                if (norm > 0.1) {
+                    val pitch = Math.toDegrees(atan2(y, norm))
+                    smoothedPitchDegrees = (0.85 * smoothedPitchDegrees) + (0.15 * pitch)
+                }
+            }
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+                val x = event.values[0]
+                val y = event.values[1]
+                val z = event.values[2]
+                val mag = sqrt((x * x + y * y + z * z).toDouble())
+                currentPhoneAccelMps2 = mag
+                recentDynamicAccelVariance = (0.85 * recentDynamicAccelVariance) + (0.15 * mag)
+            }
+            Sensor.TYPE_ACCELEROMETER -> {
+                val x = event.values[0].toDouble()
+                val y = event.values[1].toDouble()
+                val z = event.values[2].toDouble()
+                val totalMag = sqrt(x * x + y * y + z * z)
+                val dynMag = abs(totalMag - 9.80665)
+                currentPhoneAccelMps2 = dynMag
+                recentDynamicAccelVariance = (0.85 * recentDynamicAccelVariance) + (0.15 * dynMag)
+
+                // Fallback pitch calculation when TYPE_GRAVITY is not present
+                val norm = sqrt(x * x + z * z)
+                if (norm > 0.1) {
+                    val pitch = Math.toDegrees(atan2(y, norm))
+                    smoothedPitchDegrees = (0.85 * smoothedPitchDegrees) + (0.15 * pitch)
+                }
+            }
         }
     }
 
@@ -176,11 +221,18 @@ class VeraLocationManager(
 
             if (linearAccelSensor != null) {
                 sensorManager?.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
-            } else if (rawAccelSensor != null) {
+            }
+            if (rawAccelSensor != null && rawAccelSensor != linearAccelSensor) {
                 sensorManager?.registerListener(this, rawAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
             }
+            if (pressureSensor != null) {
+                sensorManager?.registerListener(this, pressureSensor, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+            if (gravitySensor != null && gravitySensor != rawAccelSensor && gravitySensor != linearAccelSensor) {
+                sensorManager?.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_NORMAL)
+            }
 
-            Log.i(TAG, "GPS & Road Topography tracking started with sensor motion detection.")
+            Log.i(TAG, "GPS, Barometer & Road Topography tracking started (hasBaro=$hasBarometer).")
         } catch (e: SecurityException) {
             Log.w(TAG, "Location permission not granted: ${e.message}")
         } catch (e: Exception) {
@@ -225,7 +277,7 @@ class VeraLocationManager(
             Log.i(TAG, "Demo road topography enabled: Jones St (+${demoGrade}% grade)")
         } else {
             // Restore actual GPS if available
-            locationHistory.clear()
+            altitudeHistory.clear()
             smoothedGrade = 0.0
         }
     }
@@ -300,7 +352,7 @@ class VeraLocationManager(
      * Features stationary shielding: does NOT compute grade from stationary GPS drift.
      */
     private fun calculateRoadGrade(current: Location, isMoving: Boolean): Double {
-        if (!current.hasAltitude()) return smoothedGrade
+        val currentAlt = if (hasBarometerReading) latestBaroAltitudeMeters else if (current.hasAltitude()) current.altitude else return smoothedGrade
 
         // CRITICAL: When stationary (sitting in driveway or parked),
         // stationary GPS drift causes false 5-15% grades. We only calculate
@@ -309,32 +361,45 @@ class VeraLocationManager(
             return smoothedGrade
         }
 
-        locationHistory.add(current)
-        if (locationHistory.size > 15) {
-            locationHistory.removeAt(0)
+        altitudeHistory.add(AltitudeHistoryPoint(current, currentAlt, System.currentTimeMillis()))
+        if (altitudeHistory.size > 25) {
+            altitudeHistory.removeAt(0)
         }
 
-        // Find the oldest location in history that is at least MIN_DISTANCE_FOR_GRADE_METERS away
-        val baseline = locationHistory.firstOrNull { older ->
-            current.distanceTo(older) >= MIN_DISTANCE_FOR_GRADE_METERS
+        // Barometer has high 0.1m relative resolution so 20m baseline is fast & responsive.
+        // Fallback GPS needs at least 45m baseline to suppress vertical satellite jitter.
+        val minDistanceMeters = if (hasBarometerReading) 20.0 else 45.0
+
+        val baseline = altitudeHistory.firstOrNull { older ->
+            current.distanceTo(older.location) >= minDistanceMeters
         } ?: return smoothedGrade
 
-        val horizontalDistance = current.distanceTo(baseline)
-        val altitudeDelta = current.altitude - baseline.altitude
+        val horizontalDistance = current.distanceTo(baseline.location).toDouble()
+        val altitudeDelta = currentAlt - baseline.altitudeMeters
 
-        if (horizontalDistance < MIN_DISTANCE_FOR_GRADE_METERS) {
+        if (horizontalDistance < minDistanceMeters) {
             return smoothedGrade
         }
 
-        val rawGrade = (altitudeDelta / horizontalDistance) * 100.0
+        var rawGrade = (altitudeDelta / horizontalDistance) * 100.0
+
+        // Sensor fusion with vehicle/phone pitch:
+        // When vehicle is pitched nose-up on a hill (> +2.0° pitch), reject negative slope jitter!
+        // When vehicle is pitched nose-down on a descent (< -2.0° pitch), reject positive slope jitter!
+        if (smoothedPitchDegrees > 2.0 && rawGrade < 0.0) {
+            rawGrade = 0.0
+        } else if (smoothedPitchDegrees < -2.0 && rawGrade > 0.0) {
+            rawGrade = 0.0
+        }
+
         // Clamp raw grade to realistic vehicle roadway ranges (-30% to +30%)
         val clampedGrade = rawGrade.coerceIn(-30.0, 30.0)
 
-        // Exponential smoothing filter (alpha = 0.3)
+        // Exponential smoothing filter
         smoothedGrade = if (abs(smoothedGrade) < 0.01) {
             clampedGrade
         } else {
-            (0.3 * clampedGrade) + (0.7 * smoothedGrade)
+            (0.25 * clampedGrade) + (0.75 * smoothedGrade)
         }
 
         return (smoothedGrade * 10.0).roundToInt() / 10.0
