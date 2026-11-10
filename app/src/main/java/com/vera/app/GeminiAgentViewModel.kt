@@ -810,6 +810,17 @@ class GeminiAgentViewModel : ViewModel() {
             sessionManager = sm
             _savedSessions.value = sm.getAllSessions()
         }
+        sanitizeExistingMessages()
+    }
+
+    fun sanitizeExistingMessages() {
+        for (i in 0 until messages.size) {
+            val msg = messages[i]
+            val cleaned = cleanTranscriptText(msg.text)
+            if (cleaned != msg.text) {
+                messages[i] = msg.copy(text = cleaned)
+            }
+        }
     }
 
     fun autoSaveCurrentSession() {
@@ -879,7 +890,7 @@ class GeminiAgentViewModel : ViewModel() {
         _currentSessionId.value = session.id
         messages.clear()
         if (session.safeMessages.isNotEmpty()) {
-            messages.addAll(session.safeMessages)
+            messages.addAll(session.safeMessages.map { it.copy(text = cleanTranscriptText(it.text)) })
         } else {
             messages.add(
                 ChatMessage(
@@ -1260,6 +1271,8 @@ class GeminiAgentViewModel : ViewModel() {
         val historyContext = buildRecentConversationContextForLive(maxMessages = 20)
         isNewLiveTurn = true
         isNewUserTurn = true
+        currentUserTurnRaw.clear()
+        currentLiveTurnRaw.clear()
 
         messages.add(
             ChatMessage(
@@ -1290,6 +1303,8 @@ class GeminiAgentViewModel : ViewModel() {
                 viewModelScope.launch(Dispatchers.Main) {
                     isNewLiveTurn = true
                     isNewUserTurn = true
+                    currentUserTurnRaw.clear()
+                    currentLiveTurnRaw.clear()
                     autoSaveCurrentSession()
                     val lastUserMsg = messages.lastOrNull { it.sender == "User" }?.text
                     if (!lastUserMsg.isNullOrBlank()) {
@@ -1321,6 +1336,8 @@ class GeminiAgentViewModel : ViewModel() {
         _isHandsFreeVoiceActive.value = false
         isNewLiveTurn = true
         isNewUserTurn = true
+        currentUserTurnRaw.clear()
+        currentLiveTurnRaw.clear()
         liveStreamManager?.stopLiveSession()
         appContext?.let {
             VeraVoiceService.stopService(it)
@@ -1332,48 +1349,57 @@ class GeminiAgentViewModel : ViewModel() {
     fun interruptLivePlayback() {
         isNewLiveTurn = true
         isNewUserTurn = true
+        currentUserTurnRaw.clear()
+        currentLiveTurnRaw.clear()
         liveStreamManager?.interruptPlayback()
     }
 
     private var isNewUserTurn = true
     private var isNewLiveTurn = true
+    private val currentUserTurnRaw = StringBuilder()
+    private val currentLiveTurnRaw = StringBuilder()
 
     fun onUserTranscriptReceived(text: String) {
         viewModelScope.launch(Dispatchers.Main) {
-            val lastMsg = messages.lastOrNull()
-            if (!isNewUserTurn && lastMsg != null && lastMsg.sender == "User") {
-                val updated = if (lastMsg.text.endsWith(" ") || text.startsWith(" ")) {
-                    lastMsg.text + text
-                } else {
-                    lastMsg.text + " " + text
-                }
-                val idx = messages.size - 1
-                messages[idx] = ChatMessage("User", updated.trim())
-            } else {
-                messages.add(ChatMessage("User", text.trim()))
+            if (isNewUserTurn) {
+                currentUserTurnRaw.clear()
+                currentUserTurnRaw.append(text)
+                val cleaned = cleanTranscriptText(currentUserTurnRaw.toString())
+                messages.add(ChatMessage("User", cleaned))
                 isNewUserTurn = false
+            } else {
+                currentUserTurnRaw.append(text)
+                val cleaned = cleanTranscriptText(currentUserTurnRaw.toString())
+                val lastMsg = messages.lastOrNull()
+                if (lastMsg != null && lastMsg.sender == "User") {
+                    val idx = messages.size - 1
+                    messages[idx] = lastMsg.copy(text = cleaned)
+                } else {
+                    messages.add(ChatMessage("User", cleaned))
+                }
             }
         }
     }
 
     private fun appendOrUpdateLiveTranscript(text: String) {
         isNewUserTurn = true
+        currentUserTurnRaw.clear()
 
         if (isNewLiveTurn) {
-            messages.add(ChatMessage("VERA (Live)", text.trim()))
+            currentLiveTurnRaw.clear()
+            currentLiveTurnRaw.append(text)
+            val cleaned = cleanTranscriptText(currentLiveTurnRaw.toString())
+            messages.add(ChatMessage("VERA (Live)", cleaned))
             isNewLiveTurn = false
         } else {
+            currentLiveTurnRaw.append(text)
+            val cleaned = cleanTranscriptText(currentLiveTurnRaw.toString())
             val lastMsg = messages.lastOrNull()
             if (lastMsg != null && (lastMsg.sender == "VERA (Live)" || lastMsg.sender == "OttoAI (Live)")) {
-                val updated = if (lastMsg.text.endsWith(" ") || text.startsWith(" ") || text.startsWith(",") || text.startsWith(".") || text.startsWith("!") || text.startsWith("?")) {
-                    lastMsg.text + text
-                } else {
-                    lastMsg.text + " " + text
-                }
                 val idx = messages.size - 1
-                messages[idx] = ChatMessage("VERA (Live)", updated)
+                messages[idx] = lastMsg.copy(text = cleaned)
             } else {
-                messages.add(ChatMessage("VERA (Live)", text.trim()))
+                messages.add(ChatMessage("VERA (Live)", cleaned))
             }
         }
     }
@@ -2898,6 +2924,114 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
             }
+        }
+    }
+
+    companion object {
+        /**
+         * Cleans up streaming speech recognition and LLM text artifacts:
+         * 1. Eliminates spaces erroneously inserted across subword token boundaries (e.g. "fu el" -> "fuel").
+         * 2. Collapses redundant consecutive whitespace.
+         * 3. Fixes spaces separated from standard punctuation (e.g. "fuel trims ?" -> "fuel trims?").
+         * 4. Heals bound morphemes / suffixes (e.g. "look ing" -> "looking", "igni tion" -> "ignition").
+         */
+        fun cleanTranscriptText(text: String): String {
+            if (text.isBlank()) return text
+            var result = text
+
+            // 1. Normalize multiple consecutive spaces
+            result = result.replace(Regex(" {2,}"), " ")
+
+            // 2. Remove space before standard punctuation marks
+            result = result.replace(Regex("\\s+([.,!?;:])"), "$1")
+
+            // 3. Heal common speech-to-text tokenization splits (automotive & conversational terms)
+            val commonSplits = listOf(
+                "fu\\s+el" to "fuel",
+                "fu\\s+els" to "fuels",
+                "cool\\s+ant" to "coolant",
+                "cool\\s+ants" to "coolants",
+                "trans\\s+mission" to "transmission",
+                "trans\\s+missions" to "transmissions",
+                "al\\s+ternator" to "alternator",
+                "al\\s+ternators" to "alternators",
+                "rad\\s+iator" to "radiator",
+                "rad\\s+iators" to "radiators",
+                "odo\\s+meter" to "odometer",
+                "odo\\s+meters" to "odometers",
+                "cata\\s+lytic" to "catalytic",
+                "cyl\\s+inder" to "cylinder",
+                "cyl\\s+inders" to "cylinders",
+                "mani\\s+fold" to "manifold",
+                "mani\\s+folds" to "manifolds",
+                "igni\\s+tion" to "ignition",
+                "igni\\s+tions" to "ignitions",
+                "pres\\s+sure" to "pressure",
+                "pres\\s+sures" to "pressures",
+                "sen\\s+sor" to "sensor",
+                "sen\\s+sors" to "sensors",
+                "steer\\s+ing" to "steering",
+                "throt\\s+tle" to "throttle",
+                "throt\\s+tles" to "throttles",
+                "bat\\s+tery" to "battery",
+                "bat\\s+teries" to "batteries",
+                "dia\\s+gnostic" to "diagnostic",
+                "dia\\s+gnostics" to "diagnostics",
+                "ve\\s+hicle" to "vehicle",
+                "ve\\s+hicles" to "vehicles",
+                "muf\\s+fler" to "muffler",
+                "muf\\s+flers" to "mufflers",
+                "ex\\s+haust" to "exhaust",
+                "mile\\s+age" to "mileage",
+                "volt\\s+age" to "voltage",
+                "am\\s+perage" to "amperage",
+                "al\\s+ign" to "align",
+                "al\\s+igns" to "aligns",
+                "al\\s+ignment" to "alignment",
+                "dis\\s+connect" to "disconnect",
+                "dis\\s+connects" to "disconnects",
+                "dis\\s+connected" to "disconnected",
+                "dis\\s+connecting" to "disconnecting",
+                "moni\\s+tor" to "monitor",
+                "moni\\s+tors" to "monitors",
+                "moni\\s+toring" to "monitoring",
+                "ana\\s+lyze" to "analyze",
+                "ana\\s+lyzing" to "analyzing",
+                "ana\\s+lysis" to "analysis",
+                "look\\s+ing" to "looking",
+                "check\\s+ing" to "checking",
+                "run\\s+ning" to "running",
+                "driv\\s+ing" to "driving",
+                "work\\s+ing" to "working",
+                "start\\s+ing" to "starting",
+                "read\\s+ing" to "reading",
+                "read\\s+ings" to "readings",
+                "com\\s+puter" to "computer",
+                "spe\\s+cific" to "specific",
+                "pa\\s+rameter" to "parameter",
+                "pa\\s+rameters" to "parameters"
+            )
+
+            for ((pattern, replacement) in commonSplits) {
+                val regex = Regex("(?i)\\b$pattern\\b")
+                result = regex.replace(result) { match ->
+                    val matched = match.value
+                    when {
+                        matched.all { it.isUpperCase() } -> replacement.uppercase()
+                        matched.firstOrNull()?.isUpperCase() == true -> replacement.replaceFirstChar { it.uppercase() }
+                        else -> replacement.lowercase()
+                    }
+                }
+            }
+
+            // 4. Heal generic suffix splits where bound morphemes were disconnected:
+            // e.g. "look ing", "check ing", "igni tion", "move ment"
+            val suffixRegex = Regex("(?i)\\b([a-zA-Z]{2,})\\s+(ing|tion|tions|ment|ments|ness)\\b")
+            result = suffixRegex.replace(result) { match ->
+                "${match.groupValues[1]}${match.groupValues[2]}"
+            }
+
+            return result
         }
     }
 }

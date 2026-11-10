@@ -803,26 +803,27 @@ fun DtcAwareMessageText(
     lineHeight: TextUnit = 17.sp,
     onDtcClick: (String) -> Unit
 ) {
+    val sanitizedText = remember(text) { GeminiAgentViewModel.cleanTranscriptText(text) }
     val dtcRegex = remember { Regex("\\b([PCBU][0-9A-Fa-f]{4})\\b") }
-    val detectedDtcs = remember(text) {
-        dtcRegex.findAll(text)
+    val detectedDtcs = remember(sanitizedText) {
+        dtcRegex.findAll(sanitizedText)
             .map { it.value.uppercase() }
             .distinct()
             .toList()
     }
 
-    val annotatedString = remember(text, textColor) {
+    val annotatedString = remember(sanitizedText, textColor) {
         buildAnnotatedString {
             var lastIndex = 0
-            val matches = dtcRegex.findAll(text).toList()
+            val matches = dtcRegex.findAll(sanitizedText).toList()
             if (matches.isEmpty()) {
-                append(text)
+                append(sanitizedText)
             } else {
                 for (match in matches) {
                     val start = match.range.first
                     val end = match.range.last + 1
                     if (start > lastIndex) {
-                        append(text.substring(lastIndex, start))
+                        append(sanitizedText.substring(lastIndex, start))
                     }
                     val code = match.value.uppercase()
                     pushLink(
@@ -843,8 +844,8 @@ fun DtcAwareMessageText(
                     pop()
                     lastIndex = end
                 }
-                if (lastIndex < text.length) {
-                    append(text.substring(lastIndex))
+                if (lastIndex < sanitizedText.length) {
+                    append(sanitizedText.substring(lastIndex))
                 }
             }
         }
