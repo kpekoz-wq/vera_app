@@ -246,6 +246,7 @@ class GeminiAgentViewModel : ViewModel() {
     val replaySample: StateFlow<RecordedDataSample?> = _replaySample.asStateFlow()
 
     private var replayJob: kotlinx.coroutines.Job? = null
+    private var activeReplaySamples: List<RecordedDataSample> = emptyList()
 
     val effectiveMetrics: StateFlow<BluetoothObdManager.VehicleMetrics> = combine(
         obdManager.metrics,
@@ -695,6 +696,7 @@ class GeminiAgentViewModel : ViewModel() {
         }
 
         replayJob?.cancel()
+        activeReplaySamples = samples
         _isReplaying.value = true
         _isReplayPaused.value = false
         val firstMs = samples.first().timestampMs
@@ -707,10 +709,9 @@ class GeminiAgentViewModel : ViewModel() {
         _replaySample.value = samples.first()
 
         replayJob = viewModelScope.launch(Dispatchers.Default) {
-            var currentOffset = 0L
             while (_isReplaying.value) {
                 if (!_isReplayPaused.value) {
-                    currentOffset += 100L
+                    var currentOffset = _replayCurrentMs.value + 100L
                     if (currentOffset >= durationMs) {
                         currentOffset = durationMs
                         _isReplayPaused.value = true
@@ -754,9 +755,11 @@ class GeminiAgentViewModel : ViewModel() {
         _replayCurrentMs.value = targetOffset
         _replayProgress.value = fraction.coerceIn(0f, 1f)
 
-        val sm = sessionManager ?: return
-        val session = sm.loadSession(_currentSessionId.value) ?: return
-        val samples = session.safeRecordedSamples
+        val samples = if (activeReplaySamples.isNotEmpty()) {
+            activeReplaySamples
+        } else {
+            sessionManager?.loadSession(_currentSessionId.value)?.safeRecordedSamples ?: emptyList()
+        }
         if (samples.isNotEmpty()) {
             val firstMs = samples.first().timestampMs
             val targetMs = firstMs + targetOffset
@@ -776,6 +779,7 @@ class GeminiAgentViewModel : ViewModel() {
     fun stopReplay() {
         replayJob?.cancel()
         replayJob = null
+        activeReplaySamples = emptyList()
         _isReplaying.value = false
         _isReplayPaused.value = false
         _replaySample.value = null

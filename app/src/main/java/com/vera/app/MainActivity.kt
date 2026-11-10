@@ -4806,6 +4806,9 @@ fun VeraMainScreen(
 
         if (isReplaying) {
             // --- FLIGHT RECORDER REPLAY CONTROLS (Bottom Bar) ---
+            var timeBoxWidthDp by remember { mutableStateOf<androidx.compose.ui.unit.Dp?>(null) }
+            val density = LocalDensity.current
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4843,7 +4846,13 @@ fun VeraMainScreen(
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = Color(0xFF002833),
-                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f))
+                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
+                        modifier = Modifier.onGloballyPositioned { coords ->
+                            val w = with(density) { coords.size.width.toDp() }
+                            if (timeBoxWidthDp != w) {
+                                timeBoxWidthDp = w
+                            }
+                        }
                     ) {
                         Text(
                             text = timeStr,
@@ -4858,85 +4867,99 @@ fun VeraMainScreen(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // Transport Controls Row (Large, mechanic-friendly touch targets)
+                // Transport Controls Row (Aligned with Slider and Time Box)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 1. Skip Back 15s Button
-                    Surface(
-                        onClick = { viewModel.seekReplayBy(-15000L) },
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
-                        modifier = Modifier.height(46.dp)
+                    // Left 3 buttons container: matches the progress bar (Slider) length
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        // 1. Skip Back 15s Button
+                        Surface(
+                            onClick = { viewModel.seekReplayBy(-15000L) },
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                            modifier = Modifier.height(46.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.FastRewind,
-                                contentDescription = "Skip Back 15 Seconds",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("-15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FastRewind,
+                                    contentDescription = "Skip Back 15 Seconds",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("-15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
-                    }
 
-                    // 2. Play / Pause Button (Large Prominent Action)
-                    Surface(
-                        onClick = { viewModel.toggleReplayPause() },
-                        shape = CircleShape,
-                        color = Color(0xFF00E5FF),
-                        modifier = Modifier.size(52.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = if (isReplayPaused) "Play" else "Pause",
-                                tint = Color(0xFF00222B),
-                                modifier = Modifier.size(30.dp)
-                            )
-                        }
-                    }
-
-                    // 3. Skip Ahead 15s Button
-                    Surface(
-                        onClick = { viewModel.seekReplayBy(15000L) },
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
-                        modifier = Modifier.height(46.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        // 2. Play / Pause Button (Large Prominent Action)
+                        Surface(
+                            onClick = { viewModel.toggleReplayPause() },
+                            shape = CircleShape,
+                            color = Color(0xFF00E5FF),
+                            modifier = Modifier.size(52.dp)
                         ) {
-                            Text("+15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.FastForward,
-                                contentDescription = "Skip Ahead 15 Seconds",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                    contentDescription = if (isReplayPaused) "Play" else "Pause",
+                                    tint = Color(0xFF00222B),
+                                    modifier = Modifier.size(30.dp)
+                                )
+                            }
+                        }
+
+                        // 3. Skip Ahead 15s Button
+                        Surface(
+                            onClick = { viewModel.seekReplayBy(15000L) },
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                            modifier = Modifier.height(46.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("+15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.FastForward,
+                                    contentDescription = "Skip Ahead 15 Seconds",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
 
-                    // 4. Stop Button (Exits replay, restores normal dashboard)
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // 4. Stop Button (Matches width of the elapsed time box directly above it)
                     Surface(
                         onClick = { viewModel.stopReplay() },
                         shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                        modifier = Modifier.height(46.dp)
+                        modifier = Modifier
+                            .then(
+                                if (timeBoxWidthDp != null) Modifier.width(timeBoxWidthDp!!)
+                                else Modifier.defaultMinSize(minWidth = 100.dp)
+                            )
+                            .height(46.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 14.dp),
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
