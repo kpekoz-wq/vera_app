@@ -2158,7 +2158,6 @@ fun VeraMainScreen(
     val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
     val availableDevices = remember(expanded) { viewModel.getAvailableDevices(context) }
-    var unitDropdownExpanded by remember { mutableStateOf(false) }
 
     val demoCleanLabel = "Demo: Clean ECU (Healthy Vehicle)"
     val demoDirtyLabel = "Demo: Dirty ECU (Cyl 5 Misfire & P0305)"
@@ -2849,6 +2848,201 @@ fun VeraMainScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // App Settings: Voice & Units Selectors
+                    Text(
+                        text = "Preferences",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+
+                    var drawerVoiceDropdownExpanded by remember { mutableStateOf(false) }
+                    var drawerUnitDropdownExpanded by remember { mutableStateOf(false) }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Voice Selector
+                        Box(modifier = Modifier.weight(1f)) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { drawerVoiceDropdownExpanded = true },
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("🎙️", fontSize = 12.sp)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Column {
+                                            Text(
+                                                text = "Voice",
+                                                fontSize = 9.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                            )
+                                            Text(
+                                                text = liveVoiceName,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select Gemini Voice",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = drawerVoiceDropdownExpanded,
+                                onDismissRequest = { drawerVoiceDropdownExpanded = false }
+                            ) {
+                                val voices = listOf(
+                                    Triple("Aoede", "Warm & engaging female", "Default"),
+                                    Triple("Charon", "Calm & steady male", "Deep Resonant"),
+                                    Triple("Fenrir", "Deep & authoritative male", "Mechanic"),
+                                    Triple("Kore", "Approachable & relaxed female", "Friendly"),
+                                    Triple("Puck", "Upbeat & energetic male", "Expressive")
+                                )
+
+                                voices.forEach { (vName, desc, tag) ->
+                                    val isSelected = vName.equals(liveVoiceName, ignoreCase = true)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = "$vName ($tag)",
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                        fontSize = 13.sp,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (isSelected) {
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = "Active",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = desc,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.setLiveVoiceName(vName)
+                                            drawerVoiceDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Units Selector
+                        Box(modifier = Modifier.weight(1f)) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { drawerUnitDropdownExpanded = true },
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("📐", fontSize = 12.sp)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Column {
+                                            Text(
+                                                text = "Units",
+                                                fontSize = 9.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                            )
+                                            Text(
+                                                text = if (unitSystem == UnitSystem.SAE) "SAE (US)" else "Metric",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select Unit System",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = drawerUnitDropdownExpanded,
+                                onDismissRequest = { drawerUnitDropdownExpanded = false }
+                            ) {
+                                val isSae = unitSystem == UnitSystem.SAE
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Column {
+                                                Text("SAE / Imperial", fontWeight = if (isSae) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
+                                                Text("°F, mph, psi, inHg", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                            if (isSae) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        viewModel.setUnitSystem(UnitSystem.SAE)
+                                        drawerUnitDropdownExpanded = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Column {
+                                                Text("Metric / ISO", fontWeight = if (!isSae) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
+                                                Text("°C, km/h, kPa, bar", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                            if (!isSae) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        viewModel.setUnitSystem(UnitSystem.METRIC)
+                                        drawerUnitDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(10.dp))
 
                     // Feedback & Help Button
@@ -3559,71 +3753,31 @@ fun VeraMainScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 3. Two Rows Horizontal Scrolling Live Data Carousel with Pulldown Unit Selector & Twirldown Toggle
+        // 3. Two Rows Horizontal Scrolling Live Data Carousel with Record Button & Twirldown Toggle
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
-                modifier = Modifier.clickable { isLiveStreamsExpanded = !isLiveStreamsExpanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = if (isConnected && supportedStreams.isNotEmpty()) "Live Streams (${supportedStreams.size})" else "Live Data Streams",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = if (isLiveStreamsExpanded) " ▲" else " ▼",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-
-                // Pulldown Unit Selector (SAE vs Metric)
-                Box {
-                    Surface(
-                        onClick = { unitDropdownExpanded = true },
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.padding(1.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (unitSystem == UnitSystem.SAE) "SAE (US)" else "Metric (ISO)",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(" ▾", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-
-                    DropdownMenu(
-                        expanded = unitDropdownExpanded,
-                        onDismissRequest = { unitDropdownExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("SAE / Imperial (°F, mph, psi)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                            onClick = {
-                                viewModel.setUnitSystem(UnitSystem.SAE)
-                                unitDropdownExpanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Metric / ISO (°C, km/h, kPa)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                            onClick = {
-                                viewModel.setUnitSystem(UnitSystem.METRIC)
-                                unitDropdownExpanded = false
-                            }
-                        )
-                    }
+                Row(
+                    modifier = Modifier.clickable { isLiveStreamsExpanded = !isLiveStreamsExpanded },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isConnected && supportedStreams.isNotEmpty()) "Live Streams (${supportedStreams.size})" else "Live Data Streams",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (isLiveStreamsExpanded) " ▲" else " ▼",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(6.dp))
@@ -3651,11 +3805,32 @@ fun VeraMainScreen(
                 )
             }
 
-            Text(
-                text = if (isConnected) "Tap • Hold to select multiple" else "Disconnected",
-                fontSize = 10.sp,
-                color = if (isConnected) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (isConnected) {
+                Column(
+                    horizontalAlignment = Alignment.End
+                ) {
+                    Text(
+                        text = "Tap: detail",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF4CAF50),
+                        lineHeight = 10.sp
+                    )
+                    Text(
+                        text = "Tap+hold: Multiple",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF4CAF50),
+                        lineHeight = 10.sp
+                    )
+                }
+            } else {
+                Text(
+                    text = "Disconnected",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         // Multi-Stream Selection Floating Banner
@@ -4276,89 +4451,6 @@ fun VeraMainScreen(
                                         onClick = {
                                             viewModel.setChatModel(model)
                                             modelDropdownExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(4.dp))
-
-                        // Pulldown Voice Selector
-                        var voiceDropdownExpanded by remember { mutableStateOf(false) }
-                        val activeVoice = liveVoiceName
-
-                        Box {
-                            Surface(
-                                modifier = Modifier.clickable { voiceDropdownExpanded = true },
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "🎙️ $activeVoice",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(2.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select Gemini Voice",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = voiceDropdownExpanded,
-                                onDismissRequest = { voiceDropdownExpanded = false }
-                            ) {
-                                val voices = listOf(
-                                    Triple("Aoede", "Warm & engaging female", "Default"),
-                                    Triple("Charon", "Calm & steady male", "Deep Resonant"),
-                                    Triple("Fenrir", "Deep & authoritative male", "Mechanic"),
-                                    Triple("Kore", "Approachable & relaxed female", "Friendly"),
-                                    Triple("Puck", "Upbeat & energetic male", "Expressive")
-                                )
-
-                                voices.forEach { (vName, desc, tag) ->
-                                    val isSelected = vName.equals(activeVoice, ignoreCase = true)
-                                    DropdownMenuItem(
-                                        text = {
-                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Text(
-                                                        text = "$vName ($tag)",
-                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                        fontSize = 13.sp,
-                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                    if (isSelected) {
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Icon(
-                                                            imageVector = Icons.Default.Check,
-                                                            contentDescription = "Active",
-                                                            tint = MaterialTheme.colorScheme.primary,
-                                                            modifier = Modifier.size(14.dp)
-                                                        )
-                                                    }
-                                                }
-                                                Text(
-                                                    text = desc,
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                                )
-                                            }
-                                        },
-                                        onClick = {
-                                            viewModel.setLiveVoiceName(vName)
-                                            voiceDropdownExpanded = false
                                         }
                                     )
                                 }
