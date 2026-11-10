@@ -901,6 +901,121 @@ class GeminiAgentViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Export a saved drive session to formatted diagnostic text optimized for external AI analysis.
+     */
+    fun exportSessionToText(sessionId: String): String {
+        val sm = sessionManager ?: return ""
+        val session = sm.loadSession(sessionId) ?: return ""
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+
+        val sb = StringBuilder()
+        sb.appendLine("==================================================")
+        sb.appendLine("       VERA VEHICLE DIAGNOSTIC & DRIVE REPORT     ")
+        sb.appendLine("==================================================")
+        sb.appendLine("Title: ${session.title}")
+        sb.appendLine("Date: ${session.formattedDate}")
+        sb.appendLine("Vehicle: ${session.vehicleDetails ?: "Unknown Vehicle"}")
+        sb.appendLine("VIN: ${session.vehicleVin ?: "N/A"}")
+        if (!session.odometerFormatted.isNullOrBlank()) {
+            sb.appendLine("Odometer: ${session.odometerFormatted}")
+        }
+        val dtcs = session.safeDtcs
+        if (dtcs.isNotEmpty()) {
+            sb.appendLine("Diagnostic Trouble Codes (DTCs): ${dtcs.joinToString(", ")}")
+        } else {
+            sb.appendLine("Diagnostic Trouble Codes (DTCs): None detected / Clean")
+        }
+        val samples = session.safeRecordedSamples
+        if (samples.isNotEmpty()) {
+            val durationSec = (samples.last().timestampMs - samples.first().timestampMs) / 1000.0
+            sb.appendLine("Recorded Telemetry Samples: ${samples.size} data points (~${String.format(java.util.Locale.US, "%.1f", durationSec)}s duration)")
+        }
+        sb.appendLine("==================================================")
+        sb.appendLine()
+        sb.appendLine("--- CONVERSATION TRANSCRIPT & MECHANIC INTERACTION ---")
+        val msgs = session.safeMessages
+        if (msgs.isEmpty()) {
+            sb.appendLine("(No chat messages logged in this session.)")
+        } else {
+            for ((idx, msg) in msgs.withIndex()) {
+                val senderLabel = when (msg.sender) {
+                    "User" -> "USER / DRIVER"
+                    "VERA", "OttoAI" -> "VERA (AI AUTOMOTIVE MECHANIC)"
+                    "VERA (Live)", "OttoAI (Live)" -> "VERA (LIVE VOICE SESSION)"
+                    else -> msg.sender.uppercase()
+                }
+                val timeStr = dateFormat.format(java.util.Date(msg.timestamp))
+                sb.appendLine("[$timeStr] [${idx + 1}] $senderLabel:")
+                sb.appendLine(msg.text.trim())
+                sb.appendLine("--------------------------------------------------")
+            }
+        }
+
+        if (samples.isNotEmpty()) {
+            sb.appendLine()
+            sb.appendLine("--- TELEMETRY FLIGHT DATA SUMMARY (HIGH-SPEED OBD2 LOG) ---")
+            val isSae = _unitSystem.value == UnitSystem.SAE
+            val spdUnit = if (isSae) "mph" else "km/h"
+            val tempUnit = if (isSae) "°F" else "°C"
+
+            val maxRpm = samples.maxOfOrNull { it.metricsSnapshot.rpm } ?: 0
+            val avgRpm = samples.map { it.metricsSnapshot.rpm }.average().toInt()
+            val maxSpeed = samples.maxOfOrNull { if (isSae) it.metricsSnapshot.speed * 0.621371 else it.metricsSnapshot.speed.toDouble() } ?: 0.0
+            val maxCoolantRaw = samples.maxOfOrNull { it.metricsSnapshot.coolantTemp } ?: 0
+            val maxCoolant = if (isSae) (maxCoolantRaw * 9.0 / 5.0) + 32.0 else maxCoolantRaw.toDouble()
+            val maxLoad = samples.maxOfOrNull { it.metricsSnapshot.engineLoad } ?: 0
+            val maxTrim = samples.maxOfOrNull { it.metricsSnapshot.fuelTrim } ?: 0
+            val minTrim = samples.minOfOrNull { it.metricsSnapshot.fuelTrim } ?: 0
+
+            sb.appendLine("Max RPM: $maxRpm | Avg RPM: $avgRpm")
+            sb.appendLine("Max Speed: ${String.format(java.util.Locale.US, "%.1f", maxSpeed)} $spdUnit")
+            sb.appendLine("Max Coolant Temp: ${String.format(java.util.Locale.US, "%.1f", maxCoolant)} $tempUnit")
+            sb.appendLine("Max Engine Load: $maxLoad%")
+            sb.appendLine("Fuel Trim Range: ${minTrim}% to ${maxTrim}%")
+            val roadSamples = samples.mapNotNull { it.roadContextSnapshot }
+            if (roadSamples.isNotEmpty()) {
+                val maxGrade = roadSamples.maxOfOrNull { it.roadGradePercent } ?: 0.0
+                val minGrade = roadSamples.minOfOrNull { it.roadGradePercent } ?: 0.0
+                val locations = roadSamples.map { it.streetName }.filter { it.isNotBlank() && it != "Locating..." }.distinct()
+                sb.appendLine("Road Grade Range: ${String.format(java.util.Locale.US, "%+.1f%%", minGrade)} to ${String.format(java.util.Locale.US, "%+.1f%%", maxGrade)}")
+                if (locations.isNotEmpty()) {
+                    sb.appendLine("Key Traversed Locations: ${locations.take(5).joinToString(", ")}")
+                }
+            }
+            sb.appendLine("==================================================")
+        }
+
+        sb.appendLine()
+        sb.appendLine("[AI Prompt Hint: This diagnostic log was produced by VERA Automotive Assistant. You can analyze the trouble codes, mechanical dialogue, and telemetry metrics above to provide a second opinion or deeper mechanical triage.]")
+        return sb.toString()
+    }
+
+    /**
+     * Export a saved drive session's full high-speed telemetry log into CSV format.
+     */
+    fun exportSessionToCsv(sessionId: String): String {
+        val sm = sessionManager ?: return ""
+        val session = sm.loadSession(sessionId) ?: return ""
+        val samples = session.safeRecordedSamples
+        if (samples.isEmpty()) return ""
+        return generateCsvData(
+            samples = samples,
+            vehicleDetails = session.vehicleDetails,
+            vehicleVin = session.vehicleVin,
+            unitSystem = _unitSystem.value
+        )
+    }
+
+    /**
+     * Export the raw JSON file content of a saved drive session.
+     */
+    fun exportSessionToJson(sessionId: String): String {
+        val sm = sessionManager ?: return ""
+        val session = sm.loadSession(sessionId) ?: return ""
+        return sm.getSessionJson(sessionId) ?: ""
+    }
+
     // --- REPLAY PLAYBACK CONTROLS ---
     fun startReplay(sessionId: String) {
         val sm = sessionManager ?: return

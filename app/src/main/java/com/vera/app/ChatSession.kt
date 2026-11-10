@@ -117,6 +117,18 @@ class ChatSessionManager(private val context: android.content.Context) {
     }
 
     @Synchronized
+    fun getSessionJson(id: String): String? {
+        val file = File(chatsDir, "$id.json")
+        if (!file.exists()) return null
+        return try {
+            file.readText(Charsets.UTF_8)
+        } catch (e: Exception) {
+            android.util.Log.e("ChatSessionManager", "Failed to read chat session json $id", e)
+            null
+        }
+    }
+
+    @Synchronized
     fun deleteSession(id: String): Boolean {
         val file = File(chatsDir, "$id.json")
         return if (file.exists()) file.delete() else false

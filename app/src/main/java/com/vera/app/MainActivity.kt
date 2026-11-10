@@ -2369,6 +2369,66 @@ fun VeraMainScreen(
         pendingCsvResult = null
     }
 
+    // Export Saved Drive Session Download Launchers (Text, CSV, JSON)
+    var pendingExportContent by remember { mutableStateOf<String?>(null) }
+    var pendingExportMimeType by remember { mutableStateOf("text/plain") }
+
+    val exportSessionTextLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        val content = pendingExportContent
+        if (uri != null && content != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(content.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(context, "Session report downloaded successfully!", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                android.util.Log.e("VERA", "Error downloading session report", e)
+                Toast.makeText(context, "Failed to save file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        pendingExportContent = null
+    }
+
+    val exportSessionCsvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        val content = pendingExportContent
+        if (uri != null && content != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(content.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(context, "Flight telemetry CSV downloaded successfully!", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                android.util.Log.e("VERA", "Error downloading session telemetry CSV", e)
+                Toast.makeText(context, "Failed to save CSV: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        pendingExportContent = null
+    }
+
+    val exportSessionJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val content = pendingExportContent
+        if (uri != null && content != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(content.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(context, "Full session JSON downloaded successfully!", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                android.util.Log.e("VERA", "Error downloading session JSON", e)
+                Toast.makeText(context, "Failed to save JSON: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        pendingExportContent = null
+    }
+
+    var selectedSessionForDownload by remember { mutableStateOf<ChatSession?>(null) }
+
     var attachedFiles by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
 
@@ -2840,6 +2900,25 @@ fun VeraMainScreen(
                                                 Spacer(modifier = Modifier.width(10.dp))
                                             }
 
+                                            // Download Session Button (Export Report / Telemetry CSV / JSON)
+                                            Surface(
+                                                onClick = {
+                                                    selectedSessionForDownload = session
+                                                },
+                                                shape = CircleShape,
+                                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)),
+                                                modifier = Modifier.size(42.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    DownloadSaveIcon(
+                                                        tint = MaterialTheme.colorScheme.secondary,
+                                                        modifier = Modifier.size(19.dp)
+                                                    )
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+
                                             Surface(
                                                 onClick = {
                                                     viewModel.deleteChatSession(session.id)
@@ -2863,6 +2942,170 @@ fun VeraMainScreen(
                                 }
                             }
                         }
+                    }
+
+                    // Download Session Dialog for External AI Export
+                    if (selectedSessionForDownload != null) {
+                        val session = selectedSessionForDownload!!
+                        val cleanTitle = session.title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
+                        val dateTag = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date(session.timestamp))
+                        val hasFlightData = session.hasReplayData
+
+                        AlertDialog(
+                            onDismissRequest = { selectedSessionForDownload = null },
+                            title = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    DownloadSaveIcon(
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "Download Session Log",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 17.sp
+                                    )
+                                }
+                            },
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text(
+                                        text = "Export \"${session.title}\" for second-opinion analysis in ChatGPT, Claude, Gemini, or other AI models.",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+
+                                    // Option 1: Formatted AI Diagnostic Report (.txt)
+                                    Surface(
+                                        onClick = {
+                                            val textContent = viewModel.exportSessionToText(session.id)
+                                            pendingExportContent = textContent
+                                            pendingExportMimeType = "text/plain"
+                                            val filename = "VERA_Report_${cleanTitle}_$dateTag.txt"
+                                            exportSessionTextLauncher.launch(filename)
+                                            selectedSessionForDownload = null
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Chat,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column {
+                                                Text(
+                                                    "AI Diagnostic Report (.txt)",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp
+                                                )
+                                                Text(
+                                                    "Dialogue, vehicle details, DTCs, and telemetry summary. Ideal for pasting or uploading to any AI.",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Option 2: High-Speed Flight Telemetry (.csv)
+                                    if (hasFlightData) {
+                                        Surface(
+                                            onClick = {
+                                                val csvContent = viewModel.exportSessionToCsv(session.id)
+                                                pendingExportContent = csvContent
+                                                pendingExportMimeType = "text/csv"
+                                                val filename = "VERA_Telemetry_${cleanTitle}_$dateTag.csv"
+                                                exportSessionCsvLauncher.launch(filename)
+                                                selectedSessionForDownload = null
+                                            },
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                DownloadSaveIcon(
+                                                    tint = Color(0xFF00E5FF),
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Column {
+                                                    Text(
+                                                        "Flight Telemetry CSV (.csv)",
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 13.sp
+                                                    )
+                                                    Text(
+                                                        "${session.safeRecordedSamples.size} timestamps of RPM, speed, temps, trims, topography, and Mode 22 data.",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Option 3: Full Session JSON (.json)
+                                    Surface(
+                                        onClick = {
+                                            val jsonContent = viewModel.exportSessionToJson(session.id)
+                                            pendingExportContent = jsonContent
+                                            pendingExportMimeType = "application/json"
+                                            val filename = "VERA_Session_${cleanTitle}_$dateTag.json"
+                                            exportSessionJsonLauncher.launch(filename)
+                                            selectedSessionForDownload = null
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DirectionsCar,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.tertiary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column {
+                                                Text(
+                                                    "Raw Session Archive (.json)",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp
+                                                )
+                                                Text(
+                                                    "Complete raw structured JSON backup with all metrics and timestamps.",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {},
+                            dismissButton = {
+                                TextButton(onClick = { selectedSessionForDownload = null }) {
+                                    Text("Cancel")
+                                }
+                            }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
