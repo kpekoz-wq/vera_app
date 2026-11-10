@@ -4060,20 +4060,20 @@ fun VeraMainScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 3.4 opendbc Dynamic Chassis & High-Speed CAN Section
-        if (isConnected) {
-            Column(
+        // 3.4 opendbc Dynamic Chassis & High-Speed CAN Section (Always visible)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+        ) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp)
+                    .clickable { isOpendbcExpanded = !isOpendbcExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { isOpendbcExpanded = !isOpendbcExpanded },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "opendbc Dynamics",
@@ -4088,30 +4088,64 @@ fun VeraMainScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+                    Text(
+                        text = if (isConnected && activeOpendbcProfile != null) {
+                            "Comma.ai Profile: ${activeOpendbcProfile?.platformName}"
+                        } else {
+                            "100Hz Raw CAN Chassis & Dynamics"
+                        },
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
-                    if (isHighSpeedCanCapable) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color(0xFF00E676).copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = "⚡ ${activeOpendbcProfile?.platformName ?: "CAN Active"}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF00E676),
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    } else {
+                if (isConnected && isHighSpeedCanCapable) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFF00E676).copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = "⚡ ${activeOpendbcProfile?.platformName ?: "CAN Active"}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF00E676),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                } else if (isConnected) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
                         Text(
                             text = "Standard OBD-II",
                             fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                    ) {
+                        Text(
+                            text = "opendbc Ready",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
+            }
 
-                if (isOpendbcExpanded) {
+            AnimatedVisibility(
+                visible = isOpendbcExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column {
                     Spacer(modifier = Modifier.height(4.dp))
                     if (opendbcSignals.isNotEmpty()) {
                         val signalList = opendbcSignals.values.toList()
@@ -4139,27 +4173,45 @@ fun VeraMainScreen(
                                 }
                             }
                         }
-                    } else if (isHighSpeedCanCapable) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "High-speed CAN adapter ready (${adapterHardwareName}). Listening for broadcast frames...",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
                     } else {
+                        // Default placeholder tiles when disconnected or waiting for raw broadcast frames
+                        val spdUnit = if (unitSystem == UnitSystem.SAE) "mph" else "km/h"
+                        val pressUnit = if (unitSystem == UnitSystem.SAE) "psi" else "bar"
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                SleekMetricTile("Steering Angle", "--", "deg", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Brake Pressure", "--", pressUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Wheel FL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Wheel FR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                SleekMetricTile("Wheel RL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Wheel RR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Gear", "--", "Gear", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Steering Rate", "--", "deg/s", isSelected = false, modifier = Modifier.weight(1f))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "⚡ High-Speed CAN broadcast signals (Steering Angle, Wheel Speeds, Brake Pressure) require a vLinker FS / MC+ or OBDLink adapter (or an SGW bypass cable on 2018+ vehicles).",
+                                text = if (isConnected && isHighSpeedCanCapable) {
+                                    "⚡ High-Speed CAN adapter active (${adapterHardwareName}). Listening for broadcast CAN messages..."
+                                } else if (isConnected) {
+                                    "⚡ Connected via standard OBD-II (${adapterHardwareName}). High-speed 100Hz broadcast signals (Steering, Wheel Speeds, Brake Pressure) require a vLinker FS / MC+ or OBDLink adapter (or an SGW bypass cable on 2018+ vehicles)."
+                                } else {
+                                    "⚡ comma.ai opendbc signal engine loaded. Connect a vLinker FS / MC+ or OBDLink adapter (or start Demo Mode) to stream live vehicle dynamics."
+                                },
                                 fontSize = 10.sp,
                                 lineHeight = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4169,8 +4221,8 @@ fun VeraMainScreen(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(6.dp))
         }
+        Spacer(modifier = Modifier.height(6.dp))
 
         // 3.5 Mode 06 Monitors Panel Header (Flush Left)
         Row(
