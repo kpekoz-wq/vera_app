@@ -400,15 +400,15 @@ class GeminiAgentViewModel : ViewModel() {
 
         if (cleanText.isBlank()) return
 
-        val activeVoice = liveStreamManager?.voiceName?.value ?: "Aoede"
+        val activeVoice = _liveVoiceName.value
 
         viewModelScope.launch(Dispatchers.IO) {
             var audioPlaySuccess = false
             val cacheDir = appContext?.cacheDir
 
             if (geminiApiKey.isNotBlank() && cacheDir != null) {
-                // Use Gemini Native Voice models to output smooth human voice (Aoede) matching live voice chat
-                val ttsModels = listOf("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-2.5-flash-preview-tts")
+                // Use Gemini Native Voice models to output smooth human voice matching selected voice
+                val ttsModels = listOf("gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts")
                 for (modelName in ttsModels) {
                     try {
                         val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$geminiApiKey")
@@ -563,10 +563,13 @@ class GeminiAgentViewModel : ViewModel() {
 
     fun previewVoice(voiceName: String, samplePhrase: String = "Hello, I'm Vera.") {
         stopSpeaking()
+        val trimmed = voiceName.trim()
+        val found = GeminiLiveStreamManager.SUPPORTED_LIVE_VOICES.firstOrNull { it.equals(trimmed, ignoreCase = true) } ?: "Aoede"
+        setLiveVoiceName(found)
         viewModelScope.launch(Dispatchers.IO) {
             var audioPlaySuccess = false
             val cacheDir = appContext?.cacheDir
-            val voiceKey = voiceName.trim().lowercase()
+            val voiceKey = found.lowercase()
             val cachedPreviewFile = if (cacheDir != null) java.io.File(cacheDir, "vera_voice_sample_${voiceKey}.wav") else null
 
             if (cachedPreviewFile != null && cachedPreviewFile.exists() && cachedPreviewFile.length() > 1000) {
@@ -587,7 +590,7 @@ class GeminiAgentViewModel : ViewModel() {
                         }
                         player.start()
                         audioPlaySuccess = true
-                        Log.i("VERA_Voice", "Played cached voice preview for '$voiceName'")
+                        Log.i("VERA_Voice", "Played cached voice preview for '$found'")
                     } catch (e: Exception) {
                         _isSpeaking.value = false
                     }
@@ -599,8 +602,7 @@ class GeminiAgentViewModel : ViewModel() {
                 val ttsModels = listOf(
                     "gemini-3.8-flash-tts",
                     "gemini-3.8-flash-lite-tts",
-                    "gemini-3.1-flash-tts",
-                    "gemini-2.5-flash-tts",
+                    "gemini-3.1-flash-tts-preview",
                     "gemini-2.5-flash-preview-tts"
                 )
                 for (modelName in ttsModels) {
@@ -743,6 +745,11 @@ class GeminiAgentViewModel : ViewModel() {
     val savedSessions: StateFlow<List<ChatSession>> = _savedSessions.asStateFlow()
 
     fun initSessionManager(context: Context) {
+        appContext = context.applicationContext
+        val savedVoice = context.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
+            .getString("selected_live_voice", "Aoede") ?: "Aoede"
+        _liveVoiceName.value = savedVoice
+
         if (sessionManager == null) {
             val sm = ChatSessionManager(context.applicationContext)
             sessionManager = sm
@@ -975,6 +982,7 @@ class GeminiAgentViewModel : ViewModel() {
         if (liveStreamManager != null) return
         val mgr = GeminiLiveStreamManager(context.applicationContext)
         liveStreamManager = mgr
+        mgr.setVoice(_liveVoiceName.value)
         viewModelScope.launch {
             mgr.isLiveSessionActive.collect { active ->
                 _isLiveSessionActive.value = active
@@ -984,6 +992,11 @@ class GeminiAgentViewModel : ViewModel() {
         viewModelScope.launch {
             mgr.isGeminiSpeaking.collect { speaking ->
                 _isGeminiSpeaking.value = speaking
+            }
+        }
+        viewModelScope.launch {
+            mgr.voiceName.collect { name ->
+                _liveVoiceName.value = name
             }
         }
     }
@@ -1717,13 +1730,19 @@ class GeminiAgentViewModel : ViewModel() {
         return true
     }
 
-    val liveVoiceName: StateFlow<String>
-        get() = liveStreamManager?.voiceName ?: MutableStateFlow("Aoede").asStateFlow()
+    private val _liveVoiceName = MutableStateFlow("Aoede")
+    val liveVoiceName: StateFlow<String> = _liveVoiceName.asStateFlow()
 
     val vehicleOdometerKm: StateFlow<Double?> = obdManager.vehicleOdometerKm
 
     fun setLiveVoiceName(voiceName: String) {
-        liveStreamManager?.setVoice(voiceName)
+        val trimmed = voiceName.trim()
+        val found = GeminiLiveStreamManager.SUPPORTED_LIVE_VOICES.firstOrNull { it.equals(trimmed, ignoreCase = true) } ?: "Aoede"
+        _liveVoiceName.value = found
+        appContext?.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
+            ?.edit()?.putString("selected_live_voice", found)?.apply()
+        liveStreamManager?.setVoice(found)
+        Log.i("VERA_Voice", "setLiveVoiceName updated to '$found'")
     }
 
     override fun onCleared() {
