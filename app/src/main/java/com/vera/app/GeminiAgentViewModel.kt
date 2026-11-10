@@ -628,9 +628,11 @@ class GeminiAgentViewModel : ViewModel() {
         _savedSessions.value = sm.getAllSessions()
     }
 
-    fun createNewChatSession() {
+    fun createNewChatSession(autoSave: Boolean = true) {
         stopReplay()
-        autoSaveCurrentSession()
+        if (autoSave) {
+            autoSaveCurrentSession()
+        }
         synchronized(recordedSamples) { recordedSamples.clear() }
         _recordedSamplesFlow.value = emptyList()
         _currentSessionId.value = java.util.UUID.randomUUID().toString()
@@ -641,6 +643,9 @@ class GeminiAgentViewModel : ViewModel() {
                 text = "Hello! I am VERA, your autonomous automotive mechanic assistant. Connect your OBD2 adapter, scan DTCs, or ask me any diagnostic questions."
             )
         )
+        sessionManager?.let { sm ->
+            _savedSessions.value = sm.getAllSessions()
+        }
     }
 
     fun loadChatSession(sessionId: String) {
@@ -673,10 +678,12 @@ class GeminiAgentViewModel : ViewModel() {
         if (_isReplaying.value && _currentSessionId.value == sessionId) {
             stopReplay()
         }
+        val isDeletingCurrent = _currentSessionId.value == sessionId
         sm.deleteSession(sessionId)
-        _savedSessions.value = sm.getAllSessions()
-        if (_currentSessionId.value == sessionId) {
-            createNewChatSession()
+        if (isDeletingCurrent) {
+            createNewChatSession(autoSave = false)
+        } else {
+            _savedSessions.value = sm.getAllSessions()
         }
     }
 

@@ -2747,10 +2747,6 @@ fun VeraMainScreen(
                             items(savedSessions, key = { it.id }) { session ->
                                 val isCurrent = session.id == currentSessionId
                                 Surface(
-                                    onClick = {
-                                        viewModel.loadChatSession(session.id)
-                                        coroutineScope.launch { drawerState.close() }
-                                    },
                                     shape = RoundedCornerShape(12.dp),
                                     color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                                     border = if (isCurrent) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
@@ -2761,7 +2757,14 @@ fun VeraMainScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Column(modifier = Modifier.weight(1f)) {
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    viewModel.loadChatSession(session.id)
+                                                    coroutineScope.launch { drawerState.close() }
+                                                }
+                                        ) {
                                             Text(
                                                 text = session.title,
                                                 fontSize = 13.sp,
@@ -2825,7 +2828,10 @@ fun VeraMainScreen(
                                             }
 
                                             Surface(
-                                                onClick = { viewModel.deleteChatSession(session.id) },
+                                                onClick = {
+                                                    viewModel.deleteChatSession(session.id)
+                                                    Toast.makeText(context, "Session deleted", Toast.LENGTH_SHORT).show()
+                                                },
                                                 shape = CircleShape,
                                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                                                 modifier = Modifier.size(42.dp)
@@ -2834,7 +2840,7 @@ fun VeraMainScreen(
                                                     Icon(
                                                         imageVector = Icons.Default.DeleteOutline,
                                                         contentDescription = "Delete Session",
-                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
                                                         modifier = Modifier.size(20.dp)
                                                     )
                                                 }

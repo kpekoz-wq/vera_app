@@ -1,5 +1,6 @@
 package com.vera.app
 
+import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
@@ -55,33 +56,39 @@ class ChatSessionManager(private val context: android.content.Context) {
             }
         }
     }
+    private val prefs by lazy {
+        context.getSharedPreferences("vera_chat_session_prefs", Context.MODE_PRIVATE)
+    }
 
     @Synchronized
     fun getAllSessions(): List<ChatSession> {
         val files = chatsDir.listFiles { file -> file.extension.lowercase(Locale.US) == "json" }
-        if (files == null || files.isEmpty()) {
-            val demoSession = createDemoFlightSession()
-            saveSession(demoSession)
-            return listOf(demoSession)
-        }
         val sessions = mutableListOf<ChatSession>()
-        for (file in files) {
-            try {
-                val json = file.readText(Charsets.UTF_8)
-                val session = gson.fromJson(json, ChatSession::class.java)
-                if (session != null) {
-                    sessions.add(session)
+        if (files != null) {
+            for (file in files) {
+                try {
+                    val json = file.readText(Charsets.UTF_8)
+                    val session = gson.fromJson(json, ChatSession::class.java)
+                    if (session != null) {
+                        sessions.add(session)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ChatSessionManager", "Error parsing session from ${file.name}", e)
+                    file.delete()
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("ChatSessionManager", "Error parsing session from ${file.name}", e)
-                file.delete()
             }
         }
-        if (sessions.none { it.hasReplayData }) {
-            val demoSession = createDemoFlightSession()
-            saveSession(demoSession)
-            sessions.add(demoSession)
+
+        val hasSeededDemo = prefs.getBoolean("demo_flight_seeded_v1", false)
+        if (!hasSeededDemo) {
+            if (sessions.none { it.hasReplayData }) {
+                val demoSession = createDemoFlightSession()
+                saveSession(demoSession)
+                sessions.add(demoSession)
+            }
+            prefs.edit().putBoolean("demo_flight_seeded_v1", true).apply()
         }
+
         return sessions.sortedByDescending { it.timestamp }
     }
 
