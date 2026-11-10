@@ -90,6 +90,9 @@ class GeminiLiveStreamManager(private val context: Context) {
     private val _isGeminiSpeaking = MutableStateFlow(false)
     val isGeminiSpeaking: StateFlow<Boolean> = _isGeminiSpeaking.asStateFlow()
 
+    private val _isUserSpeaking = MutableStateFlow(false)
+    val isUserSpeaking: StateFlow<Boolean> = _isUserSpeaking.asStateFlow()
+
     private val _lastTranscriptText = MutableStateFlow("")
     val lastTranscriptText: StateFlow<String> = _lastTranscriptText.asStateFlow()
 
@@ -565,6 +568,7 @@ class GeminiLiveStreamManager(private val context: Context) {
             val pcmChunkSize = 3200
             val readBuffer = ByteArray(1600)
             val accumStream = ByteArrayOutputStream()
+            var speechEnergyHoldUntil = 0L
 
             while (_isLiveSessionActive.value) {
                 val record = audioRecord
@@ -578,7 +582,29 @@ class GeminiLiveStreamManager(private val context: Context) {
                     // Suppress microphone transmission while Gemini is speaking to eliminate acoustic feedback and self-interruption
                     if (_isGeminiSpeaking.value) {
                         accumStream.reset()
+                        _isUserSpeaking.value = false
                         continue
+                    }
+
+                    // Calculate local audio energy (RMS) to immediately detect user speaking and hold timer open
+                    var sumSquares = 0.0
+                    val numSamples = readBytes / 2
+                    for (i in 0 until numSamples) {
+                        val sample = (readBuffer[i * 2 + 1].toInt() shl 8) or (readBuffer[i * 2].toInt() and 0xFF)
+                        sumSquares += (sample * sample).toDouble()
+                    }
+                    val rms = if (numSamples > 0) kotlin.math.sqrt(sumSquares / numSamples) else 0.0
+                    val now = System.currentTimeMillis()
+
+                    if (rms > 400.0) { // Clear speech energy threshold
+                        speechEnergyHoldUntil = now + 1200L // Hold user speaking state for 1.2s of follow-on speech
+                        if (!_isUserSpeaking.value) {
+                            _isUserSpeaking.value = true
+                        }
+                    } else if (now > speechEnergyHoldUntil) {
+                        if (_isUserSpeaking.value) {
+                            _isUserSpeaking.value = false
+                        }
                     }
 
                     accumStream.write(readBuffer, 0, readBytes)
@@ -603,6 +629,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                     delay(30)
                 }
             }
+            _isUserSpeaking.value = false
         }
     }
 

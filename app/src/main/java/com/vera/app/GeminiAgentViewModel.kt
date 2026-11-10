@@ -1223,6 +1223,14 @@ class GeminiAgentViewModel : ViewModel() {
             }
         }
         viewModelScope.launch {
+            mgr.isUserSpeaking.collect { userSpeaking ->
+                if (userSpeaking) {
+                    // Driver is speaking: cancel follow-up timer so session doesn't suspend mid-sentence
+                    cancelFollowUpTimer()
+                }
+            }
+        }
+        viewModelScope.launch {
             mgr.voiceName.collect { name ->
                 _liveVoiceName.value = name
             }
@@ -1247,6 +1255,11 @@ class GeminiAgentViewModel : ViewModel() {
                 delay(1000L)
             }
             _followUpSecondsRemaining.value = 0
+            // Do NOT suspend if driver is currently speaking
+            if (liveStreamManager?.isUserSpeaking?.value == true) {
+                Log.i("GeminiAgentViewModel", "Follow-up timer reached 0 but driver is actively speaking. Keeping live session active.")
+                return@launch
+            }
             if (_isLiveSessionActive.value && _isHandsFreeVoiceActive.value) {
                 Log.i("GeminiAgentViewModel", "15-second follow-up window expired. Suspending live cloud stream.")
                 liveStreamManager?.stopLiveSession()
