@@ -2222,7 +2222,13 @@ fun VeraMainScreen(
     val adapterHardwareName by viewModel.adapterHardwareName.collectAsState()
     val activeOpendbcProfile by viewModel.activeOpendbcProfile.collectAsState()
     val opendbcSignals by viewModel.opendbcSignals.collectAsState()
-    var isOpendbcExpanded by remember { mutableStateOf(true) }
+    var isOpendbcExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(opendbcSignals.isNotEmpty()) {
+        if (opendbcSignals.isNotEmpty()) {
+            isOpendbcExpanded = true
+        }
+    }
     val isSendingMessage by viewModel.isSendingMessage.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
     val isSpeaking by viewModel.isSpeaking.collectAsState()
@@ -3264,23 +3270,6 @@ fun VeraMainScreen(
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                if (isHighSpeedCanCapable) {
-                                    Text(
-                                        text = "$adapterHardwareName • Advanced Dynamics",
-                                        fontSize = 9.sp,
-                                        lineHeight = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF00E676)
-                                    )
-                                } else {
-                                    Text(
-                                        text = "🔌 $adapterHardwareName",
-                                        fontSize = 9.sp,
-                                        lineHeight = 10.sp,
-                                        fontWeight = FontWeight.Normal,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
                             }
                         } else {
                             Text(
@@ -4087,15 +4076,36 @@ fun VeraMainScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    Text(
-                        text = if (isConnected && activeOpendbcProfile != null) {
-                            "Chassis Profile: ${activeOpendbcProfile?.platformName}"
-                        } else {
-                            "100Hz Raw CAN Chassis & Dynamics"
-                        },
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (isConnected && activeOpendbcProfile != null) {
+                                "Chassis Profile: ${activeOpendbcProfile?.platformName}"
+                            } else {
+                                "100Hz Raw CAN Chassis & Dynamics"
+                            },
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (isConnected && (isHighSpeedCanCapable || opendbcSignals.isNotEmpty())) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val infiniteTransition = rememberInfiniteTransition(label = "dynamicsPulse")
+                            val pulseAlpha by infiniteTransition.animateFloat(
+                                initialValue = 0.25f,
+                                targetValue = 1.0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(800, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "dynamicsPulseAlpha"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF00E676).copy(alpha = pulseAlpha))
+                            )
+                        }
+                    }
                 }
             }
 
