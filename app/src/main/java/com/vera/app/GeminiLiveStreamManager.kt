@@ -86,7 +86,14 @@ class GeminiLiveStreamManager(private val context: Context) {
     private val _lastTranscriptText = MutableStateFlow("")
     val lastTranscriptText: StateFlow<String> = _lastTranscriptText.asStateFlow()
 
-    private val _voiceName = MutableStateFlow("Aoede")
+    private val voicePrefs by lazy {
+        context.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
+    }
+
+    private val _voiceName = MutableStateFlow(
+        context.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
+            .getString("selected_live_voice", "Aoede") ?: "Aoede"
+    )
     val voiceName: StateFlow<String> = _voiceName.asStateFlow()
 
     fun setVoice(name: String) {
@@ -104,6 +111,7 @@ class GeminiLiveStreamManager(private val context: Context) {
             }
         }
         _voiceName.value = normalized
+        voicePrefs.edit().putString("selected_live_voice", normalized).apply()
         Log.i(TAG, "Selected Gemini Live Voice: $normalized (requested: '$name')")
     }
 

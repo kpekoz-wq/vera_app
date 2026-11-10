@@ -59,12 +59,15 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PauseCircleOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.SpanStyle
@@ -2790,10 +2793,13 @@ fun VeraMainScreen(
                                             )
                                         }
 
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(start = 8.dp)
+                                        ) {
                                             if (session.hasReplayData) {
                                                 val isThisReplaying = isReplaying && currentSessionId == session.id
-                                                IconButton(
+                                                Surface(
                                                     onClick = {
                                                         if (isThisReplaying) {
                                                             viewModel.toggleReplayPause()
@@ -2802,28 +2808,37 @@ fun VeraMainScreen(
                                                         }
                                                         coroutineScope.launch { drawerState.close() }
                                                     },
-                                                    modifier = Modifier.size(28.dp)
+                                                    shape = CircleShape,
+                                                    color = Color(0xFF003847),
+                                                    border = BorderStroke(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f)),
+                                                    modifier = Modifier.size(42.dp)
                                                 ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Icon(
+                                                            imageVector = if (isThisReplaying && !isReplayPaused) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                            contentDescription = "Replay Drive Telemetry",
+                                                            tint = Color(0xFF00E5FF),
+                                                            modifier = Modifier.size(24.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                            }
+
+                                            Surface(
+                                                onClick = { viewModel.deleteChatSession(session.id) },
+                                                shape = CircleShape,
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(42.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
                                                     Icon(
-                                                        imageVector = if (isThisReplaying && !isReplayPaused) Icons.Default.PauseCircleOutline else Icons.Default.PlayCircleOutline,
-                                                        contentDescription = "Replay Drive Telemetry",
-                                                        tint = Color(0xFF00E5FF),
+                                                        imageVector = Icons.Default.DeleteOutline,
+                                                        contentDescription = "Delete Session",
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                         modifier = Modifier.size(20.dp)
                                                     )
                                                 }
-                                                Spacer(modifier = Modifier.width(2.dp))
-                                            }
-
-                                            IconButton(
-                                                onClick = { viewModel.deleteChatSession(session.id) },
-                                                modifier = Modifier.size(28.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.DeleteOutline,
-                                                    contentDescription = "Delete Session",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
                                             }
                                         }
                                     }
@@ -2897,14 +2912,13 @@ fun VeraMainScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left: Menu & Clickable VERA Title with Replay Badge
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { viewModel.stopReplay() }
+                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
                             onClick = { coroutineScope.launch { drawerState.open() } },
-                            modifier = Modifier.size(34.dp).padding(end = 2.dp)
+                            modifier = Modifier.size(36.dp).padding(end = 4.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Menu,
@@ -2917,93 +2931,47 @@ fun VeraMainScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = "VERA",
-                                    fontSize = 18.sp,
+                                    fontSize = 20.sp,
                                     fontWeight = FontWeight.Black,
                                     letterSpacing = 1.sp,
                                     color = Color(0xFF00E5FF)
                                 )
-                                Spacer(modifier = Modifier.width(5.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
+                                    shape = RoundedCornerShape(8.dp),
                                     color = Color(0xFF003847),
                                     contentColor = Color(0xFF00E5FF),
-                                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
+                                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f))
                                 ) {
                                     Text(
-                                        text = if (isReplayPaused) "PAUSED" else "REPLAY",
-                                        fontSize = 8.sp,
+                                        text = if (isReplayPaused) "PAUSED" else "FLIGHT REPLAY",
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
                             }
                             Text(
-                                text = "Tap VERA to exit",
-                                fontSize = 9.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = replaySessionTitle.ifBlank { "Virtual Co-Pilot Telemetry Replay" },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
 
-                    // Right: Play/Pause, Scrubber, Time, Exit
-                    Row(
-                        modifier = Modifier.weight(1f).padding(start = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.End
+                    FilledTonalButton(
+                        onClick = { viewModel.stopReplay() },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xFF003847),
+                            contentColor = Color(0xFF00E5FF)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        IconButton(
-                            onClick = { viewModel.toggleReplayPause() },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = if (isReplayPaused) "Play" else "Pause",
-                                tint = Color(0xFF00E5FF),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        // Scrubber Slider
-                        Slider(
-                            value = replayProgress,
-                            onValueChange = { viewModel.seekReplay(it) },
-                            modifier = Modifier.weight(1f).height(24.dp).padding(horizontal = 2.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFF00E5FF),
-                                activeTrackColor = Color(0xFF00E5FF),
-                                inactiveTrackColor = Color(0xFF003847)
-                            )
-                        )
-
-                        // Time elapsed / total (mm:ss / mm:ss)
-                        val curSec = replayCurrentMs / 1000
-                        val totSec = replayTotalDurationMs / 1000
-                        val timeStr = String.format(
-                            java.util.Locale.US,
-                            "%02d:%02d/%02d:%02d",
-                            curSec / 60, curSec % 60,
-                            totSec / 60, totSec % 60
-                        )
-                        Text(
-                            text = timeStr,
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF00E5FF),
-                            modifier = Modifier.padding(horizontal = 2.dp)
-                        )
-
-                        IconButton(
-                            onClick = { viewModel.stopReplay() },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Exit Replay",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
+                        Text("✕ Exit", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             } else {
@@ -4313,6 +4281,89 @@ fun VeraMainScreen(
                                 }
                             }
                         }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Pulldown Voice Selector
+                        var voiceDropdownExpanded by remember { mutableStateOf(false) }
+                        val activeVoice = liveVoiceName
+
+                        Box {
+                            Surface(
+                                modifier = Modifier.clickable { voiceDropdownExpanded = true },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "🎙️ $activeVoice",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select Gemini Voice",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = voiceDropdownExpanded,
+                                onDismissRequest = { voiceDropdownExpanded = false }
+                            ) {
+                                val voices = listOf(
+                                    Triple("Aoede", "Warm & engaging female", "Default"),
+                                    Triple("Charon", "Calm & steady male", "Deep Resonant"),
+                                    Triple("Fenrir", "Deep & authoritative male", "Mechanic"),
+                                    Triple("Kore", "Approachable & relaxed female", "Friendly"),
+                                    Triple("Puck", "Upbeat & energetic male", "Expressive")
+                                )
+
+                                voices.forEach { (vName, desc, tag) ->
+                                    val isSelected = vName.equals(activeVoice, ignoreCase = true)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = "$vName ($tag)",
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                        fontSize = 13.sp,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (isSelected) {
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = "Active",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = desc,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.setLiveVoiceName(vName)
+                                            voiceDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Row(
@@ -4661,6 +4712,159 @@ fun VeraMainScreen(
             modifier = Modifier.padding(bottom = 4.dp)
         )
 
+        if (isReplaying) {
+            // --- FLIGHT RECORDER REPLAY CONTROLS (Bottom Bar) ---
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp, bottom = 4.dp)
+            ) {
+                // Scrubber with Elapsed / Total Time
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val curSec = replayCurrentMs / 1000
+                    val totSec = replayTotalDurationMs / 1000
+                    val timeStr = String.format(
+                        java.util.Locale.US,
+                        "%02d:%02d / %02d:%02d",
+                        curSec / 60, curSec % 60,
+                        totSec / 60, totSec % 60
+                    )
+
+                    Slider(
+                        value = replayProgress,
+                        onValueChange = { viewModel.seekReplay(it) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(28.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFF00E5FF),
+                            activeTrackColor = Color(0xFF00E5FF),
+                            inactiveTrackColor = Color(0xFF003847)
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF002833),
+                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = timeStr,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF00E5FF),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Transport Controls Row (Large, mechanic-friendly touch targets)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1. Skip Back 15s Button
+                    Surface(
+                        onClick = { viewModel.seekReplayBy(-15000L) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                        modifier = Modifier.height(46.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FastRewind,
+                                contentDescription = "Skip Back 15 Seconds",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("-15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // 2. Play / Pause Button (Large Prominent Action)
+                    Surface(
+                        onClick = { viewModel.toggleReplayPause() },
+                        shape = CircleShape,
+                        color = Color(0xFF00E5FF),
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                contentDescription = if (isReplayPaused) "Play" else "Pause",
+                                tint = Color(0xFF00222B),
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    }
+
+                    // 3. Skip Ahead 15s Button
+                    Surface(
+                        onClick = { viewModel.seekReplayBy(15000L) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                        modifier = Modifier.height(46.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("+15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.FastForward,
+                                contentDescription = "Skip Ahead 15 Seconds",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // 4. Stop Button (Exits replay, restores normal dashboard)
+                    Surface(
+                        onClick = { viewModel.stopReplay() },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                        modifier = Modifier.height(46.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Stop,
+                                contentDescription = "Stop Replay",
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "Stop",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
         // Input Row with '+' attachment button, borderless text input, and send button
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -4861,6 +5065,7 @@ fun VeraMainScreen(
                     )
                 }
             }
+        }
         }
     }
 }

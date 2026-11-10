@@ -765,6 +765,14 @@ class GeminiAgentViewModel : ViewModel() {
         }
     }
 
+    fun seekReplayBy(deltaMs: Long) {
+        val totalDuration = _replayTotalDurationMs.value
+        if (totalDuration <= 0L) return
+        val newOffset = (_replayCurrentMs.value + deltaMs).coerceIn(0L, totalDuration)
+        val fraction = newOffset.toFloat() / totalDuration.toFloat()
+        seekReplay(fraction)
+    }
+
     fun stopReplay() {
         replayJob?.cancel()
         replayJob = null
