@@ -2224,6 +2224,8 @@ fun VeraMainScreen(
     val isLiveSessionActive by viewModel.isLiveSessionActive.collectAsState()
     val isHandsFreeVoiceActive by viewModel.isHandsFreeVoiceActive.collectAsState()
     val isGeminiSpeaking by viewModel.isGeminiSpeaking.collectAsState()
+    val followUpSecondsRemaining by viewModel.followUpSecondsRemaining.collectAsState()
+    val isWakeWordListening by viewModel.isWakeWordListening.collectAsState()
     val liveVoiceName by viewModel.liveVoiceName.collectAsState()
     val savedSessions by viewModel.savedSessions.collectAsState()
     val currentSessionId by viewModel.currentSessionId.collectAsState()
@@ -5131,8 +5133,10 @@ fun VeraMainScreen(
             Spacer(modifier = Modifier.width(4.dp))
 
             // 2. Hands-Free 2-Way Voice Streaming Button (Gemini Live)
-            val isVoiceActive = isLiveSessionActive || isHandsFreeVoiceActive
-            val isListening = isVoiceActive && !isGeminiSpeaking
+            val isLiveActive = isLiveSessionActive
+            val isFollowUp = followUpSecondsRemaining > 0
+            val isStandby = isHandsFreeVoiceActive && !isLiveActive
+            val isListening = (isLiveActive || isFollowUp) && !isGeminiSpeaking
 
             // Full brightness at start (1.0f), then smooth slow fade to 0.15f, then back to full brightness
             val infiniteTransition = rememberInfiniteTransition(label = "voicePulseTransition")
@@ -5149,18 +5153,21 @@ fun VeraMainScreen(
             val voiceBgColor = when {
                 isGeminiSpeaking -> Color(0xFF0284C7)
                 isListening -> Color(0xFF00E5FF).copy(alpha = pulseAlpha)
+                isStandby -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                 else -> MaterialTheme.colorScheme.surfaceVariant
             }
 
             val voiceBorderColor = when {
                 isGeminiSpeaking -> Color(0xFF38BDF8)
                 isListening -> Color(0xFF00E5FF).copy(alpha = (pulseAlpha + 0.25f).coerceAtMost(1f))
+                isStandby -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                 else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
             }
 
             val voiceContentColor = when {
                 isGeminiSpeaking -> Color(0xFF070D18)
                 isListening -> if (pulseAlpha > 0.55f) Color(0xFF070D18) else Color(0xFF00E5FF)
+                isStandby -> MaterialTheme.colorScheme.primary
                 else -> MaterialTheme.colorScheme.primary
             }
 
@@ -5194,7 +5201,9 @@ fun VeraMainScreen(
                     Text(
                         text = when {
                             isGeminiSpeaking -> "Speaking"
-                            isListening -> "Listening"
+                            followUpSecondsRemaining > 0 -> "Listening (${followUpSecondsRemaining}s)"
+                            isLiveActive -> "Listening"
+                            isStandby -> "Hey Vera"
                             else -> "Voice"
                         },
                         fontSize = 11.sp,

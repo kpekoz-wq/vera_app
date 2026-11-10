@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -139,12 +140,22 @@ class GeminiAgentViewModel : ViewModel() {
         // STRICT VOICE RULE: Only vocalize if live voice mode is active
         if (isVoiceModeActive) {
             val isAdvisory = alert.severity == SentinelSeverity.ADVISORY || alert.severity == SentinelSeverity.INFO
-            val liveInjected = if (_isHandsFreeVoiceActive.value) {
+            val liveInjected = if (_isHandsFreeVoiceActive.value && _isLiveSessionActive.value) {
                 liveStreamManager?.injectDriverAlert(alert.spokenText, isAdvisory) ?: false
             } else false
 
             if (!liveInjected) {
-                speak(alert.spokenText)
+                speak(alert.spokenText) {
+                    // Alert finished speaking: If hands-free voice mode is active, open 15-second follow-up window!
+                    if (_isHandsFreeVoiceActive.value) {
+                        viewModelScope.launch(Dispatchers.Main) {
+                            if (!_isLiveSessionActive.value) {
+                                startGeminiLiveSession()
+                            }
+                            startFollowUpWindow(15)
+                        }
+                    }
+                }
             }
         }
     }
@@ -386,10 +397,16 @@ class GeminiAgentViewModel : ViewModel() {
         }
     }
 
-    fun speak(text: String) {
+    fun speak(text: String, onDone: (() -> Unit)? = null) {
         // STRICT VOICE RULE: Never vocalize unless live voice mode is active
-        if (!isVoiceModeActive) return
-        if (!_isTtsEnabled.value) return
+        if (!isVoiceModeActive) {
+            onDone?.invoke()
+            return
+        }
+        if (!_isTtsEnabled.value) {
+            onDone?.invoke()
+            return
+        }
         stopSpeaking()
 
         val cleanText = text
@@ -398,7 +415,10 @@ class GeminiAgentViewModel : ViewModel() {
             .replace(Regex("\\s+"), " ")
             .trim()
 
-        if (cleanText.isBlank()) return
+        if (cleanText.isBlank()) {
+            onDone?.invoke()
+            return
+        }
 
         val activeVoice = _liveVoiceName.value
 
@@ -481,16 +501,19 @@ class GeminiAgentViewModel : ViewModel() {
                                                 player.setOnCompletionListener {
                                                     _isSpeaking.value = false
                                                     tempFile.delete()
+                                                    onDone?.invoke()
                                                 }
                                                 player.setOnErrorListener { _, _, _ ->
                                                     _isSpeaking.value = false
                                                     tempFile.delete()
+                                                    onDone?.invoke()
                                                     false
                                                 }
                                                 player.start()
                                             } catch (e: Exception) {
                                                 _isSpeaking.value = false
                                                 tempFile.delete()
+                                                onDone?.invoke()
                                             }
                                         }
                                         audioPlaySuccess = true
@@ -511,7 +534,7 @@ class GeminiAgentViewModel : ViewModel() {
 
             if (!audioPlaySuccess) {
                 withContext(Dispatchers.Main) {
-                    speakWithAndroidTts(cleanText)
+                    speakWithAndroidTts(cleanText, onDone)
                 }
             }
         }
@@ -538,14 +561,23 @@ class GeminiAgentViewModel : ViewModel() {
         return header + pcmData
     }
 
-    private fun speakWithAndroidTts(cleanText: String) {
-        if (tts == null) return
+    private fun speakWithAndroidTts(cleanText: String, onDone: (() -> Unit)? = null) {
+        if (tts == null) {
+            onDone?.invoke()
+            return
+        }
         _isSpeaking.value = true
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) { _isSpeaking.value = true }
-            override fun onDone(utteranceId: String?) { _isSpeaking.value = false }
+            override fun onDone(utteranceId: String?) {
+                _isSpeaking.value = false
+                onDone?.invoke()
+            }
             @Suppress("DEPRECATION")
-            override fun onError(utteranceId: String?) { _isSpeaking.value = false }
+            override fun onError(utteranceId: String?) {
+                _isSpeaking.value = false
+                onDone?.invoke()
+            }
         })
         tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "VeraUtterance_${System.currentTimeMillis()}")
     }
@@ -725,6 +757,8 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     private var liveStreamManager: GeminiLiveStreamManager? = null
+    private var wakeWordManager: VeraWakeWordManager? = null
+
     private val _isLiveSessionActive = MutableStateFlow(false)
     val isLiveSessionActive: StateFlow<Boolean> = _isLiveSessionActive.asStateFlow()
 
@@ -733,6 +767,13 @@ class GeminiAgentViewModel : ViewModel() {
 
     private val _isHandsFreeVoiceActive = MutableStateFlow(false)
     val isHandsFreeVoiceActive: StateFlow<Boolean> = _isHandsFreeVoiceActive.asStateFlow()
+
+    private val _isWakeWordListening = MutableStateFlow(false)
+    val isWakeWordListening: StateFlow<Boolean> = _isWakeWordListening.asStateFlow()
+
+    private val _followUpSecondsRemaining = MutableStateFlow(0)
+    val followUpSecondsRemaining: StateFlow<Int> = _followUpSecondsRemaining.asStateFlow()
+    private var followUpTimerJob: Job? = null
 
     val isVoiceModeActive: Boolean
         get() = _isHandsFreeVoiceActive.value || _isLiveSessionActive.value
@@ -979,6 +1020,19 @@ class GeminiAgentViewModel : ViewModel() {
         VeraVoiceService.onStopRequested = {
             stopGeminiLiveSession()
         }
+
+        if (wakeWordManager == null) {
+            val wwm = VeraWakeWordManager(context.applicationContext) {
+                onWakeWordTriggered()
+            }
+            wakeWordManager = wwm
+            viewModelScope.launch {
+                wwm.isListeningForWakeWord.collect { listening ->
+                    _isWakeWordListening.value = listening
+                }
+            }
+        }
+
         if (liveStreamManager != null) return
         val mgr = GeminiLiveStreamManager(context.applicationContext)
         liveStreamManager = mgr
@@ -986,12 +1040,17 @@ class GeminiAgentViewModel : ViewModel() {
         viewModelScope.launch {
             mgr.isLiveSessionActive.collect { active ->
                 _isLiveSessionActive.value = active
-                _isHandsFreeVoiceActive.value = active
             }
         }
         viewModelScope.launch {
             mgr.isGeminiSpeaking.collect { speaking ->
                 _isGeminiSpeaking.value = speaking
+                if (!speaking && _isLiveSessionActive.value && _isHandsFreeVoiceActive.value) {
+                    // Vera just finished speaking: Start 15-second follow-up window!
+                    startFollowUpWindow(15)
+                } else if (speaking) {
+                    cancelFollowUpTimer()
+                }
             }
         }
         viewModelScope.launch {
@@ -1001,10 +1060,43 @@ class GeminiAgentViewModel : ViewModel() {
         }
     }
 
+    private fun onWakeWordTriggered() {
+        viewModelScope.launch(Dispatchers.Main) {
+            if (_isHandsFreeVoiceActive.value && !_isLiveSessionActive.value) {
+                Log.i("GeminiAgentViewModel", "Wake word 'Hey Vera' detected: connecting live session")
+                startGeminiLiveSession()
+                startFollowUpWindow(15)
+            }
+        }
+    }
+
+    fun startFollowUpWindow(seconds: Int = 15) {
+        followUpTimerJob?.cancel()
+        followUpTimerJob = viewModelScope.launch {
+            for (s in seconds downTo 1) {
+                _followUpSecondsRemaining.value = s
+                delay(1000L)
+            }
+            _followUpSecondsRemaining.value = 0
+            if (_isLiveSessionActive.value && _isHandsFreeVoiceActive.value) {
+                Log.i("GeminiAgentViewModel", "15-second follow-up window expired. Suspending live cloud stream.")
+                liveStreamManager?.stopLiveSession()
+                wakeWordManager?.startListening()
+            }
+        }
+    }
+
+    fun cancelFollowUpTimer() {
+        followUpTimerJob?.cancel()
+        followUpTimerJob = null
+        _followUpSecondsRemaining.value = 0
+    }
+
     fun toggleHandsFreeVoiceMode() {
-        if (_isLiveSessionActive.value) {
+        if (_isHandsFreeVoiceActive.value) {
             stopGeminiLiveSession()
         } else {
+            _isHandsFreeVoiceActive.value = true
             startGeminiLiveSession()
         }
     }
@@ -1020,6 +1112,8 @@ class GeminiAgentViewModel : ViewModel() {
             return
         }
 
+        cancelFollowUpTimer()
+        wakeWordManager?.stopListening()
         stopSpeaking()
         _isHandsFreeVoiceActive.value = true
 
@@ -1053,6 +1147,7 @@ class GeminiAgentViewModel : ViewModel() {
             },
             onUserTranscriptReceived = { text ->
                 if (text.isNotBlank()) {
+                    cancelFollowUpTimer()
                     onUserTranscriptReceived(text)
                 }
             },
@@ -1074,6 +1169,8 @@ class GeminiAgentViewModel : ViewModel() {
                 viewModelScope.launch(Dispatchers.Main) {
                     messages.add(ChatMessage("Error", "Gemini Live Error: $errMsg"))
                     _isHandsFreeVoiceActive.value = false
+                    cancelFollowUpTimer()
+                    wakeWordManager?.stopListening()
                     appContext?.let {
                         VeraVoiceService.stopService(it)
                     }
@@ -1083,6 +1180,8 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun stopGeminiLiveSession() {
+        cancelFollowUpTimer()
+        wakeWordManager?.stopListening()
         stopSpeaking()
         _isHandsFreeVoiceActive.value = false
         isNewLiveTurn = true
@@ -1747,6 +1846,8 @@ class GeminiAgentViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        cancelFollowUpTimer()
+        wakeWordManager?.stopListening()
         appContext?.let {
             VeraVoiceService.stopService(it)
         }

@@ -41,6 +41,14 @@ extensions.configure<ApplicationExtension> {
         }
         buildConfigField("String", "GEMINI_API_KEY", formattedKey)
 
+        val rawPicovoiceKey = localProperties.getProperty("PICOVOICE_ACCESS_KEY") ?: ""
+        val formattedPicovoiceKey = if (rawPicovoiceKey.startsWith("\"") && rawPicovoiceKey.endsWith("\"")) {
+            rawPicovoiceKey
+        } else {
+            "\"$rawPicovoiceKey\""
+        }
+        buildConfigField("String", "PICOVOICE_ACCESS_KEY", formattedPicovoiceKey)
+
         useLibrary("org.apache.http.legacy")
     }
 
@@ -122,6 +130,9 @@ dependencies {
 
     // Google Play Services Location & Fused Location Provider for Road Topography & Navigation
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // Picovoice Porcupine Wake Word Engine for on-device "Hey Vera" keyword detection
+    implementation("ai.picovoice:porcupine-android:3.0.3")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
