@@ -3835,14 +3835,14 @@ fun VeraMainScreen(
                     horizontalAlignment = Alignment.End
                 ) {
                     Text(
-                        text = "Tap: Detail and plot",
+                        text = "Tap: Detail & plot",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF4CAF50),
                         lineHeight = 10.sp
                     )
                     Text(
-                        text = "Tap+hold: Detail and plot multiple",
+                        text = "Tap+hold: Detail & plot many",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF4CAF50),
