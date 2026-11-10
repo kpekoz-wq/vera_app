@@ -3151,8 +3151,13 @@ fun VeraMainScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🎙️", fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Voice",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Column {
                                             Text(
                                                 text = "Voice",
