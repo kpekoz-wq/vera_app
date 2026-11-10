@@ -2636,29 +2636,15 @@ fun VeraMainScreen(
 
     LaunchedEffect(messagesCount, lastMessageText) {
         if (messagesCount > 0) {
-            // Check if user is actively reading older messages higher up in the chat
-            val isUserReadingOlder = if (chatListState.isScrollInProgress) {
-                true
+            // Always auto-scroll chat list to the bottom anchor so the latest entry (User or VERA)
+            // pushes older messages upward and out of sight off the top of the chat window,
+            // positioning the latest entry clearly and completely above the bottom text entry field.
+            val targetIndex = viewModel.messages.size // bottom anchor item
+            if (messagesCount != prevMessageCount) {
+                prevMessageCount = messagesCount
+                chatListState.animateScrollToItem(targetIndex)
             } else {
-                val visibleItems = chatListState.layoutInfo.visibleItemsInfo
-                if (visibleItems.isNotEmpty() && chatListState.canScrollForward) {
-                    val lastVisibleIndex = visibleItems.last().index
-                    lastVisibleIndex < (messagesCount - 2)
-                } else {
-                    false
-                }
-            }
-
-            // Only auto-scroll the chat list if the user is at the bottom, or if a new user prompt was sent.
-            // Never scroll the outer screen (mainScrollState) so the user's view of live data/tiles is never hijacked.
-            val isUserMessage = viewModel.messages.lastOrNull()?.sender == "User"
-            if (!isUserReadingOlder || isUserMessage) {
-                if (messagesCount != prevMessageCount) {
-                    prevMessageCount = messagesCount
-                    chatListState.animateScrollToItem(messagesCount - 1)
-                } else {
-                    chatListState.scrollToItem(messagesCount - 1)
-                }
+                chatListState.scrollToItem(targetIndex)
             }
         }
     }
@@ -5216,7 +5202,7 @@ fun VeraMainScreen(
                                 .weight(1f)
                                 .fillMaxWidth()
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
-                            contentPadding = PaddingValues(bottom = 12.dp),
+                            contentPadding = PaddingValues(top = 6.dp, bottom = 28.dp, start = 8.dp, end = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             reverseLayout = false
                         ) {
@@ -5362,6 +5348,9 @@ fun VeraMainScreen(
                                     }
                                 }
                             }
+                        }
+                        item(key = "chat_bottom_anchor") {
+                            Spacer(modifier = Modifier.height(28.dp))
                         }
                     }
                     }
