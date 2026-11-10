@@ -3267,7 +3267,7 @@ fun VeraMainScreen(
                                 if (isHighSpeedCanCapable) {
                                     val dbcName = activeOpendbcProfile?.platformName ?: "Raw CAN"
                                     Text(
-                                        text = "⚡ $adapterHardwareName • opendbc $dbcName",
+                                        text = "⚡ $adapterHardwareName • Advanced Dynamics ($dbcName)",
                                         fontSize = 9.sp,
                                         lineHeight = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -4076,7 +4076,7 @@ fun VeraMainScreen(
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "opendbc Dynamics",
+                            text = "Advanced Dynamics",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurface
@@ -4090,7 +4090,7 @@ fun VeraMainScreen(
                     }
                     Text(
                         text = if (isConnected && activeOpendbcProfile != null) {
-                            "Comma.ai Profile: ${activeOpendbcProfile?.platformName}"
+                            "Chassis Profile: ${activeOpendbcProfile?.platformName}"
                         } else {
                             "100Hz Raw CAN Chassis & Dynamics"
                         },
@@ -4130,7 +4130,7 @@ fun VeraMainScreen(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
                     ) {
                         Text(
-                            text = "opendbc Ready",
+                            text = "Dynamics Ready",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary,
@@ -4210,7 +4210,7 @@ fun VeraMainScreen(
                                 } else if (isConnected) {
                                     "⚡ Connected via standard OBD-II (${adapterHardwareName}). High-speed 100Hz broadcast signals (Steering, Wheel Speeds, Brake Pressure) require a vLinker FS / MC+ or OBDLink adapter (or an SGW bypass cable on 2018+ vehicles)."
                                 } else {
-                                    "⚡ comma.ai opendbc signal engine loaded. Connect a vLinker FS / MC+ or OBDLink adapter (or start Demo Mode) to stream live vehicle dynamics."
+                                    "⚡ Advanced Dynamics decode real-time steering angle, individual wheel speeds, and brake line pressure directly from high-speed CAN broadcasts. Connect a vLinker FS / MC+ or OBDLink adapter (or start Demo Mode) to stream live."
                                 },
                                 fontSize = 10.sp,
                                 lineHeight = 13.sp,
