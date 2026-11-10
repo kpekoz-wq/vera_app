@@ -881,8 +881,14 @@ class GeminiAgentViewModel : ViewModel() {
             messages = messages.toList(),
             recordedSamples = recordedCopy
         )
-        sm.saveSession(session)
-        _savedSessions.value = sm.getAllSessions()
+
+        // Offload disk I/O, heavy JSON serialization and loading all sessions to background thread
+        // to prevent freezing the UI main thread and causing ForegroundServiceDidNotStartInTimeException ANRs
+        viewModelScope.launch(Dispatchers.IO) {
+            sm.saveSession(session)
+            val all = sm.getAllSessions()
+            _savedSessions.value = all
+        }
     }
 
     fun createNewChatSession(autoSave: Boolean = true) {
@@ -2257,16 +2263,13 @@ class GeminiAgentViewModel : ViewModel() {
                 )
 
                 var count = 0
-                val currentCopy: List<RecordedDataSample>
                 synchronized(recordedSamples) {
                     recordedSamples.add(sample)
                     count = recordedSamples.size
-                    currentCopy = recordedSamples.toList()
                 }
 
                 _recordingDurationSeconds.value = elapsedSec.toInt()
                 _recordingSampleCount.value = count
-                _recordedSamplesFlow.value = currentCopy
 
                 kotlinx.coroutines.delay(250)
             }

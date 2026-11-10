@@ -33,21 +33,29 @@ class VeraVoiceService : Service() {
         var onStopRequested: (() -> Unit)? = null
 
         fun startService(context: Context) {
-            val intent = Intent(context, VeraVoiceService::class.java).apply {
-                action = ACTION_START_VOICE
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, VeraVoiceService::class.java).apply {
+                    action = ACTION_START_VOICE
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start VeraVoiceService", e)
             }
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, VeraVoiceService::class.java).apply {
-                action = ACTION_STOP_VOICE
+            try {
+                val intent = Intent(context, VeraVoiceService::class.java).apply {
+                    action = ACTION_STOP_VOICE
+                }
+                context.stopService(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop VeraVoiceService", e)
             }
-            context.stopService(intent)
         }
     }
 
@@ -59,6 +67,9 @@ class VeraVoiceService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+
+        // ALWAYS promote to foreground IMMEDIATELY in onCreate() to fulfill Android's 5s startForegroundService contract
+        promoteToForeground()
 
         // Acquire a PARTIAL_WAKE_LOCK to prevent CPU sleep when screen is off
         val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -72,16 +83,8 @@ class VeraVoiceService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP_VOICE) {
-            Log.i(TAG, "Stop voice action received in VeraVoiceService.")
-            onStopRequested?.invoke()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
+    private fun promoteToForeground() {
         val notification = buildForegroundNotification()
-
         val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -103,6 +106,18 @@ class VeraVoiceService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to startForeground in VeraVoiceService", e)
         }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_VOICE) {
+            Log.i(TAG, "Stop voice action received in VeraVoiceService.")
+            onStopRequested?.invoke()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // Re-ensure foreground status in case system redelivered command
+        promoteToForeground()
 
         return START_NOT_STICKY
     }
