@@ -2239,6 +2239,7 @@ fun VeraMainScreen(
     val followUpSecondsRemaining by viewModel.followUpSecondsRemaining.collectAsState()
     val isWakeWordListening by viewModel.isWakeWordListening.collectAsState()
     val liveVoiceName by viewModel.liveVoiceName.collectAsState()
+    val liveVoiceAccent by viewModel.liveVoiceAccent.collectAsState()
     val savedSessions by viewModel.savedSessions.collectAsState()
     val currentSessionId by viewModel.currentSessionId.collectAsState()
 
@@ -3117,7 +3118,7 @@ fun VeraMainScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // App Settings: Voice & Units Selectors
+                    // App Settings: Voice, Accent & Units Selectors
                     Text(
                         text = "Preferences",
                         fontSize = 11.sp,
@@ -3127,6 +3128,7 @@ fun VeraMainScreen(
                     )
 
                     var drawerVoiceDropdownExpanded by remember { mutableStateOf(false) }
+                    var drawerAccentDropdownExpanded by remember { mutableStateOf(false) }
                     var drawerUnitDropdownExpanded by remember { mutableStateOf(false) }
 
                     Row(
@@ -3241,12 +3243,12 @@ fun VeraMainScreen(
                             }
                         }
 
-                        // Units Selector
+                        // Accent Selector
                         Box(modifier = Modifier.weight(1f)) {
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { drawerUnitDropdownExpanded = true },
+                                    .clickable { drawerAccentDropdownExpanded = true },
                                 shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
@@ -3257,25 +3259,39 @@ fun VeraMainScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("📐", fontSize = 12.sp)
+                                        Text("🌍", fontSize = 12.sp)
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Column {
                                             Text(
-                                                text = "Units",
+                                                text = "Accent",
                                                 fontSize = 9.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                             )
+                                            val shortAccent = when {
+                                                liveVoiceAccent.contains("Standard") -> "Standard"
+                                                liveVoiceAccent.contains("British") -> "British"
+                                                liveVoiceAccent.contains("Scottish") -> "Scottish"
+                                                liveVoiceAccent.contains("Australian") -> "Australian"
+                                                liveVoiceAccent.contains("Irish") -> "Irish"
+                                                liveVoiceAccent.contains("Southern") -> "Southern"
+                                                liveVoiceAccent.contains("Boston") -> "East Coast"
+                                                liveVoiceAccent.contains("Canadian") -> "Canadian"
+                                                liveVoiceAccent.contains("German") -> "German"
+                                                liveVoiceAccent.contains("Indian") -> "Indian"
+                                                else -> liveVoiceAccent
+                                            }
                                             Text(
-                                                text = if (unitSystem == UnitSystem.SAE) "SAE (US)" else "Metric",
+                                                text = shortAccent,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onSurface
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1
                                             )
                                         }
                                     }
                                     Icon(
                                         imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select Unit System",
+                                        contentDescription = "Select Regional Accent",
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -3283,47 +3299,146 @@ fun VeraMainScreen(
                             }
 
                             DropdownMenu(
-                                expanded = drawerUnitDropdownExpanded,
-                                onDismissRequest = { drawerUnitDropdownExpanded = false }
+                                expanded = drawerAccentDropdownExpanded,
+                                onDismissRequest = { drawerAccentDropdownExpanded = false },
+                                modifier = Modifier.heightIn(max = 380.dp)
                             ) {
-                                val isSae = unitSystem == UnitSystem.SAE
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Column {
-                                                Text("SAE / Imperial", fontWeight = if (isSae) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
-                                                Text("°F, mph, psi, inHg", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            }
-                                            if (isSae) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
-                                            }
-                                        }
-                                    },
-                                    onClick = {
-                                        viewModel.setUnitSystem(UnitSystem.SAE)
-                                        drawerUnitDropdownExpanded = false
-                                    }
+                                val accents = listOf(
+                                    Triple("Standard American", "General US neutral pronunciation", "🇺🇸 Standard American"),
+                                    Triple("British (RP)", "Refined London Received Pronunciation", "🇬🇧 British (RP)"),
+                                    Triple("Scottish", "Warm Highland garage mechanic cadence", "🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scottish"),
+                                    Triple("Australian", "Casual & upbeat conversational Aussie", "🇦🇺 Australian"),
+                                    Triple("Irish", "Warm, melodic Celtic cadence", "🇮🇪 Irish"),
+                                    Triple("Southern US", "Down-home shade-tree mechanic drawl", "🤠 Southern US"),
+                                    Triple("New York / Boston", "Fast-paced East Coast cadence", "🗽 East Coast (NY/Boston)"),
+                                    Triple("Canadian", "Friendly Northern pronunciation", "🇨🇦 Canadian"),
+                                    Triple("German English", "Precise European engineering specialist", "🇩🇪 German English"),
+                                    Triple("Indian English", "Clear & rhythmic melodic cadence", "🇮🇳 Indian English")
                                 )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Column {
-                                                Text("Metric / ISO", fontWeight = if (!isSae) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
-                                                Text("°C, km/h, kPa, bar", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                                accents.forEach { (aName, desc, tag) ->
+                                    val isSelected = aName.equals(liveVoiceAccent, ignoreCase = true)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = tag,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                        fontSize = 13.sp,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (isSelected) {
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = "Active",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = desc,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                                )
                                             }
-                                            if (!isSae) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
-                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.previewVoiceAccent(aName)
+                                            drawerAccentDropdownExpanded = false
                                         }
-                                    },
-                                    onClick = {
-                                        viewModel.setUnitSystem(UnitSystem.METRIC)
-                                        drawerUnitDropdownExpanded = false
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Row 2: Units Selector
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { drawerUnitDropdownExpanded = true },
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("📐", fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column {
+                                        Text(
+                                            text = "Units of Measurement",
+                                            fontSize = 9.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                        Text(
+                                            text = if (unitSystem == UnitSystem.SAE) "SAE / Imperial (°F, mph, psi)" else "Metric / ISO (°C, km/h, kPa)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
                                     }
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select Unit System",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
+                        }
+
+                        DropdownMenu(
+                            expanded = drawerUnitDropdownExpanded,
+                            onDismissRequest = { drawerUnitDropdownExpanded = false }
+                        ) {
+                            val isSae = unitSystem == UnitSystem.SAE
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column {
+                                            Text("SAE / Imperial", fontWeight = if (isSae) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
+                                            Text("°F, mph, psi, inHg", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        if (isSae) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.setUnitSystem(UnitSystem.SAE)
+                                    drawerUnitDropdownExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column {
+                                            Text("Metric / ISO", fontWeight = if (!isSae) FontWeight.Bold else FontWeight.Medium, fontSize = 13.sp)
+                                            Text("°C, km/h, kPa, bar", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        if (!isSae) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.setUnitSystem(UnitSystem.METRIC)
+                                    drawerUnitDropdownExpanded = false
+                                }
+                            )
                         }
                     }
 

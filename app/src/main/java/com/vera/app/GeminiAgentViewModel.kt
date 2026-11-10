@@ -616,7 +616,8 @@ class GeminiAgentViewModel : ViewModel() {
             var audioPlaySuccess = false
             val cacheDir = appContext?.cacheDir
             val voiceKey = found.lowercase()
-            val cachedPreviewFile = if (cacheDir != null) java.io.File(cacheDir, "vera_voice_sample_${voiceKey}.wav") else null
+            val accentKey = _liveVoiceAccent.value.replace(Regex("[^a-zA-Z0-9]"), "_").lowercase()
+            val cachedPreviewFile = if (cacheDir != null) java.io.File(cacheDir, "vera_voice_sample_${voiceKey}_${accentKey}.wav") else null
 
             if (cachedPreviewFile != null && cachedPreviewFile.exists() && cachedPreviewFile.length() > 1000) {
                 withContext(Dispatchers.Main) {
@@ -636,12 +637,25 @@ class GeminiAgentViewModel : ViewModel() {
                         }
                         player.start()
                         audioPlaySuccess = true
-                        Log.i("VERA_Voice", "Played cached voice preview for '$found'")
+                        Log.i("VERA_Voice", "Played cached voice preview for '$found' ($accentKey)")
                     } catch (e: Exception) {
                         _isSpeaking.value = false
                     }
                 }
                 if (audioPlaySuccess) return@launch
+            }
+
+            val accentPrompt = when (_liveVoiceAccent.value) {
+                "British (RP)" -> "Speak with an authentic British Received Pronunciation accent: $samplePhrase"
+                "Scottish" -> "Speak with an authentic Scottish accent: $samplePhrase"
+                "Australian" -> "Speak with an authentic Australian accent: $samplePhrase"
+                "Irish" -> "Speak with an authentic Irish accent: $samplePhrase"
+                "Southern US" -> "Speak with a friendly Southern American drawl: $samplePhrase"
+                "New York / Boston" -> "Speak with a New York / Boston accent: $samplePhrase"
+                "Canadian" -> "Speak with a Canadian accent: $samplePhrase"
+                "German English" -> "Speak in English with a German accent: $samplePhrase"
+                "Indian English" -> "Speak with an Indian English accent: $samplePhrase"
+                else -> samplePhrase
             }
 
             if (geminiApiKey.isNotBlank() && cacheDir != null) {
@@ -667,7 +681,7 @@ class GeminiAgentViewModel : ViewModel() {
                                 put(JSONObject().apply {
                                     put("role", "user")
                                     put("parts", JSONArray().apply {
-                                        put(JSONObject().put("text", samplePhrase))
+                                        put(JSONObject().put("text", accentPrompt))
                                     })
                                 })
                             })
@@ -804,6 +818,10 @@ class GeminiAgentViewModel : ViewModel() {
         val savedVoice = context.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
             .getString("selected_live_voice", "Aoede") ?: "Aoede"
         _liveVoiceName.value = savedVoice
+
+        val savedAccent = context.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
+            .getString("selected_voice_accent", "Standard American") ?: "Standard American"
+        _liveVoiceAccent.value = savedAccent
 
         if (sessionManager == null) {
             val sm = ChatSessionManager(context.applicationContext)
@@ -1428,6 +1446,51 @@ class GeminiAgentViewModel : ViewModel() {
             """.trimIndent()
         }
 
+        val accentRules = when (_liveVoiceAccent.value) {
+            "British (RP)" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: BRITISH (RP / LONDON).
+                - Speak in English with a distinctive, warm, and articulate British Received Pronunciation (RP) accent.
+                - Adopt natural British phrasing, pronunciation, and cadence (crisp consonants, refined garage tone).
+            """.trimIndent()
+            "Scottish" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: SCOTTISH.
+                - Speak in English with an authentic, friendly Scottish accent, characteristic of a seasoned Scottish highland mechanic.
+                - Adopt natural Scottish cadence, vowels, and inflection.
+            """.trimIndent()
+            "Australian" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: AUSTRALIAN.
+                - Speak in English with a natural, upbeat, and conversational Australian accent and Aussie cadence.
+            """.trimIndent()
+            "Irish" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: IRISH.
+                - Speak in English with a warm, melodic, and authentic Irish accent and cadence.
+            """.trimIndent()
+            "Southern US" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: SOUTHERN US (COUNTRY DRAWL).
+                - Speak with a friendly, relaxed Southern American English drawl, typical of a seasoned Southern shade-tree mechanic.
+            """.trimIndent()
+            "New York / Boston" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: NEW YORK / BOSTONIAN.
+                - Speak with a sharp, fast-paced East Coast American (New York / Bostonian) accent and cadence.
+            """.trimIndent()
+            "Canadian" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: CANADIAN.
+                - Speak in natural Canadian English with friendly, clear Canadian pronunciation and cadence.
+            """.trimIndent()
+            "German English" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: GERMAN-ACCENTED ENGLISH.
+                - Speak in English with a precise, articulate German accent, characteristic of a German automotive master technician.
+            """.trimIndent()
+            "Indian English" -> """
+                REGIONAL ACCENT & VOCAL CADENCE: INDIAN ENGLISH.
+                - Speak in English with a clear, rhythmic, and natural Indian English accent.
+            """.trimIndent()
+            else -> """
+                REGIONAL ACCENT & VOCAL CADENCE: STANDARD AMERICAN.
+                - Speak in natural, clear, standard American English.
+            """.trimIndent()
+        }
+
         return """
             You are VERA, an elite automotive master diagnostic technician and veteran shade-tree mechanic riding shotgun with the driver.
             You combine 30 years of hands-on garage wisdom, dealership master technician certification, and brilliant diagnostic deduction.
@@ -1435,6 +1498,8 @@ class GeminiAgentViewModel : ViewModel() {
             You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
 
             $unitRules
+
+            $accentRules
 
             CORE MISSION & ANTI-SYCOPHANCY PHILOSOPHY (DIAGNOSTIC TRUTH COMES FIRST):
             - YOUR HIGHEST OBJECTIVE IS THE DIAGNOSTIC TRUTH AND THE MECHANICAL HEALTH OF THE VEHICLE.
@@ -1993,6 +2058,9 @@ class GeminiAgentViewModel : ViewModel() {
     private val _liveVoiceName = MutableStateFlow("Aoede")
     val liveVoiceName: StateFlow<String> = _liveVoiceName.asStateFlow()
 
+    private val _liveVoiceAccent = MutableStateFlow("Standard American")
+    val liveVoiceAccent: StateFlow<String> = _liveVoiceAccent.asStateFlow()
+
     val vehicleOdometerKm: StateFlow<Double?> = obdManager.vehicleOdometerKm
 
     fun setLiveVoiceName(voiceName: String) {
@@ -2003,6 +2071,43 @@ class GeminiAgentViewModel : ViewModel() {
             ?.edit()?.putString("selected_live_voice", found)?.apply()
         liveStreamManager?.setVoice(found)
         Log.i("VERA_Voice", "setLiveVoiceName updated to '$found'")
+    }
+
+    fun setLiveVoiceAccent(accent: String) {
+        val validAccents = listOf(
+            "Standard American",
+            "British (RP)",
+            "Scottish",
+            "Australian",
+            "Irish",
+            "Southern US",
+            "New York / Boston",
+            "Canadian",
+            "German English",
+            "Indian English"
+        )
+        val selected = validAccents.firstOrNull { it.equals(accent.trim(), ignoreCase = true) } ?: "Standard American"
+        _liveVoiceAccent.value = selected
+        appContext?.getSharedPreferences("vera_voice_settings", Context.MODE_PRIVATE)
+            ?.edit()?.putString("selected_voice_accent", selected)?.apply()
+        Log.i("VERA_Voice", "setLiveVoiceAccent updated to '$selected'")
+    }
+
+    fun previewVoiceAccent(accentName: String) {
+        setLiveVoiceAccent(accentName)
+        val phrase = when (accentName) {
+            "British (RP)" -> "Right then, I'm Vera. Ready to inspect your motor."
+            "Scottish" -> "Aye, I'm Vera. Let's see what's under the bonnet."
+            "Australian" -> "G'day, I'm Vera. Ready to check out your vehicle."
+            "Irish" -> "Hello there, I'm Vera. All set for diagnostics."
+            "Southern US" -> "Hey y'all, I'm Vera. Let's take a look under the hood."
+            "New York / Boston" -> "Hey, I'm Vera. Let's run the diagnostics."
+            "Canadian" -> "Hello, I'm Vera. Ready to check your vehicle today."
+            "German English" -> "Hello, I am Vera. Ready for precision diagnostics."
+            "Indian English" -> "Hello, I am Vera. Ready to check all vehicle parameters."
+            else -> "Hello, I'm Vera. Ready to diagnose your vehicle."
+        }
+        previewVoice(_liveVoiceName.value, phrase)
     }
 
     override fun onCleared() {
