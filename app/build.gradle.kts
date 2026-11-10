@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "4.3"
+        versionCode = 24
+        versionName = "4.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v4.4: Regional voice accents selector in sidebar (British, Scottish, Australian, Irish, Southern US, etc.), fixed launch splash screen emblem, seamless speech transcription"
+                releaseNotes = "VERA v4.4: Flat, modern regional voice accent selector (US, UK, SCO, AU, IE, SOU, NYC, CA, DE, IN), splash screen emblem fix, speech transcription fixes"
                 artifactType = "APK"
             }
         }

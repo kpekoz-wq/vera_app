@@ -3259,8 +3259,13 @@ fun VeraMainScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🌍", fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Public,
+                                            contentDescription = "Accent",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Column {
                                             Text(
                                                 text = "Accent",
@@ -3274,7 +3279,7 @@ fun VeraMainScreen(
                                                 liveVoiceAccent.contains("Australian") -> "Australian"
                                                 liveVoiceAccent.contains("Irish") -> "Irish"
                                                 liveVoiceAccent.contains("Southern") -> "Southern"
-                                                liveVoiceAccent.contains("Boston") -> "East Coast"
+                                                liveVoiceAccent.contains("Boston") || liveVoiceAccent.contains("New York") -> "East Coast"
                                                 liveVoiceAccent.contains("Canadian") -> "Canadian"
                                                 liveVoiceAccent.contains("German") -> "German"
                                                 liveVoiceAccent.contains("Indian") -> "Indian"
@@ -3304,26 +3309,44 @@ fun VeraMainScreen(
                                 modifier = Modifier.heightIn(max = 380.dp)
                             ) {
                                 val accents = listOf(
-                                    Triple("Standard American", "General US neutral pronunciation", "🇺🇸 Standard American"),
-                                    Triple("British (RP)", "Refined London Received Pronunciation", "🇬🇧 British (RP)"),
-                                    Triple("Scottish", "Warm Highland garage mechanic cadence", "🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scottish"),
-                                    Triple("Australian", "Casual & upbeat conversational Aussie", "🇦🇺 Australian"),
-                                    Triple("Irish", "Warm, melodic Celtic cadence", "🇮🇪 Irish"),
-                                    Triple("Southern US", "Down-home shade-tree mechanic drawl", "🤠 Southern US"),
-                                    Triple("New York / Boston", "Fast-paced East Coast cadence", "🗽 East Coast (NY/Boston)"),
-                                    Triple("Canadian", "Friendly Northern pronunciation", "🇨🇦 Canadian"),
-                                    Triple("German English", "Precise European engineering specialist", "🇩🇪 German English"),
-                                    Triple("Indian English", "Clear & rhythmic melodic cadence", "🇮🇳 Indian English")
+                                    Triple("US", "Standard American", "General US neutral pronunciation"),
+                                    Triple("UK", "British (RP)", "Refined London Received Pronunciation"),
+                                    Triple("SCO", "Scottish", "Warm Highland garage mechanic cadence"),
+                                    Triple("AU", "Australian", "Casual & upbeat conversational Aussie"),
+                                    Triple("IE", "Irish", "Warm, melodic Celtic cadence"),
+                                    Triple("SOU", "Southern US", "Down-home shade-tree mechanic drawl"),
+                                    Triple("NYC", "New York / Boston", "Fast-paced East Coast cadence"),
+                                    Triple("CA", "Canadian", "Friendly Northern pronunciation"),
+                                    Triple("DE", "German English", "Precise European engineering specialist"),
+                                    Triple("IN", "Indian English", "Clear & rhythmic melodic cadence")
                                 )
 
-                                accents.forEach { (aName, desc, tag) ->
+                                accents.forEach { (code, aName, desc) ->
                                     val isSelected = aName.equals(liveVoiceAccent, ignoreCase = true)
                                     DropdownMenuItem(
                                         text = {
                                             Column(modifier = Modifier.padding(vertical = 2.dp)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                                        border = androidx.compose.foundation.BorderStroke(
+                                                            1.dp,
+                                                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                                                        )
+                                                    ) {
+                                                        Text(
+                                                            text = code,
+                                                            fontFamily = FontFamily.Monospace,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 10.sp,
+                                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.width(8.dp))
                                                     Text(
-                                                        text = tag,
+                                                        text = aName,
                                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                                         fontSize = 13.sp,
                                                         color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
@@ -3338,6 +3361,7 @@ fun VeraMainScreen(
                                                         )
                                                     }
                                                 }
+                                                Spacer(modifier = Modifier.height(2.dp))
                                                 Text(
                                                     text = desc,
                                                     fontSize = 11.sp,
