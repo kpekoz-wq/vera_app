@@ -561,6 +561,167 @@ class GeminiAgentViewModel : ViewModel() {
         _isSpeaking.value = false
     }
 
+    fun previewVoice(voiceName: String, samplePhrase: String = "Hello, I'm Vera.") {
+        stopSpeaking()
+        viewModelScope.launch(Dispatchers.IO) {
+            var audioPlaySuccess = false
+            val cacheDir = appContext?.cacheDir
+            val voiceKey = voiceName.trim().lowercase()
+            val cachedPreviewFile = if (cacheDir != null) java.io.File(cacheDir, "vera_voice_sample_${voiceKey}.wav") else null
+
+            if (cachedPreviewFile != null && cachedPreviewFile.exists() && cachedPreviewFile.length() > 1000) {
+                withContext(Dispatchers.Main) {
+                    try {
+                        stopSpeaking()
+                        val player = MediaPlayer()
+                        mediaPlayer = player
+                        player.setDataSource(cachedPreviewFile.absolutePath)
+                        player.prepare()
+                        _isSpeaking.value = true
+                        player.setOnCompletionListener {
+                            _isSpeaking.value = false
+                        }
+                        player.setOnErrorListener { _, _, _ ->
+                            _isSpeaking.value = false
+                            false
+                        }
+                        player.start()
+                        audioPlaySuccess = true
+                        Log.i("VERA_Voice", "Played cached voice preview for '$voiceName'")
+                    } catch (e: Exception) {
+                        _isSpeaking.value = false
+                    }
+                }
+                if (audioPlaySuccess) return@launch
+            }
+
+            if (geminiApiKey.isNotBlank() && cacheDir != null) {
+                val ttsModels = listOf(
+                    "gemini-3.8-flash-tts",
+                    "gemini-3.8-flash-lite-tts",
+                    "gemini-3.1-flash-tts",
+                    "gemini-2.5-flash-tts",
+                    "gemini-2.5-flash-preview-tts"
+                )
+                for (modelName in ttsModels) {
+                    try {
+                        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$geminiApiKey")
+                        val connection = (url.openConnection() as HttpURLConnection).apply {
+                            requestMethod = "POST"
+                            setRequestProperty("Content-Type", "application/json")
+                            connectTimeout = 6000
+                            readTimeout = 10000
+                            doOutput = true
+                        }
+
+                        val requestJson = JSONObject().apply {
+                            put("contents", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("role", "user")
+                                    put("parts", JSONArray().apply {
+                                        put(JSONObject().put("text", samplePhrase))
+                                    })
+                                })
+                            })
+                            put("generationConfig", JSONObject().apply {
+                                put("responseModalities", JSONArray().apply {
+                                    put("AUDIO")
+                                })
+                                put("speechConfig", JSONObject().apply {
+                                    put("voiceConfig", JSONObject().apply {
+                                        put("prebuiltVoiceConfig", JSONObject().apply {
+                                            put("voiceName", voiceName)
+                                        })
+                                    })
+                                })
+                            })
+                        }
+
+                        connection.outputStream.use { os ->
+                            os.write(requestJson.toString().toByteArray(Charsets.UTF_8))
+                        }
+
+                        if (connection.responseCode in 200..299) {
+                            val responseStr = connection.inputStream.bufferedReader().use { it.readText() }
+                            val jsonResp = JSONObject(responseStr)
+                            val candidates = jsonResp.optJSONArray("candidates")
+                            if (candidates != null && candidates.length() > 0) {
+                                val parts = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
+                                if (parts != null && parts.length() > 0) {
+                                    val inlineData = parts.getJSONObject(0).optJSONObject("inlineData")
+                                    val audioB64 = inlineData?.optString("data", "") ?: ""
+                                    val mimeType = inlineData?.optString("mimeType", "") ?: ""
+
+                                    if (audioB64.isNotBlank()) {
+                                        val rawAudioBytes = Base64.decode(audioB64, Base64.DEFAULT)
+                                        val finalWavBytes = if (mimeType.contains("wav", ignoreCase = true) ||
+                                            (rawAudioBytes.size > 4 && rawAudioBytes[0] == 'R'.code.toByte() && rawAudioBytes[1] == 'I'.code.toByte())) {
+                                            rawAudioBytes
+                                        } else {
+                                            addWavHeader(rawAudioBytes, sampleRate = 24000, channels = 1)
+                                        }
+
+                                        if (cachedPreviewFile != null) {
+                                            try {
+                                                cachedPreviewFile.writeBytes(finalWavBytes)
+                                            } catch (_: Exception) {}
+                                        }
+
+                                        withContext(Dispatchers.Main) {
+                                            try {
+                                                stopSpeaking()
+                                                val player = MediaPlayer()
+                                                mediaPlayer = player
+                                                if (cachedPreviewFile != null && cachedPreviewFile.exists()) {
+                                                    player.setDataSource(cachedPreviewFile.absolutePath)
+                                                } else {
+                                                    val tempFile = java.io.File.createTempFile("vera_preview_", ".wav", cacheDir)
+                                                    tempFile.writeBytes(finalWavBytes)
+                                                    player.setDataSource(tempFile.absolutePath)
+                                                }
+                                                player.prepare()
+                                                _isSpeaking.value = true
+                                                player.setOnCompletionListener {
+                                                    _isSpeaking.value = false
+                                                }
+                                                player.setOnErrorListener { _, _, _ ->
+                                                    _isSpeaking.value = false
+                                                    false
+                                                }
+                                                player.start()
+                                            } catch (e: Exception) {
+                                                _isSpeaking.value = false
+                                            }
+                                        }
+                                        audioPlaySuccess = true
+                                        Log.i("VERA_Voice", "Played voice preview for '$voiceName' via $modelName")
+                                        break
+                                    }
+                                }
+                            }
+                        } else {
+                            val errStr = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                            Log.w("VERA_Voice", "Voice preview model $modelName returned error: $errStr")
+                        }
+                    } catch (e: Exception) {
+                        Log.w("VERA_Voice", "Voice preview failed on $modelName: ${e.message}")
+                    }
+                }
+            }
+
+            if (!audioPlaySuccess) {
+                withContext(Dispatchers.Main) {
+                    val isMale = listOf("charon", "fenrir", "puck", "orus", "enceladus", "iapetus", "algieba", "algenib", "rasalgethi", "alnilam", "schedar", "achird")
+                        .any { it.equals(voiceKey, ignoreCase = true) }
+                    try {
+                        tts?.setPitch(if (isMale) 0.85f else 1.15f)
+                    } catch (_: Exception) {}
+                    speakWithAndroidTts(samplePhrase)
+                }
+            }
+        }
+    }
+
     private var liveStreamManager: GeminiLiveStreamManager? = null
     private val _isLiveSessionActive = MutableStateFlow(false)
     val isLiveSessionActive: StateFlow<Boolean> = _isLiveSessionActive.asStateFlow()

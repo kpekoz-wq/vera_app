@@ -2915,14 +2915,30 @@ fun VeraMainScreen(
 
                             DropdownMenu(
                                 expanded = drawerVoiceDropdownExpanded,
-                                onDismissRequest = { drawerVoiceDropdownExpanded = false }
+                                onDismissRequest = { drawerVoiceDropdownExpanded = false },
+                                modifier = Modifier.heightIn(max = 380.dp)
                             ) {
                                 val voices = listOf(
                                     Triple("Aoede", "Warm & engaging female", "Default"),
                                     Triple("Charon", "Calm & steady male", "Deep Resonant"),
                                     Triple("Fenrir", "Deep & authoritative male", "Mechanic"),
                                     Triple("Kore", "Approachable & relaxed female", "Friendly"),
-                                    Triple("Puck", "Upbeat & energetic male", "Expressive")
+                                    Triple("Puck", "Upbeat & energetic male", "Expressive"),
+                                    Triple("Zephyr", "Bright & clear female", "Warm"),
+                                    Triple("Leda", "Youthful & lively female", "Energetic"),
+                                    Triple("Orus", "Firm & steady male", "Direct"),
+                                    Triple("Callirrhoe", "Easy-going & gentle female", "Casual"),
+                                    Triple("Autonoe", "Bright & cheerful female", "Cheerful"),
+                                    Triple("Enceladus", "Soft & breathy male", "Mellow"),
+                                    Triple("Iapetus", "Clear & articulate male", "Crisp"),
+                                    Triple("Algieba", "Smooth & melodic male", "Smooth"),
+                                    Triple("Despina", "Smooth & gentle female", "Gentle"),
+                                    Triple("Erinome", "Clear & focused female", "Articulate"),
+                                    Triple("Algenib", "Gravelly & textured male", "Gritty"),
+                                    Triple("Rasalgethi", "Informative narrator male", "Narrator"),
+                                    Triple("Laomedeia", "Upbeat & positive female", "Positive"),
+                                    Triple("Achernar", "Soft & soothing female", "Warm"),
+                                    Triple("Alnilam", "Firm & confident male", "Confident")
                                 )
 
                                 voices.forEach { (vName, desc, tag) ->
@@ -2956,6 +2972,7 @@ fun VeraMainScreen(
                                         },
                                         onClick = {
                                             viewModel.setLiveVoiceName(vName)
+                                            viewModel.previewVoice(vName)
                                             drawerVoiceDropdownExpanded = false
                                         }
                                     )

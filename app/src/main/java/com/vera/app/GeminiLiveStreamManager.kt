@@ -46,7 +46,14 @@ class GeminiLiveStreamManager(private val context: Context) {
         private const val SAMPLE_RATE_IN = 16000
         private const val SAMPLE_RATE_OUT = 24000
         private const val LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest"
-        val SUPPORTED_LIVE_VOICES = setOf("Aoede", "Charon", "Fenrir", "Kore", "Puck")
+        val SUPPORTED_LIVE_VOICES = setOf(
+            "Aoede", "Charon", "Fenrir", "Kore", "Puck",
+            "Zephyr", "Leda", "Orus", "Callirrhoe", "Autonoe",
+            "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina",
+            "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+            "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
+            "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+        )
     }
 
     private val client = OkHttpClient.Builder()
@@ -98,13 +105,10 @@ class GeminiLiveStreamManager(private val context: Context) {
 
     fun setVoice(name: String) {
         val trimmed = name.trim()
-        val normalized = when (trimmed.lowercase()) {
-            "vega" -> "Aoede" // Maps consumer Gemini "Vega" (bright female voice) to Gemini Live API female voice Aoede
-            "aoede" -> "Aoede"
-            "charon" -> "Charon"
-            "fenrir" -> "Fenrir"
-            "kore" -> "Kore"
-            "puck" -> "Puck"
+        val found = SUPPORTED_LIVE_VOICES.firstOrNull { it.equals(trimmed, ignoreCase = true) }
+        val normalized = when {
+            found != null -> found
+            trimmed.equals("vega", ignoreCase = true) -> "Aoede"
             else -> {
                 Log.w(TAG, "Voice '$name' not recognized. Defaulting to 'Aoede'.")
                 "Aoede"
@@ -113,6 +117,21 @@ class GeminiLiveStreamManager(private val context: Context) {
         _voiceName.value = normalized
         voicePrefs.edit().putString("selected_live_voice", normalized).apply()
         Log.i(TAG, "Selected Gemini Live Voice: $normalized (requested: '$name')")
+
+        if (_isLiveSessionActive.value && lastApiKey.isNotBlank()) {
+            Log.i(TAG, "Live session active during voice change; reconnecting session with new voice '$normalized'")
+            startLiveSession(
+                apiKey = lastApiKey,
+                systemInstruction = lastSystemInstruction,
+                telemetrySummary = lastTelemetrySummary,
+                conversationHistory = lastConversationHistory,
+                onMessageReceived = lastOnMessageReceived ?: {},
+                onUserTranscriptReceived = lastOnUserTranscriptReceived,
+                onTurnComplete = lastOnTurnComplete,
+                onToolCall = lastOnToolCall,
+                onError = lastOnError
+            )
+        }
     }
 
     private var currentHasPriorHistory = false
