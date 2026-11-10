@@ -23,7 +23,7 @@ data class ObdPidDefinition(
     val unit: String,             // e.g. "RPM"
     val description: String,       // e.g. "Engine Revolutions Per Minute"
     val bytesRequired: Int,       // 1 or 2
-    val parseValue: (IntArray) -> Double // Parser formula taking byte array A, B, C...
+    @Transient val parseValue: ((IntArray) -> Double)? = null // Parser formula taking byte array A, B, C...
 )
 
 data class StreamSample(
@@ -287,7 +287,7 @@ data class Mode22PidDefinition(
     val description: String,       // e.g. "Automatic Transmission Fluid Temp"
     val manufacturer: String,     // e.g. "Ford", "GM", "Toyota", "Honda", "Chrysler", "Nissan", "Volkswagen", "Subaru", "Universal"
     val servicePrefix: String = "22", // Default "22", or "21" for Chrysler Mode 21
-    val parseValue: (IntArray) -> Double
+    @Transient val parseValue: ((IntArray) -> Double)? = null
 )
 
 data class Mode22StreamData(
@@ -1602,7 +1602,7 @@ class BluetoothObdManager {
                     if (streamIdx != -1) {
                         val pidDef = currentStreams[streamIdx].pid
                         if (dataBytes.size >= pidDef.bytesRequired) {
-                            val calculatedValue = pidDef.parseValue(dataBytes)
+                            val calculatedValue = pidDef.parseValue?.invoke(dataBytes) ?: 0.0
                             val formatted = String.format(java.util.Locale.US, "%.1f %s", calculatedValue, pidDef.unit)
                             val currentHistory = currentStreams[streamIdx].history
                             val updatedHistory = (currentHistory + StreamSample(calculatedValue)).takeLast(500)
@@ -2169,7 +2169,7 @@ class BluetoothObdManager {
                             val dataBytes = if (payload.size > headerLen) payload.copyOfRange(headerLen, payload.size) else intArrayOf()
                             if (dataBytes.isNotEmpty()) {
                                 val rawVal = try {
-                                    pidDef.parseValue(dataBytes)
+                                    pidDef.parseValue?.invoke(dataBytes)
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Failed to parse ${pidDef.name} (${pidDef.pidHex}): ${e.message}")
                                     null

@@ -18,14 +18,27 @@ data class ChatSession(
     val vehicleDetails: String? = null,
     val vehicleVin: String? = null,
     val odometerFormatted: String? = null,
-    val dtcs: List<String> = emptyList(),
-    val messages: List<ChatMessage> = emptyList()
+    val dtcs: List<String>? = emptyList(),
+    val messages: List<ChatMessage>? = emptyList(),
+    val recordedSamples: List<RecordedDataSample>? = emptyList()
 ) {
     val formattedDate: String
         get() {
             val sdf = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
             return sdf.format(Date(timestamp))
         }
+
+    val safeRecordedSamples: List<RecordedDataSample>
+        get() = recordedSamples ?: emptyList()
+
+    val safeMessages: List<ChatMessage>
+        get() = messages ?: emptyList()
+
+    val safeDtcs: List<String>
+        get() = dtcs ?: emptyList()
+
+    val hasReplayData: Boolean
+        get() = !recordedSamples.isNullOrEmpty()
 }
 
 /**
@@ -45,7 +58,12 @@ class ChatSessionManager(private val context: android.content.Context) {
 
     @Synchronized
     fun getAllSessions(): List<ChatSession> {
-        val files = chatsDir.listFiles { file -> file.extension.lowercase(Locale.US) == "json" } ?: return emptyList()
+        val files = chatsDir.listFiles { file -> file.extension.lowercase(Locale.US) == "json" }
+        if (files == null || files.isEmpty()) {
+            val demoSession = createDemoFlightSession()
+            saveSession(demoSession)
+            return listOf(demoSession)
+        }
         val sessions = mutableListOf<ChatSession>()
         for (file in files) {
             try {
@@ -56,7 +74,13 @@ class ChatSessionManager(private val context: android.content.Context) {
                 }
             } catch (e: Exception) {
                 android.util.Log.e("ChatSessionManager", "Error parsing session from ${file.name}", e)
+                file.delete()
             }
+        }
+        if (sessions.none { it.hasReplayData }) {
+            val demoSession = createDemoFlightSession()
+            saveSession(demoSession)
+            sessions.add(demoSession)
         }
         return sessions.sortedByDescending { it.timestamp }
     }
@@ -89,6 +113,108 @@ class ChatSessionManager(private val context: android.content.Context) {
     fun deleteSession(id: String): Boolean {
         val file = File(chatsDir, "$id.json")
         return if (file.exists()) file.delete() else false
+    }
+
+    private fun createDemoFlightSession(): ChatSession {
+        val now = System.currentTimeMillis()
+        val samples = mutableListOf<RecordedDataSample>()
+        val totalPoints = 90 // 45 seconds of flight telemetry at 2Hz
+        for (i in 0 until totalPoints) {
+            val sec = i * 0.5
+            val progressFrac = i.toDouble() / totalPoints.toDouble()
+            // Simulating an uphill climb on Jones St in San Francisco
+            val spd = (20.0 + 8.0 * kotlin.math.sin(progressFrac * Math.PI)).coerceIn(15.0, 32.0)
+            val rpm = (1800.0 + 850.0 * progressFrac + 80.0 * kotlin.math.sin(sec)).toInt()
+            val coolant = (192.0 + 13.0 * progressFrac).toInt()
+            val load = (45.0 + 35.0 * progressFrac).toFloat()
+            val throttle = (28.0 + 22.0 * progressFrac).toFloat()
+            val trim = if (progressFrac > 0.4) (+3.5 + 2.5 * progressFrac).toFloat() else (+1.2).toFloat()
+            val grade = 7.2 // 7.2% steep hill climb
+            val alt = 310.0 + (progressFrac * 120.0) // climbing from 310ft to 430ft
+
+            val metrics = BluetoothObdManager.VehicleMetrics(
+                rpm = rpm,
+                speed = (spd / 0.621371).toInt(), // store as km/h
+                coolantTemp = ((coolant - 32) * 5 / 9), // store as C
+                intakeAirTemp = 28,
+                engineLoad = load.toInt(),
+                throttlePosition = throttle.toInt(),
+                fuelTrim = trim.toInt(),
+                maf = 18.5 + (progressFrac * 12.0)
+            )
+
+            val voltPid = ObdPidRegistry.KNOWN_PIDS["42"] ?: ObdPidDefinition("42", "0142", "Control Module Voltage", "V", "ECU Voltage", 2) { a -> ((a[0] * 256) + a[1]) / 1000.0 }
+            val loadPid = ObdPidRegistry.KNOWN_PIDS["04"] ?: ObdPidDefinition("04", "0104", "Engine Load", "%", "Calculated Engine Load", 1) { a -> (a[0] * 100) / 255.0 }
+
+            val streams = listOf(
+                LiveStreamData(
+                    pid = voltPid,
+                    rawValue = 14.2 - (0.2 * progressFrac),
+                    formattedValue = String.format(Locale.US, "%.1fV", 14.2 - (0.2 * progressFrac))
+                ),
+                LiveStreamData(
+                    pid = loadPid,
+                    rawValue = load.toDouble(),
+                    formattedValue = String.format(Locale.US, "%.0f%%", load)
+                )
+            )
+
+            val transPid = Mode22Registry.KNOWN_PIDS.firstOrNull() ?: Mode22PidDefinition("1E1C", "Transmission Temp", "Transmission", "°C", "Ford Transmission Fluid Temp", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 16.0 - 40.0 else 0.0 }
+
+            val mode22 = listOf(
+                Mode22StreamData(
+                    pid = transPid,
+                    rawValue = 185.0 + (15.0 * progressFrac),
+                    formattedValue = String.format(Locale.US, "%.0f°F", 185.0 + (15.0 * progressFrac))
+                )
+            )
+
+            val road = RoadContext(
+                streetName = "Jones St",
+                neighborhoodOrCity = "San Francisco, CA",
+                fullAddress = "Jones St & Sacramento St, San Francisco, CA",
+                latitude = 37.7925 + (progressFrac * 0.003),
+                longitude = -122.4132,
+                altitudeMeters = alt * 0.3048,
+                altitudeFeet = alt,
+                roadGradePercent = grade,
+                inclineStatus = InclineStatus.STEEP_CLIMB,
+                headingCompass = "North",
+                speedMph = spd,
+                speedKmh = spd * 1.60934,
+                isDemoSimulated = true
+            )
+
+            samples.add(
+                RecordedDataSample(
+                    timestampMs = now - ((totalPoints - i) * 500L),
+                    elapsedSeconds = sec,
+                    metricsSnapshot = metrics,
+                    streamSnapshots = streams,
+                    mode22Snapshots = mode22,
+                    roadContextSnapshot = road
+                )
+            )
+        }
+
+        val demoMsgs = listOf(
+            ChatMessage("VERA", "Connected to 2021 Ford F-150 (VIN: 1FTFW1ED5MFB12345). Diagnostics active."),
+            ChatMessage("User", "Hey VERA, let's see how the truck does climbing Jones St."),
+            ChatMessage("VERA", "I'll keep an eye on your trims and coolant as you head up the grade."),
+            ChatMessage("VERA", "Trims are creeping slightly positive at +4.8% as you pull up this 7.2% hill climb. Coolant is holding steady at 198°F.")
+        )
+
+        return ChatSession(
+            id = "demo_jones_st_climb",
+            title = "Demo Drive: Jones St Hill Climb",
+            timestamp = now - 3600000L,
+            vehicleDetails = "2021 Ford F-150 • 3.5L EcoBoost",
+            vehicleVin = "1FTFW1ED5MFB12345",
+            odometerFormatted = "48,210 mi",
+            dtcs = emptyList(),
+            messages = demoMsgs,
+            recordedSamples = samples
+        )
     }
 
     companion object {

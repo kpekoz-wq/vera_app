@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -220,6 +222,62 @@ class GeminiAgentViewModel : ViewModel() {
 
     private val _roadContext = MutableStateFlow(RoadContext())
     val roadContext: StateFlow<RoadContext> = _roadContext.asStateFlow()
+
+    // --- VIRTUAL CO-PILOT INSTANT REPLAY / FLIGHT RECORDER ENGINE ---
+    private val _isReplaying = MutableStateFlow(false)
+    val isReplaying: StateFlow<Boolean> = _isReplaying.asStateFlow()
+
+    private val _isReplayPaused = MutableStateFlow(false)
+    val isReplayPaused: StateFlow<Boolean> = _isReplayPaused.asStateFlow()
+
+    private val _replayProgress = MutableStateFlow(0f)
+    val replayProgress: StateFlow<Float> = _replayProgress.asStateFlow()
+
+    private val _replayCurrentMs = MutableStateFlow(0L)
+    val replayCurrentMs: StateFlow<Long> = _replayCurrentMs.asStateFlow()
+
+    private val _replayTotalDurationMs = MutableStateFlow(0L)
+    val replayTotalDurationMs: StateFlow<Long> = _replayTotalDurationMs.asStateFlow()
+
+    private val _replaySessionTitle = MutableStateFlow("")
+    val replaySessionTitle: StateFlow<String> = _replaySessionTitle.asStateFlow()
+
+    private val _replaySample = MutableStateFlow<RecordedDataSample?>(null)
+    val replaySample: StateFlow<RecordedDataSample?> = _replaySample.asStateFlow()
+
+    private var replayJob: kotlinx.coroutines.Job? = null
+
+    val effectiveMetrics: StateFlow<BluetoothObdManager.VehicleMetrics> = combine(
+        obdManager.metrics,
+        _replaySample,
+        _isReplaying
+    ) { live, replay, replaying ->
+        if (replaying && replay != null) replay.metricsSnapshot else live
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, obdManager.metrics.value)
+
+    val effectiveSupportedStreams: StateFlow<List<LiveStreamData>> = combine(
+        supportedStreams,
+        _replaySample,
+        _isReplaying
+    ) { live, replay, replaying ->
+        if (replaying && replay != null) replay.streamSnapshots else live
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, supportedStreams.value)
+
+    val effectiveMode22Streams: StateFlow<List<Mode22StreamData>> = combine(
+        mode22Streams,
+        _replaySample,
+        _isReplaying
+    ) { live, replay, replaying ->
+        if (replaying && replay != null) replay.mode22Snapshots else live
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, mode22Streams.value)
+
+    val effectiveRoadContext: StateFlow<RoadContext> = combine(
+        _roadContext,
+        _replaySample,
+        _isReplaying
+    ) { live, replay, replaying ->
+        if (replaying && replay?.roadContextSnapshot != null) replay.roadContextSnapshot else live
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, _roadContext.value)
 
     fun initLocationManager(context: Context) {
         if (locationManager != null) return
@@ -552,6 +610,8 @@ class GeminiAgentViewModel : ViewModel() {
             dtcs = dtcList
         )
 
+        val recordedCopy = synchronized(recordedSamples) { recordedSamples.toList() }
+
         val session = ChatSession(
             id = _currentSessionId.value,
             title = title,
@@ -560,14 +620,18 @@ class GeminiAgentViewModel : ViewModel() {
             vehicleVin = obdManager.vehicleVin.value,
             odometerFormatted = odoStr,
             dtcs = dtcList,
-            messages = messages.toList()
+            messages = messages.toList(),
+            recordedSamples = recordedCopy
         )
         sm.saveSession(session)
         _savedSessions.value = sm.getAllSessions()
     }
 
     fun createNewChatSession() {
+        stopReplay()
         autoSaveCurrentSession()
+        synchronized(recordedSamples) { recordedSamples.clear() }
+        _recordedSamplesFlow.value = emptyList()
         _currentSessionId.value = java.util.UUID.randomUUID().toString()
         messages.clear()
         messages.add(
@@ -579,13 +643,14 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun loadChatSession(sessionId: String) {
+        stopReplay()
         autoSaveCurrentSession()
         val sm = sessionManager ?: return
         val session = sm.loadSession(sessionId) ?: return
         _currentSessionId.value = session.id
         messages.clear()
-        if (session.messages.isNotEmpty()) {
-            messages.addAll(session.messages)
+        if (session.safeMessages.isNotEmpty()) {
+            messages.addAll(session.safeMessages)
         } else {
             messages.add(
                 ChatMessage(
@@ -594,15 +659,120 @@ class GeminiAgentViewModel : ViewModel() {
                 )
             )
         }
+        val samples = session.safeRecordedSamples
+        synchronized(recordedSamples) {
+            recordedSamples.clear()
+            recordedSamples.addAll(samples)
+        }
+        _recordedSamplesFlow.value = samples
     }
 
     fun deleteChatSession(sessionId: String) {
         val sm = sessionManager ?: return
+        if (_isReplaying.value && _currentSessionId.value == sessionId) {
+            stopReplay()
+        }
         sm.deleteSession(sessionId)
         _savedSessions.value = sm.getAllSessions()
         if (_currentSessionId.value == sessionId) {
             createNewChatSession()
         }
+    }
+
+    // --- REPLAY PLAYBACK CONTROLS ---
+    fun startReplay(sessionId: String) {
+        val sm = sessionManager ?: return
+        val session = sm.loadSession(sessionId) ?: return
+        val samples = session.safeRecordedSamples
+        if (samples.isEmpty()) {
+            messages.add(ChatMessage("System", "ℹ️ No flight telemetry data recorded for this session."))
+            return
+        }
+
+        // Load chat session if not already loaded
+        if (_currentSessionId.value != sessionId) {
+            loadChatSession(sessionId)
+        }
+
+        replayJob?.cancel()
+        _isReplaying.value = true
+        _isReplayPaused.value = false
+        val firstMs = samples.first().timestampMs
+        val lastMs = samples.last().timestampMs
+        val durationMs = maxOf(1000L, lastMs - firstMs)
+        _replayTotalDurationMs.value = durationMs
+        _replayCurrentMs.value = 0L
+        _replayProgress.value = 0f
+        _replaySessionTitle.value = session.title
+        _replaySample.value = samples.first()
+
+        replayJob = viewModelScope.launch(Dispatchers.Default) {
+            var currentOffset = 0L
+            while (_isReplaying.value) {
+                if (!_isReplayPaused.value) {
+                    currentOffset += 100L
+                    if (currentOffset >= durationMs) {
+                        currentOffset = durationMs
+                        _isReplayPaused.value = true
+                    }
+                    _replayCurrentMs.value = currentOffset
+                    _replayProgress.value = (currentOffset.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+
+                    val targetMs = firstMs + currentOffset
+                    val closest = samples.minByOrNull { kotlin.math.abs(it.timestampMs - targetMs) }
+                    _replaySample.value = closest
+                }
+                kotlinx.coroutines.delay(100)
+            }
+        }
+    }
+
+    fun toggleReplayPause() {
+        if (_replayCurrentMs.value >= _replayTotalDurationMs.value) {
+            seekReplay(0f)
+            _isReplayPaused.value = false
+        } else {
+            _isReplayPaused.value = !_isReplayPaused.value
+        }
+    }
+
+    fun pauseReplay() {
+        _isReplayPaused.value = true
+    }
+
+    fun resumeReplay() {
+        if (_replayCurrentMs.value >= _replayTotalDurationMs.value) {
+            seekReplay(0f)
+        }
+        _isReplayPaused.value = false
+    }
+
+    fun seekReplay(fraction: Float) {
+        val totalDuration = _replayTotalDurationMs.value
+        if (totalDuration <= 0L) return
+        val targetOffset = (fraction.coerceIn(0f, 1f) * totalDuration).toLong()
+        _replayCurrentMs.value = targetOffset
+        _replayProgress.value = fraction.coerceIn(0f, 1f)
+
+        val sm = sessionManager ?: return
+        val session = sm.loadSession(_currentSessionId.value) ?: return
+        val samples = session.safeRecordedSamples
+        if (samples.isNotEmpty()) {
+            val firstMs = samples.first().timestampMs
+            val targetMs = firstMs + targetOffset
+            val closest = samples.minByOrNull { kotlin.math.abs(it.timestampMs - targetMs) }
+            _replaySample.value = closest
+        }
+    }
+
+    fun stopReplay() {
+        replayJob?.cancel()
+        replayJob = null
+        _isReplaying.value = false
+        _isReplayPaused.value = false
+        _replaySample.value = null
+        _replayProgress.value = 0f
+        _replayCurrentMs.value = 0L
     }
 
     private fun buildRecentConversationContextForLive(maxMessages: Int = 20): String {
@@ -1504,6 +1674,7 @@ class GeminiAgentViewModel : ViewModel() {
             durationSeconds = durationSec
         )
         lastRecordedCsvResult = result
+        autoSaveCurrentSession()
         return result
     }
 

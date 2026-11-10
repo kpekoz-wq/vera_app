@@ -59,8 +59,12 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PauseCircleOutline
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.SpanStyle
@@ -2172,21 +2176,28 @@ fun VeraMainScreen(
 
     var userPrompt by remember { mutableStateOf("") }
     val connectionStatus by viewModel.connectionStatus.collectAsState()
-    val metrics by viewModel.obdManager.metrics.collectAsState()
-    val supportedStreams by viewModel.supportedStreams.collectAsState()
+    val metrics by viewModel.effectiveMetrics.collectAsState()
+    val supportedStreams by viewModel.effectiveSupportedStreams.collectAsState()
     val vehicleDetails by viewModel.vehicleDetails.collectAsState()
     val vehicleVin by viewModel.vehicleVin.collectAsState()
     val vehicleOdometerKm by viewModel.vehicleOdometerKm.collectAsState()
     val troubleCodes by viewModel.troubleCodes.collectAsState()
     val dtcDetails by viewModel.dtcDetails.collectAsState()
     val mode06Results by viewModel.mode06Results.collectAsState()
-    val mode22Streams by viewModel.mode22Streams.collectAsState()
+    val mode22Streams by viewModel.effectiveMode22Streams.collectAsState()
     val unitSystem by viewModel.unitSystem.collectAsState()
     val obdbLoadedResult by viewModel.obdbLoadedResult.collectAsState()
     val obdbSignalResults by viewModel.obdbSignalResults.collectAsState()
     val isRecording by viewModel.isRecording.collectAsState()
     val recordingDurationSec by viewModel.recordingDurationSeconds.collectAsState()
     val recordingSampleCount by viewModel.recordingSampleCount.collectAsState()
+
+    val isReplaying by viewModel.isReplaying.collectAsState()
+    val isReplayPaused by viewModel.isReplayPaused.collectAsState()
+    val replayProgress by viewModel.replayProgress.collectAsState()
+    val replayCurrentMs by viewModel.replayCurrentMs.collectAsState()
+    val replayTotalDurationMs by viewModel.replayTotalDurationMs.collectAsState()
+    val replaySessionTitle by viewModel.replaySessionTitle.collectAsState()
 
     val odoFormatted = remember(vehicleOdometerKm, unitSystem) {
         vehicleOdometerKm?.let { km ->
@@ -2766,28 +2777,54 @@ fun VeraMainScreen(
                                             val metaText = buildList {
                                                 session.vehicleDetails?.let { add(it.split("•").first().trim()) }
                                                 session.odometerFormatted?.let { add(it) }
-                                                add("${session.messages.size} msgs")
-                                                if (session.dtcs.isNotEmpty()) add("${session.dtcs.size} DTC")
+                                                add("${session.safeMessages.size} msgs")
+                                                if (session.safeDtcs.isNotEmpty()) add("${session.safeDtcs.size} DTC")
+                                                if (session.hasReplayData) add("🎬 Flight Log (${session.safeRecordedSamples.size} pts)")
                                             }.joinToString(" • ")
 
                                             Text(
                                                 text = metaText,
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Medium,
-                                                color = if (session.dtcs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                                color = if (session.safeDtcs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                                             )
                                         }
 
-                                        IconButton(
-                                            onClick = { viewModel.deleteChatSession(session.id) },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.DeleteOutline,
-                                                contentDescription = "Delete Session",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (session.hasReplayData) {
+                                                val isThisReplaying = isReplaying && currentSessionId == session.id
+                                                IconButton(
+                                                    onClick = {
+                                                        if (isThisReplaying) {
+                                                            viewModel.toggleReplayPause()
+                                                        } else {
+                                                            viewModel.startReplay(session.id)
+                                                        }
+                                                        coroutineScope.launch { drawerState.close() }
+                                                    },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (isThisReplaying && !isReplayPaused) Icons.Default.PauseCircleOutline else Icons.Default.PlayCircleOutline,
+                                                        contentDescription = "Replay Drive Telemetry",
+                                                        tint = Color(0xFF00E5FF),
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                            }
+
+                                            IconButton(
+                                                onClick = { viewModel.deleteChatSession(session.id) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.DeleteOutline,
+                                                    contentDescription = "Delete Session",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -2852,6 +2889,124 @@ fun VeraMainScreen(
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
             // 1. PINNED TOP HEADER (Always Fixed at Top of Screen)
+            if (isReplaying) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left: Menu & Clickable VERA Title with Replay Badge
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { viewModel.stopReplay() }
+                    ) {
+                        IconButton(
+                            onClick = { coroutineScope.launch { drawerState.open() } },
+                            modifier = Modifier.size(34.dp).padding(end = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Open Chat History Sidebar",
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "VERA",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 1.sp,
+                                    color = Color(0xFF00E5FF)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFF003847),
+                                    contentColor = Color(0xFF00E5FF),
+                                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
+                                ) {
+                                    Text(
+                                        text = if (isReplayPaused) "PAUSED" else "REPLAY",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Tap VERA to exit",
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Right: Play/Pause, Scrubber, Time, Exit
+                    Row(
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        IconButton(
+                            onClick = { viewModel.toggleReplayPause() },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                contentDescription = if (isReplayPaused) "Play" else "Pause",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Scrubber Slider
+                        Slider(
+                            value = replayProgress,
+                            onValueChange = { viewModel.seekReplay(it) },
+                            modifier = Modifier.weight(1f).height(24.dp).padding(horizontal = 2.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFF00E5FF),
+                                activeTrackColor = Color(0xFF00E5FF),
+                                inactiveTrackColor = Color(0xFF003847)
+                            )
+                        )
+
+                        // Time elapsed / total (mm:ss / mm:ss)
+                        val curSec = replayCurrentMs / 1000
+                        val totSec = replayTotalDurationMs / 1000
+                        val timeStr = String.format(
+                            java.util.Locale.US,
+                            "%02d:%02d/%02d:%02d",
+                            curSec / 60, curSec % 60,
+                            totSec / 60, totSec % 60
+                        )
+                        Text(
+                            text = timeStr,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF00E5FF),
+                            modifier = Modifier.padding(horizontal = 2.dp)
+                        )
+
+                        IconButton(
+                            onClick = { viewModel.stopReplay() },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Exit Replay",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            } else {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2975,6 +3130,7 @@ fun VeraMainScreen(
                 }
             }
         }
+        }
 
         // 2. UNIFIED SINGLE SCROLL COLUMN (Section Headers + Chat Card)
         BoxWithConstraints(
@@ -3001,7 +3157,7 @@ fun VeraMainScreen(
             ) {
 
         // Road Topography & Incline Banner
-        val roadContext by viewModel.roadContext.collectAsState()
+        val roadContext by viewModel.effectiveRoadContext.collectAsState()
         if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating...") {
             Surface(
                 shape = RoundedCornerShape(10.dp),
