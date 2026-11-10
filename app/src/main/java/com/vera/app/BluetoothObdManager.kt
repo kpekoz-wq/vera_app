@@ -823,16 +823,33 @@ class BluetoothObdManager {
 
                 // Simulate dynamic opendbc broadcast signals
                 val steer = Math.sin(step * 0.1) * 18.5
+                val steerRate = Math.cos(step * 0.1) * 12.0
+                val driverTorque = Math.sin(step * 0.1) * 2.8
+                val epsTorque = -Math.sin(step * 0.1) * 6.4
+                val yawRate = Math.sin(step * 0.1) * 4.2
+                val latG = Math.sin(step * 0.1) * 0.18
+                val longG = 0.05 + Math.cos(step * 0.05) * 0.08
+                val engTorque = 195.0 + Math.sin(step * 0.2) * 45.0
                 val brake = if (step % 20 in 0..4) (Math.sin(step * 0.5).coerceAtLeast(0.0) * 25.0) else 0.0
+                val accelPedal = 18.0 + (Math.sin(step * 0.2).coerceAtLeast(0.0) * 16.0)
+                val leadDist = 32.5 + Math.sin(step * 0.08) * 6.0
                 val speedBase = 65.0 + Math.sin(step * 0.05) * 5.0
-                _opendbcSignals.value = mapOf(
+                _opendbcSignals.value = linkedMapOf(
                     "Steering Angle" to OpendbcManager.DecodedOpendbcSignal("Steering Angle", steer, String.format(java.util.Locale.US, "%.1f°", steer), "deg"),
-                    "Steering Rate" to OpendbcManager.DecodedOpendbcSignal("Steering Rate", Math.cos(step * 0.1) * 12.0, String.format(java.util.Locale.US, "%.1f°/s", Math.cos(step * 0.1) * 12.0), "deg/s"),
-                    "Brake Line Pressure" to OpendbcManager.DecodedOpendbcSignal("Brake Line Pressure", brake, String.format(java.util.Locale.US, "%.1f bar", brake), "bar"),
-                    "Wheel Speed FL" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed FL", speedBase, String.format(java.util.Locale.US, "%.1f km/h", speedBase), "km/h"),
-                    "Wheel Speed FR" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed FR", speedBase + 0.2, String.format(java.util.Locale.US, "%.1f km/h", speedBase + 0.2), "km/h"),
-                    "Wheel Speed RL" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed RL", speedBase - 0.1, String.format(java.util.Locale.US, "%.1f km/h", speedBase - 0.1), "km/h"),
-                    "Wheel Speed RR" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed RR", speedBase + 0.1, String.format(java.util.Locale.US, "%.1f km/h", speedBase + 0.1), "km/h"),
+                    "Steering Rate" to OpendbcManager.DecodedOpendbcSignal("Steering Rate", steerRate, String.format(java.util.Locale.US, "%.1f°/s", steerRate), "deg/s"),
+                    "Driver Torque" to OpendbcManager.DecodedOpendbcSignal("Driver Torque", driverTorque, String.format(java.util.Locale.US, "%.1f Nm", driverTorque), "Nm"),
+                    "EPS Torque" to OpendbcManager.DecodedOpendbcSignal("EPS Torque", epsTorque, String.format(java.util.Locale.US, "%.1f Nm", epsTorque), "Nm"),
+                    "Yaw Rate" to OpendbcManager.DecodedOpendbcSignal("Yaw Rate", yawRate, String.format(java.util.Locale.US, "%.1f°/s", yawRate), "deg/s"),
+                    "Lateral G" to OpendbcManager.DecodedOpendbcSignal("Lateral G", latG, String.format(java.util.Locale.US, "%+.2f g", latG), "g"),
+                    "Longitudinal G" to OpendbcManager.DecodedOpendbcSignal("Longitudinal G", longG, String.format(java.util.Locale.US, "%+.2f g", longG), "g"),
+                    "Engine Torque" to OpendbcManager.DecodedOpendbcSignal("Engine Torque", engTorque, String.format(java.util.Locale.US, "%.0f Nm", engTorque), "Nm"),
+                    "Wheel Speed FL" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed FL", speedBase, String.format(java.util.Locale.US, "%.1f mph", speedBase), "mph"),
+                    "Wheel Speed FR" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed FR", speedBase + 0.2, String.format(java.util.Locale.US, "%.1f mph", speedBase + 0.2), "mph"),
+                    "Wheel Speed RL" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed RL", speedBase - 0.1, String.format(java.util.Locale.US, "%.1f mph", speedBase - 0.1), "mph"),
+                    "Wheel Speed RR" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed RR", speedBase + 0.1, String.format(java.util.Locale.US, "%.1f mph", speedBase + 0.1), "mph"),
+                    "Brake Pressure" to OpendbcManager.DecodedOpendbcSignal("Brake Pressure", brake, String.format(java.util.Locale.US, "%.1f psi", brake * 14.5038), "psi"),
+                    "Accelerator" to OpendbcManager.DecodedOpendbcSignal("Accelerator", accelPedal, String.format(java.util.Locale.US, "%.0f%%", accelPedal), "%"),
+                    "Lead Distance" to OpendbcManager.DecodedOpendbcSignal("Lead Distance", leadDist, String.format(java.util.Locale.US, "%.1f m", leadDist), "m"),
                     "Transmission Gear" to OpendbcManager.DecodedOpendbcSignal("Transmission Gear", 3.0, "D", "Gear")
                 )
 

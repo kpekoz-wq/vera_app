@@ -151,6 +151,10 @@ object OpendbcManager {
             "%" -> String.format(java.util.Locale.US, "%.1f%%", value)
             "bar" -> String.format(java.util.Locale.US, "%.1f bar", value)
             "psi" -> String.format(java.util.Locale.US, "%.1f psi", value)
+            "g" -> String.format(java.util.Locale.US, "%+.2f g", value)
+            "Nm" -> String.format(java.util.Locale.US, "%.1f Nm", value)
+            "m" -> String.format(java.util.Locale.US, "%.1f m", value)
+            "m/s" -> String.format(java.util.Locale.US, "%+.1f m/s", value)
             "Gear" -> when (value.toInt()) {
                 0 -> "P"
                 1 -> "R"
@@ -233,13 +237,28 @@ object OpendbcManager {
         map["toyota"] = VehicleDbcProfile(
             make = "Toyota",
             platformName = "Toyota TSS2 / Global Architecture",
-            filterCanIds = listOf("025", "0AA", "200", "3BC"),
+            filterCanIds = listOf("025", "0AA", "200", "024", "260", "1C4", "343", "3BC"),
             messages = mapOf(
                 0x25 to CanMessageDef(
                     "025", 0x25, "STEERING_MODULE",
                     listOf(
                         CanSignalDef("Steering Angle", 3, 12, Endianness.LITTLE_ENDIAN, 0.1, -204.8, -204.8, 204.7, "deg"),
                         CanSignalDef("Steering Rate", 16, 12, Endianness.LITTLE_ENDIAN, 1.0, 0.0, -2048.0, 2047.0, "deg/s")
+                    )
+                ),
+                0x24 to CanMessageDef(
+                    "024", 0x24, "ACCEL_YAW_SENSOR",
+                    listOf(
+                        CanSignalDef("Yaw Rate", 0, 16, Endianness.LITTLE_ENDIAN, 0.01, -320.0, -320.0, 320.0, "deg/s"),
+                        CanSignalDef("Lateral G", 16, 16, Endianness.LITTLE_ENDIAN, 0.001, -2.5, -2.5, 2.5, "g"),
+                        CanSignalDef("Longitudinal G", 32, 16, Endianness.LITTLE_ENDIAN, 0.001, -2.5, -2.5, 2.5, "g")
+                    )
+                ),
+                0x260 to CanMessageDef(
+                    "260", 0x260, "STEER_TORQUE_SENSOR",
+                    listOf(
+                        CanSignalDef("Driver Torque", 0, 16, Endianness.LITTLE_ENDIAN, 0.01, -100.0, -100.0, 100.0, "Nm"),
+                        CanSignalDef("EPS Torque", 16, 16, Endianness.LITTLE_ENDIAN, 0.01, -200.0, -200.0, 200.0, "Nm")
                     )
                 ),
                 0xAA to CanMessageDef(
@@ -258,6 +277,18 @@ object OpendbcManager {
                         CanSignalDef("Accelerator Position", 16, 8, Endianness.LITTLE_ENDIAN, 0.392, 0.0, 0.0, 100.0, "%")
                     )
                 ),
+                0x1C4 to CanMessageDef(
+                    "1C4", 0x1C4, "ENGINE_TORQUE",
+                    listOf(
+                        CanSignalDef("Engine Torque", 0, 12, Endianness.LITTLE_ENDIAN, 1.0, 0.0, 0.0, 1000.0, "Nm")
+                    )
+                ),
+                0x343 to CanMessageDef(
+                    "343", 0x343, "ACC_RADAR",
+                    listOf(
+                        CanSignalDef("Lead Distance", 0, 12, Endianness.LITTLE_ENDIAN, 0.1, 0.0, 0.0, 250.0, "m")
+                    )
+                ),
                 0x3BC to CanMessageDef(
                     "3BC", 0x3BC, "GEAR_POSITION",
                     listOf(
@@ -272,12 +303,28 @@ object OpendbcManager {
         map["ford"] = VehicleDbcProfile(
             make = "Ford",
             platformName = "Ford C1 / Global Powertrain",
-            filterCanIds = listOf("082", "130", "165", "176"),
+            filterCanIds = listOf("082", "091", "083", "130", "165", "110", "3B3", "176"),
             messages = mapOf(
                 0x82 to CanMessageDef(
                     "082", 0x82, "STEERING_PINION",
                     listOf(
-                        CanSignalDef("Steering Angle", 0, 14, Endianness.BIG_ENDIAN, 0.1, -800.0, -800.0, 800.0, "deg")
+                        CanSignalDef("Steering Angle", 0, 14, Endianness.BIG_ENDIAN, 0.1, -800.0, -800.0, 800.0, "deg"),
+                        CanSignalDef("Steering Rate", 16, 12, Endianness.BIG_ENDIAN, 1.0, 0.0, -2048.0, 2047.0, "deg/s")
+                    )
+                ),
+                0x91 to CanMessageDef(
+                    "091", 0x91, "YAW_DATA",
+                    listOf(
+                        CanSignalDef("Yaw Rate", 0, 16, Endianness.BIG_ENDIAN, 0.01, -320.0, -320.0, 320.0, "deg/s"),
+                        CanSignalDef("Lateral G", 16, 16, Endianness.BIG_ENDIAN, 0.001, -2.5, -2.5, 2.5, "g"),
+                        CanSignalDef("Longitudinal G", 32, 16, Endianness.BIG_ENDIAN, 0.001, -2.5, -2.5, 2.5, "g")
+                    )
+                ),
+                0x83 to CanMessageDef(
+                    "083", 0x83, "EPS_STATUS",
+                    listOf(
+                        CanSignalDef("Driver Torque", 0, 12, Endianness.BIG_ENDIAN, 0.01, -50.0, -50.0, 50.0, "Nm"),
+                        CanSignalDef("EPS Torque", 16, 12, Endianness.BIG_ENDIAN, 0.01, -100.0, -100.0, 100.0, "Nm")
                     )
                 ),
                 0x130 to CanMessageDef(
@@ -294,6 +341,18 @@ object OpendbcManager {
                     listOf(
                         CanSignalDef("Brake Line Pressure", 0, 10, Endianness.BIG_ENDIAN, 0.1, 0.0, 0.0, 100.0, "%"),
                         CanSignalDef("Accelerator Position", 16, 10, Endianness.BIG_ENDIAN, 0.1, 0.0, 0.0, 100.0, "%")
+                    )
+                ),
+                0x110 to CanMessageDef(
+                    "110", 0x110, "ENGINE_DATA",
+                    listOf(
+                        CanSignalDef("Engine Torque", 0, 12, Endianness.BIG_ENDIAN, 1.0, 0.0, 0.0, 1000.0, "Nm")
+                    )
+                ),
+                0x3B3 to CanMessageDef(
+                    "3B3", 0x3B3, "RADAR_DATA",
+                    listOf(
+                        CanSignalDef("Lead Distance", 0, 12, Endianness.BIG_ENDIAN, 0.1, 0.0, 0.0, 250.0, "m")
                     )
                 ),
                 0x176 to CanMessageDef(

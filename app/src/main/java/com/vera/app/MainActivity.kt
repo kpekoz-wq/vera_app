@@ -4152,18 +4152,36 @@ fun VeraMainScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 SleekMetricTile("Steering Angle", "--", "deg", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Brake Pressure", "--", pressUnit, isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Wheel FL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Wheel FR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Steering Rate", "--", "deg/s", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Driver Torque", "--", "Nm", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("EPS Torque", "--", "Nm", isSelected = false, modifier = Modifier.weight(1f))
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                SleekMetricTile("Yaw Rate", "--", "deg/s", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Lateral G", "--", "g", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Longitudinal G", "--", "g", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Engine Torque", "--", "Nm", isSelected = false, modifier = Modifier.weight(1f))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                SleekMetricTile("Wheel FL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Wheel FR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
                                 SleekMetricTile("Wheel RL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
                                 SleekMetricTile("Wheel RR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                SleekMetricTile("Brake Pressure", "--", pressUnit, isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Accelerator", "--", "%", isSelected = false, modifier = Modifier.weight(1f))
+                                SleekMetricTile("Lead Distance", "--", "m", isSelected = false, modifier = Modifier.weight(1f))
                                 SleekMetricTile("Gear", "--", "Gear", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Steering Rate", "--", "deg/s", isSelected = false, modifier = Modifier.weight(1f))
                             }
                         }
 
