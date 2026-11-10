@@ -5352,6 +5352,9 @@ fun VeraMainScreen(
                         micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     } else if (isGeminiSpeaking) {
                         viewModel.interruptLivePlayback()
+                    } else if (isStandby) {
+                        // Tapping in HEY VERA standby toggles hands-free mode off back to Voice status
+                        viewModel.stopGeminiLiveSession()
                     } else {
                         viewModel.toggleHandsFreeVoiceMode()
                     }

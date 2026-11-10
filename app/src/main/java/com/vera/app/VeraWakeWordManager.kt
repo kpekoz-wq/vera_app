@@ -2,6 +2,7 @@ package com.vera.app
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -56,6 +57,45 @@ class VeraWakeWordManager(
     private var restartJob: Job? = null
     private var porcupineManager: Any? = null // Reference kept as Any for dynamic Porcupine binding
 
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private var isMuted = false
+
+    /**
+     * Silences system earcon / beeps played by Google Speech Services when SpeechRecognizer starts,
+     * loops, or encounters a silence timeout in standby mode.
+     */
+    private fun setMuteBeeps(mute: Boolean) {
+        val am = audioManager ?: return
+        try {
+            val direction = if (mute) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE
+            if (mute) {
+                if (!isMuted) {
+                    am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)
+                    try {
+                        am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, direction, 0)
+                    } catch (_: Exception) {}
+                    try {
+                        am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, direction, 0)
+                    } catch (_: Exception) {}
+                    isMuted = true
+                }
+            } else {
+                if (isMuted) {
+                    am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)
+                    try {
+                        am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, direction, 0)
+                    } catch (_: Exception) {}
+                    try {
+                        am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, direction, 0)
+                    } catch (_: Exception) {}
+                    isMuted = false
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to adjust stream volume: ${e.message}")
+        }
+    }
+
     /**
      * Start listening on-device for "Hey Vera".
      */
@@ -86,6 +126,7 @@ class VeraWakeWordManager(
 
         stopPicovoicePorcupine()
         stopOnDeviceSpeechRecognizer()
+        setMuteBeeps(false)
         Log.i(TAG, "Wake word listening stopped.")
     }
 
@@ -150,17 +191,22 @@ class VeraWakeWordManager(
     }
 
     private fun startOnDeviceSpeechRecognizer() {
-        mainHandler.post {
-            if (!_isListeningForWakeWord.value) return@post
+        val action = Runnable {
+            if (!_isListeningForWakeWord.value) return@Runnable
             try {
+                // Silence prompt beeps played by Google Speech Services
+                setMuteBeeps(true)
+
                 if (speechRecognizer == null) {
-                    speechRecognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
+                    speechRecognizer = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                        SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+                    ) {
                         SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
                     } else {
                         SpeechRecognizer.createSpeechRecognizer(context)
                     }
-                    speechRecognizer?.setRecognitionListener(createListener())
                 }
+                speechRecognizer?.setRecognitionListener(createListener())
 
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -168,27 +214,41 @@ class VeraWakeWordManager(
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                     putExtra("android.speech.extra.DICTATION_MODE", true)
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 5000L)
                 }
 
                 isRecognizerActive = true
                 speechRecognizer?.startListening(intent)
-                Log.d(TAG, "On-device speech recognizer listening for 'Hey Vera'...")
+                Log.d(TAG, "On-device speech recognizer listening for 'Hey Vera' (silent)...")
             } catch (e: Exception) {
                 Log.w(TAG, "SpeechRecognizer start failed: ${e.message}")
                 scheduleRestart()
             }
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run()
+        } else {
+            mainHandler.post(action)
+        }
     }
 
     private fun stopOnDeviceSpeechRecognizer() {
-        mainHandler.post {
+        val action = Runnable {
             try {
                 isRecognizerActive = false
+                speechRecognizer?.setRecognitionListener(null)
                 speechRecognizer?.stopListening()
                 speechRecognizer?.cancel()
                 speechRecognizer?.destroy()
             } catch (_: Exception) {}
             speechRecognizer = null
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run()
+        } else {
+            mainHandler.post(action)
         }
     }
 
