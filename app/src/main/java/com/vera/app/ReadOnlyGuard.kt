@@ -30,7 +30,7 @@ object ReadOnlyGuard {
     fun isAllowed(command: String): Boolean {
         val c = command.trim().uppercase().replace(" ", "")
         if (c.isEmpty()) return false
-        if (c.startsWith("AT")) return true           // adapter configuration only
+        if (c.startsWith("AT") || c.startsWith("ST")) return true           // adapter configuration only (ELM & STN commands)
 
         // Hex requests must be whole bytes made only of hex digits.
         if (c.length % 2 != 0 || !c.all { it in '0'..'9' || it in 'A'..'F' }) return false

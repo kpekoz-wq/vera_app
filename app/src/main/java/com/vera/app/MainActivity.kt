@@ -2218,6 +2218,11 @@ fun VeraMainScreen(
     val isScanningMode06 by viewModel.isScanningMode06.collectAsState()
     val isScanningMode22 by viewModel.isScanningMode22.collectAsState()
     val isScanningObdb by viewModel.isScanningObdb.collectAsState()
+    val isHighSpeedCanCapable by viewModel.isHighSpeedCanCapable.collectAsState()
+    val adapterHardwareName by viewModel.adapterHardwareName.collectAsState()
+    val activeOpendbcProfile by viewModel.activeOpendbcProfile.collectAsState()
+    val opendbcSignals by viewModel.opendbcSignals.collectAsState()
+    var isOpendbcExpanded by remember { mutableStateOf(true) }
     val isSendingMessage by viewModel.isSendingMessage.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
     val isSpeaking by viewModel.isSpeaking.collectAsState()
@@ -3259,6 +3264,24 @@ fun VeraMainScreen(
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (isHighSpeedCanCapable) {
+                                    val dbcName = activeOpendbcProfile?.platformName ?: "Raw CAN"
+                                    Text(
+                                        text = "⚡ $adapterHardwareName • opendbc $dbcName",
+                                        fontSize = 9.sp,
+                                        lineHeight = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF00E676)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "🔌 $adapterHardwareName",
+                                        fontSize = 9.sp,
+                                        lineHeight = 10.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         } else {
                             Text(
@@ -4036,6 +4059,118 @@ fun VeraMainScreen(
         }
 
         Spacer(modifier = Modifier.height(6.dp))
+
+        // 3.4 opendbc Dynamic Chassis & High-Speed CAN Section
+        if (isConnected) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { isOpendbcExpanded = !isOpendbcExpanded },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "opendbc Dynamics",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (isOpendbcExpanded) " ▲" else " ▼",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    if (isHighSpeedCanCapable) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF00E676).copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "⚡ ${activeOpendbcProfile?.platformName ?: "CAN Active"}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00E676),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Standard OBD-II",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (isOpendbcExpanded) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (opendbcSignals.isNotEmpty()) {
+                        val signalList = opendbcSignals.values.toList()
+                        val chunks = signalList.chunked(4)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            chunks.forEach { rowSignals ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    rowSignals.forEach { sig ->
+                                        SleekMetricTile(
+                                            label = sig.name,
+                                            value = sig.formattedValue.replace(sig.unit, "").trim(),
+                                            unit = sig.unit,
+                                            isSelected = false,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (rowSignals.size < 4) {
+                                        repeat(4 - rowSignals.size) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (isHighSpeedCanCapable) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "High-speed CAN adapter ready (${adapterHardwareName}). Listening for broadcast frames...",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "⚡ High-Speed CAN broadcast signals (Steering Angle, Wheel Speeds, Brake Pressure) require a vLinker FS / MC+ or OBDLink adapter (or an SGW bypass cable on 2018+ vehicles).",
+                                fontSize = 10.sp,
+                                lineHeight = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+        }
 
         // 3.5 Mode 06 Monitors Panel Header (Flush Left)
         Row(

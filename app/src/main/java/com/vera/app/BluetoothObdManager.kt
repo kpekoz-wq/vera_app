@@ -572,6 +572,19 @@ class BluetoothObdManager {
     private val _vehicleOdometerKm = MutableStateFlow<Double?>(null)
     val vehicleOdometerKm: StateFlow<Double?> = _vehicleOdometerKm.asStateFlow()
 
+    // High-Speed CAN & opendbc StateFlows
+    private val _isHighSpeedCanCapable = MutableStateFlow(false)
+    val isHighSpeedCanCapable: StateFlow<Boolean> = _isHighSpeedCanCapable.asStateFlow()
+
+    private val _adapterHardwareName = MutableStateFlow("Generic ELM327")
+    val adapterHardwareName: StateFlow<String> = _adapterHardwareName.asStateFlow()
+
+    private val _activeOpendbcProfile = MutableStateFlow<OpendbcManager.VehicleDbcProfile?>(null)
+    val activeOpendbcProfile: StateFlow<OpendbcManager.VehicleDbcProfile?> = _activeOpendbcProfile.asStateFlow()
+
+    private val _opendbcSignals = MutableStateFlow<Map<String, OpendbcManager.DecodedOpendbcSignal>>(emptyMap())
+    val opendbcSignals: StateFlow<Map<String, OpendbcManager.DecodedOpendbcSignal>> = _opendbcSignals.asStateFlow()
+
     fun updateVehicleDetails(details: String) {
         _vehicleDetails.value = details
     }
@@ -720,6 +733,11 @@ class BluetoothObdManager {
         val demoOdoKm = if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 184290.0 else 67450.0
         _vehicleOdometerKm.value = demoOdoKm
 
+        _isHighSpeedCanCapable.value = true
+        _adapterHardwareName.value = "vLinker FS USB (High-Speed CAN Ready)"
+        val profile = OpendbcManager.findProfileForVehicle(vinStr)
+        _activeOpendbcProfile.value = profile
+
         // Trigger OBDb Signalset Loader for Demo Vehicle (Ford F-150 2007)
         ioScope.launch {
             loadObdbForVehicle("Ford", "F-150", 2007)
@@ -801,6 +819,21 @@ class BluetoothObdManager {
                     maf = 4.2,
                     throttlePosition = 14,
                     dtcs = currentDtcs
+                )
+
+                // Simulate dynamic opendbc broadcast signals
+                val steer = Math.sin(step * 0.1) * 18.5
+                val brake = if (step % 20 in 0..4) (Math.sin(step * 0.5).coerceAtLeast(0.0) * 25.0) else 0.0
+                val speedBase = 65.0 + Math.sin(step * 0.05) * 5.0
+                _opendbcSignals.value = mapOf(
+                    "Steering Angle" to OpendbcManager.DecodedOpendbcSignal("Steering Angle", steer, String.format(java.util.Locale.US, "%.1f°", steer), "deg"),
+                    "Steering Rate" to OpendbcManager.DecodedOpendbcSignal("Steering Rate", Math.cos(step * 0.1) * 12.0, String.format(java.util.Locale.US, "%.1f°/s", Math.cos(step * 0.1) * 12.0), "deg/s"),
+                    "Brake Line Pressure" to OpendbcManager.DecodedOpendbcSignal("Brake Line Pressure", brake, String.format(java.util.Locale.US, "%.1f bar", brake), "bar"),
+                    "Wheel Speed FL" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed FL", speedBase, String.format(java.util.Locale.US, "%.1f km/h", speedBase), "km/h"),
+                    "Wheel Speed FR" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed FR", speedBase + 0.2, String.format(java.util.Locale.US, "%.1f km/h", speedBase + 0.2), "km/h"),
+                    "Wheel Speed RL" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed RL", speedBase - 0.1, String.format(java.util.Locale.US, "%.1f km/h", speedBase - 0.1), "km/h"),
+                    "Wheel Speed RR" to OpendbcManager.DecodedOpendbcSignal("Wheel Speed RR", speedBase + 0.1, String.format(java.util.Locale.US, "%.1f km/h", speedBase + 0.1), "km/h"),
+                    "Transmission Gear" to OpendbcManager.DecodedOpendbcSignal("Transmission Gear", 3.0, "D", "Gear")
                 )
 
                 delay(250)
@@ -923,6 +956,32 @@ class BluetoothObdManager {
         sendAtCommand("AT E0", 200)
         sendAtCommand("AT L0", 200)
         sendAtCommand("AT H0", 200)
+
+        // Query adapter identification for high-speed CAN capabilities
+        val atiResp = sendAtCommand("ATI", 300)
+        val at1Resp = sendAtCommand("AT @1", 300)
+        val stdiResp = sendAtCommand("STDI", 300)
+
+        val combinedAdapterInfo = "$atiResp $at1Resp $stdiResp".lowercase()
+        val isCapable = isUsbConnection ||
+                combinedAdapterInfo.contains("vlinker") ||
+                combinedAdapterInfo.contains("stn") ||
+                combinedAdapterInfo.contains("obdlink") ||
+                combinedAdapterInfo.contains("microsys") ||
+                combinedAdapterInfo.contains("stntool")
+
+        _isHighSpeedCanCapable.value = isCapable
+        _adapterHardwareName.value = when {
+            combinedAdapterInfo.contains("vlinker fs") -> "Vgate vLinker FS (High-Speed USB)"
+            combinedAdapterInfo.contains("vlinker mc") -> "Vgate vLinker MC (High-Speed BT)"
+            combinedAdapterInfo.contains("vlinker") -> "Vgate vLinker (High-Speed)"
+            combinedAdapterInfo.contains("obdlink") -> "OBDLink (High-Speed)"
+            combinedAdapterInfo.contains("stn") -> "STN ScanTool (High-Speed)"
+            isUsbConnection -> "USB OBD Adapter (High-Speed)"
+            else -> "Standard ELM327"
+        }
+        Log.i(TAG, "Adapter identified: ${_adapterHardwareName.value} (High-Speed CAN capable=$isCapable)")
+
         sendAtCommand("AT SP 0", 500)
         // Kickstart protocol auto-search with 0100
         sendAtCommand("0100", 1500)
@@ -1055,6 +1114,13 @@ class BluetoothObdManager {
             val detailsStr = decodeVinDetails(vin)
             _vehicleDetails.value = detailsStr
             Log.i(TAG, "Successfully decoded Vehicle VIN & Details: $detailsStr")
+
+            // Automatically resolve and arm opendbc vehicle profile
+            val profile = OpendbcManager.findProfileForVehicle(vin)
+            _activeOpendbcProfile.value = profile
+            if (profile != null) {
+                Log.i(TAG, "Matched opendbc profile: ${profile.make} (${profile.platformName}) with ${profile.messages.size} CAN message groups")
+            }
 
             // Extract make, model, year for OBDb loader
             val parts = detailsStr.split("•").map { it.trim() }
@@ -2329,6 +2395,10 @@ class BluetoothObdManager {
             _vehicleVin.value = null
             _vehicleDetails.value = null
             _vehicleOdometerKm.value = null
+            _opendbcSignals.value = emptyMap()
+            _activeOpendbcProfile.value = null
+            _isHighSpeedCanCapable.value = false
+            _adapterHardwareName.value = "Generic ELM327"
             _connectionState.value = ConnectionState.Disconnected
             Log.i(TAG, "Disconnected successfully.")
         }

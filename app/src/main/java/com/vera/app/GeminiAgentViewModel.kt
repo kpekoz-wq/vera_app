@@ -191,6 +191,11 @@ class GeminiAgentViewModel : ViewModel() {
     val obdbLoadedResult = obdManager.obdbLoadedResult
     val obdbSignalResults = obdManager.obdbSignalResults
 
+    val isHighSpeedCanCapable: StateFlow<Boolean> = obdManager.isHighSpeedCanCapable
+    val adapterHardwareName: StateFlow<String> = obdManager.adapterHardwareName
+    val activeOpendbcProfile: StateFlow<OpendbcManager.VehicleDbcProfile?> = obdManager.activeOpendbcProfile
+    val opendbcSignals: StateFlow<Map<String, OpendbcManager.DecodedOpendbcSignal>> = obdManager.opendbcSignals
+
     private val _isScanningObdb = MutableStateFlow(false)
     val isScanningObdb: StateFlow<Boolean> = _isScanningObdb.asStateFlow()
 
@@ -2651,6 +2656,16 @@ class GeminiAgentViewModel : ViewModel() {
                         "  • Mode 22 Proprietary Parameters: Unscanned / Not queried yet"
                     }
 
+                    val opendbcData = opendbcSignals.value
+                    val opendbcSummary = if (opendbcData.isNotEmpty()) {
+                        val prof = activeOpendbcProfile.value?.platformName ?: "Vehicle CAN"
+                        "  • opendbc Dynamic Chassis & Dynamics ($prof):\n" + opendbcData.values.joinToString("\n") { "    - ${it.name}: ${it.formattedValue}" }
+                    } else if (isHighSpeedCanCapable.value) {
+                        "  • opendbc: High-Speed CAN Ready (${adapterHardwareName.value})"
+                    } else {
+                        "  • opendbc: Standard OBD2 adapter (${adapterHardwareName.value})"
+                    }
+
                     """
                         [Vehicle Telemetry Context - FOR INTERNAL DIAGNOSTIC REASONING ONLY]
                         VIN: $vin
@@ -2659,6 +2674,8 @@ class GeminiAgentViewModel : ViewModel() {
                         Telemetry Snapshot: $streamsSummary
                         Mode 06 Monitors: $m06Summary
                         Mode 22 PIDs: $m22Summary
+                        High-Speed CAN & opendbc Dynamics:
+                        $opendbcSummary
                         $elmTraceSection
                         $fileAttachmentContext
 
