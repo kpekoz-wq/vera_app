@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "4.4"
+        versionCode = 25
+        versionName = "4.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v4.4: Flat, modern regional voice accent selector (US, UK, SCO, AU, IE, SOU, NYC, CA, DE, IN), splash screen emblem fix, speech transcription fixes"
+                releaseNotes = "VERA v4.5: Vehicle motion & driveway stationary drift shield (checks OBD2 wheel speed & phone accelerometer to distinguish parked on a driveway vs active hill climbing)"
                 artifactType = "APK"
             }
         }

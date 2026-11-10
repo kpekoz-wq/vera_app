@@ -2,6 +2,10 @@ package com.vera.app
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Address
 import android.location.Geocoder
 import android.location.Location
@@ -16,9 +20,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
- * Real-time Geographic and Road Topography Snapshot.
+ * Real-time Geographic and Road Topography Snapshot with Vehicle Motion Awareness.
  */
 data class RoadContext(
     val streetName: String = "Locating...",
@@ -33,8 +38,13 @@ data class RoadContext(
     val headingCompass: String = "N",   // N, NE, E, SE, S, SW, W, NW
     val speedMph: Double = 0.0,
     val speedKmh: Double = 0.0,
+    val isMoving: Boolean = false,
+    val phoneAccelMps2: Double = 0.0,
     val isDemoSimulated: Boolean = false
 ) {
+    val motionDescription: String
+        get() = if (isMoving) "Driving (${speedMph.roundToInt()} mph)" else "Stationary / Parked (0 mph)"
+
     val formattedTopography: String
         get() = buildString {
             if (streetName.isNotBlank() && streetName != "Locating...") {
@@ -42,37 +52,46 @@ data class RoadContext(
                 if (neighborhoodOrCity.isNotBlank()) append(", $neighborhoodOrCity")
                 append(" • ")
             }
-            append(inclineStatus.description)
-            if (abs(roadGradePercent) >= 1.5) {
-                append(String.format(Locale.US, " (%+.1f%% grade)", roadGradePercent))
-            }
-            append(" • Elevation ${altitudeFeet.roundToInt()} ft")
-            if (speedMph >= 3.0) {
-                append(" • Heading $headingCompass")
+            if (isMoving) {
+                append(inclineStatus.description)
+                if (abs(roadGradePercent) >= 1.5) {
+                    append(String.format(Locale.US, " (%+.1f%% grade)", roadGradePercent))
+                }
+                append(" • Elevation ${altitudeFeet.roundToInt()} ft")
+                if (speedMph >= 3.0) {
+                    append(" • Moving ${speedMph.roundToInt()} mph $headingCompass")
+                }
+            } else {
+                append(inclineStatus.stationaryDescription)
+                if (abs(roadGradePercent) >= 1.5) {
+                    append(String.format(Locale.US, " (%+.1f%% grade)", roadGradePercent))
+                }
+                append(" • Elevation ${altitudeFeet.roundToInt()} ft • Stationary (0 mph)")
             }
         }
 }
 
-enum class InclineStatus(val description: String) {
-    STEEP_CLIMB("Steep Uphill Climb"),
-    MODERATE_CLIMB("Moderate Incline"),
-    MILD_CLIMB("Slight Incline"),
-    LEVEL("Level Road"),
-    MILD_DESCENT("Slight Descent"),
-    MODERATE_DESCENT("Moderate Downhill"),
-    STEEP_DESCENT("Steep Downhill Descent")
+enum class InclineStatus(val description: String, val stationaryDescription: String) {
+    STEEP_CLIMB("Steep Uphill Climb", "Parked on Steep Incline"),
+    MODERATE_CLIMB("Moderate Incline", "Stationary on Incline"),
+    MILD_CLIMB("Slight Incline", "Stationary on Slight Incline"),
+    LEVEL("Level Road", "Parked / Stationary (Level)"),
+    MILD_DESCENT("Slight Descent", "Stationary on Slight Slope"),
+    MODERATE_DESCENT("Moderate Downhill", "Stationary on Downhill Slope"),
+    STEEP_DESCENT("Steep Downhill Descent", "Parked on Steep Downhill Slope")
 }
 
 /**
- * Real-Time Location, Altitude, and Road Topography Manager.
+ * Real-Time Location, Altitude, Road Topography, and Motion Manager.
  *
- * Tracks GPS location, barometric/GPS elevation, and calculates dynamic road grade (slope)
- * to provide geographic context to VERA (e.g. "Climbing 7% grade on Jones St").
+ * Tracks GPS location, barometric/GPS elevation, vehicle/phone speed, and dynamic road grade.
+ * Features stationary shielding to prevent parked driveway GPS jitter from causing false hill climb verdicts.
  */
 class VeraLocationManager(
     private val context: Context,
-    private val scope: CoroutineScope
-) {
+    private val scope: CoroutineScope,
+    private val getVehicleSpeedKmh: () -> Int = { 0 }
+) : SensorEventListener {
     companion object {
         private const val TAG = "VeraLocationManager"
         private const val LOCATION_INTERVAL_MS = 2000L
@@ -86,6 +105,13 @@ class VeraLocationManager(
     private val geocoder: Geocoder by lazy {
         Geocoder(context, Locale.getDefault())
     }
+
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val linearAccelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+    private val rawAccelSensor = if (linearAccelSensor == null) sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) else null
+
+    @Volatile private var currentPhoneAccelMps2 = 0.0
+    @Volatile private var recentDynamicAccelVariance = 0.0
 
     private val _roadContext = MutableStateFlow(RoadContext())
     val roadContext: StateFlow<RoadContext> = _roadContext.asStateFlow()
@@ -110,6 +136,24 @@ class VeraLocationManager(
         }
     }
 
+    override fun onSensorChanged(event: SensorEvent) {
+        val x = event.values[0]
+        val y = event.values[1]
+        val z = event.values[2]
+        if (event.sensor.type == Sensor.TYPE_LINEAR_ACCELERATION) {
+            val mag = sqrt((x * x + y * y + z * z).toDouble())
+            currentPhoneAccelMps2 = mag
+            recentDynamicAccelVariance = (0.85 * recentDynamicAccelVariance) + (0.15 * mag)
+        } else if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            val totalMag = sqrt((x * x + y * y + z * z).toDouble())
+            val dynMag = abs(totalMag - 9.80665)
+            currentPhoneAccelMps2 = dynMag
+            recentDynamicAccelVariance = (0.85 * recentDynamicAccelVariance) + (0.15 * dynMag)
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
     @SuppressLint("MissingPermission")
     fun startTracking() {
         if (isTracking) return
@@ -126,7 +170,14 @@ class VeraLocationManager(
                 locationCallback,
                 Looper.getMainLooper()
             )
-            Log.i(TAG, "GPS & Road Topography tracking started.")
+
+            if (linearAccelSensor != null) {
+                sensorManager?.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
+            } else if (rawAccelSensor != null) {
+                sensorManager?.registerListener(this, rawAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+
+            Log.i(TAG, "GPS & Road Topography tracking started with sensor motion detection.")
         } catch (e: SecurityException) {
             Log.w(TAG, "Location permission not granted: ${e.message}")
         } catch (e: Exception) {
@@ -139,6 +190,7 @@ class VeraLocationManager(
         isTracking = false
         try {
             fusedLocationClient.removeLocationUpdates(locationCallback)
+            sensorManager?.unregisterListener(this)
             Log.i(TAG, "GPS tracking stopped.")
         } catch (e: Exception) {
             Log.e(TAG, "Error removing location updates: ${e.message}", e)
@@ -163,6 +215,8 @@ class VeraLocationManager(
                 headingCompass = "North",
                 speedMph = 24.0,
                 speedKmh = 38.6,
+                isMoving = true,
+                phoneAccelMps2 = 0.8,
                 isDemoSimulated = true
             )
             Log.i(TAG, "Demo road topography enabled: Jones St (+${demoGrade}% grade)")
@@ -176,15 +230,30 @@ class VeraLocationManager(
     private fun processNewLocation(location: Location) {
         if (isDemoMode) return // Demo overrides live GPS
 
-        val speedMps = if (location.hasSpeed()) location.speed else 0f
-        val speedMph = (speedMps * 2.23694).toDouble()
-        val speedKmh = (speedMps * 3.6).toDouble()
+        val obdSpeedKmh = getVehicleSpeedKmh()
+        val obdSpeedMph = obdSpeedKmh * 0.621371
+
+        val rawGpsSpeedMps = if (location.hasSpeed()) location.speed else 0f
+        val gpsSpeedMph = (rawGpsSpeedMps * 2.23694).toDouble()
+        val speedMph = if (obdSpeedKmh > 0) obdSpeedMph else gpsSpeedMph
+        val speedKmh = if (obdSpeedKmh > 0) obdSpeedKmh.toDouble() else (rawGpsSpeedMps * 3.6).toDouble()
+
+        // Vehicle motion determination:
+        // 1. If OBD2 is connected and reporting: speed >= 3 km/h is moving; 0 is stationary.
+        // 2. If OBD2 is not connected: GPS speed >= 2.5 mph (1.1 m/s) is moving.
+        // 3. Speeds below this threshold are classified as PARKED / STATIONARY (e.g. sitting in driveway).
+        val isMoving = if (obdSpeedKmh > 0) {
+            obdSpeedKmh >= 3
+        } else {
+            gpsSpeedMph >= 2.5
+        }
+
         val altMeters = if (location.hasAltitude()) location.altitude else 0.0
         val altFeet = altMeters * 3.28084
-        val heading = if (location.hasBearing()) degreesToCompass(location.bearing) else "N"
+        val heading = if (location.hasBearing() && isMoving) degreesToCompass(location.bearing) else "N"
 
-        // 1. Calculate Road Grade (% Incline) with Noise Suppression
-        val grade = calculateRoadGrade(location)
+        // 1. Calculate Road Grade (% Incline) with Noise Suppression & Stationary Drift Shield
+        val grade = calculateRoadGrade(location, isMoving)
 
         val status = when {
             grade >= 6.0 -> InclineStatus.STEEP_CLIMB
@@ -209,8 +278,10 @@ class VeraLocationManager(
             roadGradePercent = grade,
             inclineStatus = status,
             headingCompass = heading,
-            speedMph = speedMph,
-            speedKmh = speedKmh,
+            speedMph = if (isMoving) speedMph else 0.0,
+            speedKmh = if (isMoving) speedKmh else 0.0,
+            isMoving = isMoving,
+            phoneAccelMps2 = currentPhoneAccelMps2,
             isDemoSimulated = false
         )
     }
@@ -218,9 +289,17 @@ class VeraLocationManager(
     /**
      * Calculates the slope/grade percentage: (ΔAltitude / HorizontalDistance) * 100
      * Uses a multi-point historical window to avoid instantaneous GPS altitude jitter.
+     * Features stationary shielding: does NOT compute grade from stationary GPS drift.
      */
-    private fun calculateRoadGrade(current: Location): Double {
-        if (!current.hasAltitude()) return 0.0
+    private fun calculateRoadGrade(current: Location, isMoving: Boolean): Double {
+        if (!current.hasAltitude()) return smoothedGrade
+
+        // CRITICAL: When stationary (sitting in driveway or parked),
+        // stationary GPS drift causes false 5-15% grades. We only calculate
+        // dynamic driving grade when the vehicle is in motion.
+        if (!isMoving) {
+            return smoothedGrade
+        }
 
         locationHistory.add(current)
         if (locationHistory.size > 15) {
@@ -243,11 +322,11 @@ class VeraLocationManager(
         // Clamp raw grade to realistic vehicle roadway ranges (-30% to +30%)
         val clampedGrade = rawGrade.coerceIn(-30.0, 30.0)
 
-        // Exponential smoothing filter (alpha = 0.4)
+        // Exponential smoothing filter (alpha = 0.3)
         smoothedGrade = if (abs(smoothedGrade) < 0.01) {
             clampedGrade
         } else {
-            (0.4 * clampedGrade) + (0.6 * smoothedGrade)
+            (0.3 * clampedGrade) + (0.7 * smoothedGrade)
         }
 
         return (smoothedGrade * 10.0).roundToInt() / 10.0

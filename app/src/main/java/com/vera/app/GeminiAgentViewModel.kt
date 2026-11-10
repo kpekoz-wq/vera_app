@@ -307,7 +307,11 @@ class GeminiAgentViewModel : ViewModel() {
 
     fun initLocationManager(context: Context) {
         if (locationManager != null) return
-        val mgr = VeraLocationManager(context.applicationContext, viewModelScope)
+        val mgr = VeraLocationManager(
+            context = context.applicationContext,
+            scope = viewModelScope,
+            getVehicleSpeedKmh = { obdManager.metrics.value.speed }
+        )
         locationManager = mgr
         viewModelScope.launch {
             mgr.roadContext.collect { rc ->
@@ -319,7 +323,7 @@ class GeminiAgentViewModel : ViewModel() {
         } else {
             mgr.startTracking()
         }
-        Log.i("GeminiAgentViewModel", "VeraLocationManager initialized and tracking started.")
+        Log.i("GeminiAgentViewModel", "VeraLocationManager initialized with vehicle speed sensor link and tracking started.")
     }
 
     private val _isScanningDtcs = MutableStateFlow(false)
@@ -1558,16 +1562,17 @@ class GeminiAgentViewModel : ViewModel() {
                  * You CAN schedule periodic reports or threshold alerts for: Engine RPM, Vehicle Speed, Coolant Temperature, Short & Long Term Fuel Trims, Mass Air Flow (MAF), Engine Load, Throttle Position, Battery Voltage, Mode 06 Cylinder Misfires, Mode 22 Transmission Temp, Mode 03 Confirmed DTCs, and Mode 07 Pending DTCs.
                  * If the driver asks to monitor or alert on a sensor that is NOT broadcast over standard OBD2 (e.g. tire pressure on cars without OBD2 TPMS, oil quality percentage, blind spot radar), state honestly: "I cannot monitor that parameter because your vehicle's OBD2 stream does not broadcast it."
             5. GEOGRAPHIC, NAVIGATION & ROAD TOPOGRAPHY AWARENESS:
-               - You have real-time awareness of the driver's geographic location, current street name, elevation, and road grade (% incline / slope).
-               - When the driver asks to test or see how the car, engine, or exhaust performs on a hill or on a road (e.g. "take a left on Jones street and let's see how the exhaust performs on the way up the hill", "how is the car doing on this climb?"):
-                 * You MUST invoke the `evaluate_topographical_performance` tool to inspect combustion pressures, cylinder misfires, fuel trims, and exhaust under the active road grade.
-                 * Synthesize an authentic, expert mechanic verdict correlating the incline with engine load, fuel delivery, and misfires.
-               - When climbing an uphill grade (e.g. 5% to 8%+ incline):
+               - You have real-time awareness of the driver's geographic location, current street name, elevation, road grade (% incline / slope), and MOTION STATE (Stationary/Parked vs Driving in Motion).
+               - CRITICAL VEHICLE SPEED & MOTION AWARENESS BEFORE SPEAKING:
+                 * ALWAYS check vehicle speed, wheel speed, and phone acceleration before discussing driving conditions, hills, climbs, or descents!
+                 * If the car is parked, idling, or stationary (speed is 0 or under 2 mph): DO NOT say or assume the driver is actively driving, climbing, or descending a hill! Even if they are parked on a hillside road or in a steep driveway, acknowledge they are parked or sitting stationary (e.g. "You're parked on an incline in your driveway" or "Sitting stationary on a slope with the engine idling at 0 mph").
+                 * NEVER say things like "as you climb this grade", "pulling up this hill", "descending the road", or "under hill climb load" unless the car is ACTUALLY MOVING in drive (speed > 4 mph).
+               - When ACTIVELY DRIVING up a grade (speed > 4 mph, 5%+ incline):
                  * Engine load, intake air flow, and exhaust heat are expected to rise naturally under hill climb load.
                  * High combustion chamber pressure stresses spark plugs and ignition coils—watch for cylinder misfires.
-               - When on a downhill descent:
+               - When ACTIVELY DRIVING on a downhill descent (speed > 4 mph):
                  * Engine braking engages and deceleration fuel cut-off (DFCO) activates.
-               - If the driver asks where they are, what street they are on, what their elevation is, or whether they are on an incline, answer accurately using your live road context or the `get_road_topography` tool.
+               - If the driver asks where they are, what street they are on, what their elevation is, or whether they are on an incline, answer accurately using your live road context or the `get_road_topography` tool, explicitly stating whether the car is parked or in motion.
             6. SAFETY FIRST:
                - The driver is operating a vehicle. Never give instructions that require them to look away from the road or manipulate parts while driving.
         """.trimIndent()
@@ -1619,6 +1624,15 @@ class GeminiAgentViewModel : ViewModel() {
         val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
 
         val road = locationManager?.roadContext?.value
+        val obdSpeedMph = (metrics.speed * 0.621371).toInt()
+        val isVehicleMoving = (road?.isMoving == true) || (obdSpeedMph >= 3)
+        val motionStateText = if (isVehicleMoving) {
+            val spdText = if (isMetric) "${metrics.speed} km/h" else "$obdSpeedMph mph"
+            "DRIVING / IN MOTION ($spdText)"
+        } else {
+            "STATIONARY / PARKED (0 mph - sitting in driveway or idling, NOT driving)"
+        }
+
         val roadText = if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating road..." && road.streetName != "Locating...") {
             road.formattedTopography
         } else "Determining GPS road position & elevation..."
@@ -1626,6 +1640,7 @@ class GeminiAgentViewModel : ViewModel() {
         return """
             Vehicle: $vehicle (VIN: $vin)
             Odometer: $odoText
+            Motion State: $motionStateText
             Unit System Preference: ${if (isMetric) "METRIC (km/h, °C, kPa, km)" else "SAE (mph, °F, psi, miles)"}
             Road & Topography: $roadText
             OBD2 Connection: Connected & Polling ECU
@@ -1856,17 +1871,22 @@ class GeminiAgentViewModel : ViewModel() {
                 }
                 "get_road_topography" -> {
                     val road = locationManager?.roadContext?.value ?: RoadContext()
+                    val obdSpeedMph = (obdManager.metrics.value.speed * 0.621371).toInt()
+                    val isMoving = road.isMoving || obdSpeedMph >= 3
                     JSONObject().apply {
                         put("status", "success")
                         put("street_name", road.streetName)
                         put("city", road.neighborhoodOrCity)
                         put("road_grade_percent", road.roadGradePercent)
-                        put("incline_status", road.inclineStatus.description)
+                        put("incline_status", if (isMoving) road.inclineStatus.description else road.inclineStatus.stationaryDescription)
+                        put("is_vehicle_moving", isMoving)
+                        put("motion_state", if (isMoving) "Driving (${maxOf(obdSpeedMph, road.speedMph.roundToInt())} mph)" else "Stationary / Parked (0 mph)")
                         put("altitude_feet", road.altitudeFeet.roundToInt())
                         put("altitude_meters", road.altitudeMeters.roundToInt())
                         put("heading", road.headingCompass)
-                        put("speed_mph", road.speedMph.roundToInt())
-                        put("speed_kmh", road.speedKmh.roundToInt())
+                        put("speed_mph", if (isMoving) maxOf(obdSpeedMph, road.speedMph.roundToInt()) else 0)
+                        put("speed_kmh", if (isMoving) maxOf(obdManager.metrics.value.speed, road.speedKmh.roundToInt()) else 0)
+                        put("phone_accel_mps2", String.format(java.util.Locale.US, "%.2f", road.phoneAccelMps2))
                         put("formatted_summary", road.formattedTopography)
                     }
                 }
@@ -1885,10 +1905,20 @@ class GeminiAgentViewModel : ViewModel() {
                     val misfireSummary = m06.filter { it.category.contains("Misfire", ignoreCase = true) }
                     val failingMisfires = misfireSummary.filter { it.status == Mode06Status.FAIL || it.testValue > 5.0 }
 
+                    val speedMph = (metrics.speed * 0.621371).toInt()
+                    val isMoving = speedMph >= 3 || road.isMoving || (road.speedMph >= 3.0)
                     val isUphill = road.roadGradePercent >= 3.5 || road.inclineStatus == InclineStatus.STEEP_CLIMB || road.inclineStatus == InclineStatus.MODERATE_CLIMB
                     val isDownhill = road.roadGradePercent <= -3.0 || road.inclineStatus == InclineStatus.STEEP_DESCENT || road.inclineStatus == InclineStatus.MODERATE_DESCENT
 
                     val mechanicVerdict = when {
+                        !isMoving -> {
+                            if (kotlin.math.abs(road.roadGradePercent) >= 1.5) {
+                                val slopeType = if (road.roadGradePercent > 0) "incline" else "downhill slope"
+                                "Stationary on ${road.streetName} (${String.format(java.util.Locale.US, "%+.1f%%", road.roadGradePercent)} grade). Vehicle is currently parked or idling on an $slopeType (0 mph). Engine is at idle (${metrics.rpm} RPM, ${metrics.engineLoad}% load) with zero driving stress."
+                            } else {
+                                "Vehicle is stationary on ${road.streetName} (0 mph, level ground). Engine idling normally at ${metrics.rpm} RPM."
+                            }
+                        }
                         isUphill && failingMisfires.isNotEmpty() -> {
                             val cyl = failingMisfires.first().name.replace("Misfires", "").trim()
                             "Catching misfires on $cyl under ${metrics.engineLoad}% load climbing ${road.streetName} (+${road.roadGradePercent}% grade). Ignition breakdown under high combustion chamber pressure."
@@ -1903,7 +1933,7 @@ class GeminiAgentViewModel : ViewModel() {
                             "Descending ${road.streetName} (${road.roadGradePercent}% grade). Engine braking engaged, throttle closed (${metrics.throttlePosition}%), and fuel trims are stable."
                         }
                         else -> {
-                            "Cruising level on ${road.streetName} at ${if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"}. Engine load is moderate (${metrics.engineLoad}%), fuel trims normal (${metrics.fuelTrim}%), and combustion is clean."
+                            "Cruising level on ${road.streetName} at ${if (isMetric) "${metrics.speed} km/h" else "$speedMph mph"}. Engine load is moderate (${metrics.engineLoad}%), fuel trims normal (${metrics.fuelTrim}%), and combustion is clean."
                         }
                     }
 
@@ -1912,10 +1942,12 @@ class GeminiAgentViewModel : ViewModel() {
                         put("road_location", road.formattedTopography)
                         put("street_name", road.streetName)
                         put("road_grade_percent", road.roadGradePercent)
-                        put("incline_status", road.inclineStatus.description)
+                        put("incline_status", if (isMoving) road.inclineStatus.description else road.inclineStatus.stationaryDescription)
+                        put("is_vehicle_moving", isMoving)
+                        put("motion_state", if (isMoving) "Driving ($speedMph mph)" else "Stationary / Parked (0 mph)")
                         put("engine_load_percent", metrics.engineLoad)
                         put("rpm", metrics.rpm)
-                        put("speed", if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph")
+                        put("speed", if (isMetric) "${metrics.speed} km/h" else "$speedMph mph")
                         put("coolant_temp", if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F")
                         put("fuel_trim", "${if (metrics.fuelTrim >= 0) "+" else ""}${metrics.fuelTrim}%")
                         put("transmission_temp", transTemp)
@@ -2932,9 +2964,15 @@ class GeminiAgentViewModel : ViewModel() {
                         "  • opendbc: Standard OBD2 adapter (${adapterHardwareName.value})"
                     }
 
+                    val currentMetrics = obdManager.metrics.value
+                    val obdSpd = (currentMetrics.speed * 0.621371).toInt()
+                    val isMoving = roadContext.value.isMoving || obdSpd >= 3
+                    val motionDesc = if (isMoving) "Driving ($obdSpd mph)" else "Stationary / Parked (0 mph, sitting in driveway or idling)"
+
                     """
                         [Vehicle Telemetry Context - FOR INTERNAL DIAGNOSTIC REASONING ONLY]
                         VIN: $vin
+                        Motion State: $motionDesc
                         Active DTCs: ${if (dtcs.isEmpty()) "None" else dtcs.joinToString(", ")}
                         Road Topography & Location: ${roadContext.value.formattedTopography}
                         Telemetry Snapshot: $streamsSummary
@@ -2946,6 +2984,7 @@ class GeminiAgentViewModel : ViewModel() {
                         $fileAttachmentContext
 
                         CRITICAL INSTRUCTION: Speak naturally in plain English like a real human mechanic riding shotgun. Do NOT recite raw sensor numbers, PIDs, temperatures, voltages, or test IDs out loud unless specifically requested.
+                        CRITICAL SPEED & TOPOGRAPHY AWARENESS: Always check 'Motion State' before discussing hills, inclines, or driving conditions. If the vehicle is stationary (0 mph), the user is parked or sitting in their driveway. Do NOT assume or say they are actively driving, climbing, or descending a hill.
                         CORE MISSION & ANTI-SYCOPHANCY: Your highest objective is arriving at the unvarnished diagnostic truth and protecting the mechanical health of the vehicle. Do NOT be a "yes-man" or give reflexive affirmative answers. If the driver's hypothesis is contradicted by sensor data, or if an action is outside your capabilities, state the truth plainly and objectively.
                         BLUE-COLLAR MECHANIC PERSONA: Speak naturally in plain English like a seasoned, sharp blue-collar mechanic riding shotgun—warm, engaging, and occasionally witty, but relentlessly focused on finding the root cause without throwing expensive parts at a problem.
                         Healthy verdict example: "Let me know if there's a specific problem you're experiencing, but from all the indicators I'm watching, everything looks great."

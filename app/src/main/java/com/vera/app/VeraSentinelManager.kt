@@ -794,7 +794,10 @@ class VeraSentinelManager(
         }
 
         // ── RULE 11: UPHILL CLIMB STRESS & MISFIRE CORRELATOR (STEEP / MODERATE CLIMB) ──
-        if (roadContext != null && (roadContext.roadGradePercent >= 4.0 || roadContext.inclineStatus == InclineStatus.STEEP_CLIMB || roadContext.inclineStatus == InclineStatus.MODERATE_CLIMB)) {
+        val currentSpeedMph = (metrics.speed * 0.621371).toInt()
+        val isDriving = currentSpeedMph >= 4 || ((roadContext?.speedMph ?: 0.0) >= 4.0) || (roadContext?.isMoving == true)
+
+        if (isDriving && roadContext != null && (roadContext.roadGradePercent >= 4.0 || roadContext.inclineStatus == InclineStatus.STEEP_CLIMB || roadContext.inclineStatus == InclineStatus.MODERATE_CLIMB)) {
             val roadName = if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating...") roadContext.streetName else "this incline"
             val gradeFmt = String.format(java.util.Locale.US, "%.1f", roadContext.roadGradePercent)
 
@@ -848,7 +851,7 @@ class VeraSentinelManager(
         }
 
         // ── RULE 12: DOWNHILL COASTING & THERMAL OVERCOOLING WATCHDOG ──
-        if (roadContext != null && (roadContext.roadGradePercent <= -4.0 || roadContext.inclineStatus == InclineStatus.STEEP_DESCENT || roadContext.inclineStatus == InclineStatus.MODERATE_DESCENT)) {
+        if (isDriving && roadContext != null && (roadContext.roadGradePercent <= -4.0 || roadContext.inclineStatus == InclineStatus.STEEP_DESCENT || roadContext.inclineStatus == InclineStatus.MODERATE_DESCENT)) {
             val roadName = if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating...") roadContext.streetName else "this descent"
             if (coolantF < 160 && driveSeconds >= 600 && canFireAlert("downhill_overcooling", 240_000L)) {
                 val tempText = if (isMetric) "$coolantC°C" else "$coolantF°F"
