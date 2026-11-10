@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v4.3: Seamless speech transcription (heals split words like fu el -> fuel), remote kill switch protection, drive session downloads & replay"
+                releaseNotes = "VERA v4.4: Regional voice accents selector in sidebar (British, Scottish, Australian, Irish, Southern US, etc.), fixed launch splash screen emblem, seamless speech transcription"
                 artifactType = "APK"
             }
         }
