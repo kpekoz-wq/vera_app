@@ -67,14 +67,88 @@ class ChatSessionManager(private val context: android.content.Context) {
         if (files != null) {
             for (file in files) {
                 try {
-                    val json = file.readText(Charsets.UTF_8)
-                    val session = gson.fromJson(json, ChatSession::class.java)
-                    if (session != null) {
-                        sessions.add(session)
+                    // Stream JSON using JsonReader to read only session metadata without loading millions of recordedSamples into RAM
+                    java.io.FileReader(file).use { fileReader ->
+                        com.google.gson.stream.JsonReader(fileReader).use { reader ->
+                            var id = ""
+                            var title = ""
+                            var timestamp = 0L
+                            var vehicleDetails: String? = null
+                            var vehicleVin: String? = null
+                            var odometerFormatted: String? = null
+                            var dtcs: MutableList<String>? = null
+                            var messages: MutableList<ChatMessage>? = null
+                            var hasReplaySamples = false
+
+                            reader.beginObject()
+                            while (reader.hasNext()) {
+                                when (reader.nextName()) {
+                                    "id" -> id = reader.nextString()
+                                    "title" -> title = reader.nextString()
+                                    "timestamp" -> timestamp = reader.nextLong()
+                                    "vehicleDetails" -> vehicleDetails = if (reader.peek() == com.google.gson.stream.JsonToken.NULL) { reader.nextNull(); null } else reader.nextString()
+                                    "vehicleVin" -> vehicleVin = if (reader.peek() == com.google.gson.stream.JsonToken.NULL) { reader.nextNull(); null } else reader.nextString()
+                                    "odometerFormatted" -> odometerFormatted = if (reader.peek() == com.google.gson.stream.JsonToken.NULL) { reader.nextNull(); null } else reader.nextString()
+                                    "dtcs" -> {
+                                        if (reader.peek() == com.google.gson.stream.JsonToken.NULL) {
+                                            reader.nextNull()
+                                        } else {
+                                            dtcs = mutableListOf()
+                                            reader.beginArray()
+                                            while (reader.hasNext()) {
+                                                dtcs.add(reader.nextString())
+                                            }
+                                            reader.endArray()
+                                        }
+                                    }
+                                    "messages" -> {
+                                        if (reader.peek() == com.google.gson.stream.JsonToken.NULL) {
+                                            reader.nextNull()
+                                        } else {
+                                            messages = mutableListOf()
+                                            reader.beginArray()
+                                            while (reader.hasNext()) {
+                                                messages.add(gson.fromJson(reader, ChatMessage::class.java))
+                                            }
+                                            reader.endArray()
+                                        }
+                                    }
+                                    "recordedSamples" -> {
+                                        // Skip deep sample objects; just check if array is non-empty
+                                        if (reader.peek() == com.google.gson.stream.JsonToken.NULL) {
+                                            reader.nextNull()
+                                        } else {
+                                            reader.beginArray()
+                                            if (reader.hasNext()) {
+                                                hasReplaySamples = true
+                                            }
+                                            while (reader.hasNext()) {
+                                                reader.skipValue()
+                                            }
+                                            reader.endArray()
+                                        }
+                                    }
+                                    else -> reader.skipValue()
+                                }
+                            }
+                            reader.endObject()
+
+                            val session = ChatSession(
+                                id = id.ifBlank { file.nameWithoutExtension },
+                                title = title,
+                                timestamp = timestamp,
+                                vehicleDetails = vehicleDetails,
+                                vehicleVin = vehicleVin,
+                                odometerFormatted = odometerFormatted,
+                                dtcs = dtcs ?: emptyList(),
+                                messages = messages ?: emptyList(),
+                                recordedSamples = if (hasReplaySamples) listOf(RecordedDataSample(0L, 0.0, BluetoothObdManager.VehicleMetrics(), emptyList(), emptyList(), RoadContext())) else emptyList()
+                            )
+                            sessions.add(session)
+                        }
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("ChatSessionManager", "Error parsing session from ${file.name}", e)
-                    file.delete()
                 }
             }
         }

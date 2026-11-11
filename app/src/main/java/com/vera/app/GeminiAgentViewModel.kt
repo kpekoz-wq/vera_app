@@ -2277,6 +2277,10 @@ class GeminiAgentViewModel : ViewModel() {
 
                 var count = 0
                 synchronized(recordedSamples) {
+                    // Cap live memory log at 14,400 samples (1 hour at 4Hz) to protect memory
+                    if (recordedSamples.size >= 14400) {
+                        recordedSamples.removeAt(0)
+                    }
                     recordedSamples.add(sample)
                     count = recordedSamples.size
                 }

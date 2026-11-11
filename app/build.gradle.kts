@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
-        versionName = "5.0"
+        versionCode = 31
+        versionName = "5.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
