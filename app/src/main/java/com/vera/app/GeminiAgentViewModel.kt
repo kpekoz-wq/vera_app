@@ -1348,6 +1348,7 @@ class GeminiAgentViewModel : ViewModel() {
             apiKey = geminiApiKey,
             systemInstruction = buildLiveSystemInstruction(),
             telemetrySummary = summary,
+            telemetryProvider = { buildTelemetrySnapshotForLive() },
             conversationHistory = historyContext,
             onMessageReceived = { text ->
                 if (text.isNotBlank()) {
@@ -1534,10 +1535,9 @@ class GeminiAgentViewModel : ViewModel() {
                - NEVER recite raw PIDs, sensor codes, raw voltages, or test IDs out loud unless the driver explicitly asks for exact numbers.
             2. REAL-TIME TELEMETRY GROUNDING & ULTRA-LOW LATENCY:
                - Vehicle telemetry changes dynamically while driving.
-               - LIVE PROMPT SNAPSHOT (IMMEDIATE LOW-LATENCY ANSWERS):
-                 * You already receive the live real-time telemetry snapshot directly in your prompt below! This includes speed, RPM, coolant, fuel trims, battery voltage, road grade, active DTCs, AND Mode 22 Custom PIDs (including Transmission Commanded Gear, transmission fluid temp, oil pressure, and turbo boost).
-                 * ULTRA-LOW LATENCY RULE: When the driver asks about current speed, RPM, temperatures, fuel trims, battery voltage, error status, or transmission gear, YOU CAN AND SHOULD ANSWER IMMEDIATELY USING THIS PROMPT SNAPSHOT without calling a tool! This eliminates unnecessary 10-15s tool round-trip delay and keeps your voice answers snappy (under 2 seconds).
-                 * Only invoke tools (`get_dtcs`, `get_mode06_results`, `schedule_periodic_telemetry_report`, `set_telemetry_threshold_alert`, `cancel_telemetry_alerts`) when the driver specifically requests a fresh deep DTC scan, Mode 06 test execution, or scheduling a recurring sentinel watchdog.
+               - LIVE PROMPT SNAPSHOT & REAL-TIME TOOL REFRESH:
+                 * You receive a live telemetry snapshot in your prompt, and live context updates are pushed to you automatically when the vehicle connects.
+                 * CRITICAL CONNECTION & LIVE DATA RULE: Whenever the driver asks whether you are connected, asks to check again, or asks for current live readings (steering angle, wheel speeds, RPM, speed, temperatures, fuel trims, battery voltage, or trouble codes), ALWAYS invoke `get_live_data` (or `get_vehicle_info`) if your initial snapshot showed Disconnected/Connecting or if the driver asks for the latest live numbers! Never assume you are still disconnected without calling `get_live_data` first!
                - TRANSMISSION COMMANDED GEAR & PARK POSITION:
                  * On Ford and GM automatic transmissions, Mode 22 PID 11B3 (Commanded Gear) measures the PCM hydraulic shift solenoid commanded circuit.
                  * When the vehicle is STATIONARY / PARKED (speed 0 mph), the PCM commands hydraulic state 2 as the baseline for the Park/Neutral interlock. If the driver is parked and asks what gear they are in, tell them the transmission is in Park (or Neutral) and explain that state 2 is the stationary hydraulic solenoid baseline, NOT forward 2nd gear!
@@ -1591,9 +1591,19 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     private fun buildTelemetrySnapshotForLive(): String {
-        val isConnected = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+        val connState = obdManager.connectionState.value
+        val isConnected = connState is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+        val isConnecting = connState is BluetoothObdManager.ConnectionState.Connecting
         val currentUnit = unitSystem.value
         val isMetric = currentUnit == UnitSystem.METRIC
+
+        if (isConnecting) {
+            return """
+                OBD2 CONNECTION STATUS: CONNECTING / HANDSHAKING WITH ADAPTER
+                Vehicle: Handshaking with OBD2 adapter and querying VIN/PIDs...
+                DIRECTIVE: The OBD2 adapter is actively connecting right now (takes ~2-4 seconds). If the driver asks if you are connected or asks for live data, ALWAYS call the `get_live_data` tool first to check if the connection handshake has completed!
+            """.trimIndent()
+        }
 
         if (!isConnected) {
             return """
@@ -1605,15 +1615,17 @@ class GeminiAgentViewModel : ViewModel() {
                 Live Telemetry: UNAVAILABLE - Disconnected from vehicle ECU
                 Mode 06 Monitors: UNAVAILABLE - Disconnected from vehicle ECU
                 
-                DIRECTIVE: The OBD2 adapter is currently DISCONNECTED. You DO NOT have live vehicle telemetry or error codes. Do NOT say everything looks fine or that indicators look great. If asked about live vehicle data, inform the driver that you are not connected to the vehicle yet.
+                DIRECTIVE: At the moment this snapshot was taken, the OBD2 adapter was disconnected. However, the driver may connect at any moment during our conversation! Therefore, if the driver asks if you are connected, says they are connected, or asks for live vehicle data, you MUST call `get_live_data` to check the live connection state before saying you are disconnected.
             """.trimIndent()
         }
 
         val vin = obdManager.vehicleVin.value ?: "Scanning/Pending"
         val vehicle = obdManager.vehicleDetails.value ?: "Vehicle"
         val isStreaming = obdManager.isStreamingLiveData.value
+        val streams = obdManager.supportedStreams.value
+        val opendbcSigs = obdManager.opendbcSignals.value
 
-        if (!isStreaming) {
+        if (!isStreaming && streams.isEmpty() && opendbcSigs.isEmpty()) {
             val road = locationManager?.roadContext?.value
             val roadText = if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating road..." && road.streetName != "Locating...") {
                 road.formattedTopography
@@ -1625,14 +1637,13 @@ class GeminiAgentViewModel : ViewModel() {
                 OBD2 Connection: Connected (Live Stream Initializing)
                 Live Telemetry: INITIALIZING - Polling loop has started; awaiting first live ECU sensor frames.
                 
-                DIRECTIVE: The OBD2 adapter is connected, but the live telemetry data stream is currently establishing communication with the vehicle ECU. If the driver asks what speed, gear, RPM, or temperatures they have right now, tell them clearly: "I just connected to your OBD adapter and am establishing the live data stream with your vehicle; give me just a few moments to get the first readings." Do NOT guess or hallucinate any sensor values.
+                DIRECTIVE: The OBD2 adapter is connected! If the driver asks for live speed, gear, steering angle, RPM, or temperatures right now, call `get_live_data` to fetch the latest readings.
             """.trimIndent()
         }
 
         val metrics = obdManager.metrics.value
         val dtcs = troubleCodes.value
         val m06 = obdManager.mode06Results.value
-        val streams = obdManager.supportedStreams.value
         val m22Streams = obdManager.mode22Streams.value
         val odoKm = obdManager.vehicleOdometerKm.value
 
@@ -1658,6 +1669,12 @@ class GeminiAgentViewModel : ViewModel() {
             }
         } else "None polled yet"
 
+        val canDynamicsText = if (opendbcSigs.isNotEmpty()) {
+            opendbcSigs.values.joinToString(", ") { sig ->
+                "${sig.name}: ${sig.formattedValue}"
+            }
+        } else "Awaiting CAN broadcast sample"
+
         val odoText = if (odoKm != null && odoKm > 0) {
             if (isMetric) String.format(java.util.Locale.US, "%,.0f km", odoKm)
             else String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371)
@@ -1677,14 +1694,16 @@ class GeminiAgentViewModel : ViewModel() {
         } else "Determining GPS road position & elevation..."
 
         return """
+            OBD2 CONNECTION STATUS: CONNECTED TO VEHICLE ($vehicle, VIN: $vin)
             Vehicle: $vehicle (VIN: $vin)
             Odometer: $odoText
             Motion State: $motionStateText
             Unit System Preference: ${if (isMetric) "METRIC (km/h, °C, kPa, km)" else "SAE (mph, °F, psi, miles)"}
             Road & Topography: $roadText
-            OBD2 Connection: Connected & Polling ECU
+            OBD2 Connection: Connected & Actively Streaming ECU + CAN Bus Telemetry
             Active DTCs: $dtcText
-            Latest Telemetry: $streamsText
+            Latest OBD2 Telemetry: $streamsText
+            High-Speed CAN Bus Dynamics (opendbc - Steering, Wheels, Brake, Pedal): $canDynamicsText
             Mode 22 Custom PIDs (Transmission Gear & Temps, Oil Pressure, Boost): $m22Text
             Mode 06 Monitors: $m06Text
         """.trimIndent()
@@ -1697,26 +1716,38 @@ class GeminiAgentViewModel : ViewModel() {
             when (name) {
                 "get_live_data" -> {
                     if (!isConn) {
+                        val isConnecting = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connecting
+                        if (isConnecting) {
+                            return JSONObject().apply {
+                                put("connected", true)
+                                put("status", "CONNECTING_HANDSHAKE")
+                                put("message", "OBD2 adapter is actively finishing its connection handshake right now. Tell the driver you are connecting to the vehicle and readings will appear in a couple seconds.")
+                            }
+                        }
                         return JSONObject().apply {
                             put("connected", false)
                             put("status", "DISCONNECTED")
                             put("error", "OBD2 adapter is not connected to the vehicle. No live telemetry available. Instruct user to connect to the vehicle OBD2 adapter or launch Demo Mode.")
                         }
                     }
-                    if (!obdManager.isStreamingLiveData.value) {
+                    val streams = obdManager.supportedStreams.value
+                    val opendbcSigs = obdManager.opendbcSignals.value
+                    if (!obdManager.isStreamingLiveData.value && streams.isEmpty() && opendbcSigs.isEmpty()) {
                         return JSONObject().apply {
                             put("connected", true)
                             put("status", "STREAM_INITIALIZING")
-                            put("error", "The OBD2 adapter is connected, but the live data stream is currently initializing with the vehicle ECU. Tell the driver that you just connected and are establishing the live stream, and to give you a moment.")
+                            put("vehicle", obdManager.vehicleDetails.value ?: "Vehicle")
+                            put("vin", obdManager.vehicleVin.value ?: "Scanning")
+                            put("message", "The OBD2 adapter is connected to ${obdManager.vehicleDetails.value ?: "the vehicle"}, and the live data stream is initializing.")
                         }
                     }
                     val metrics = obdManager.metrics.value
-                    val streams = obdManager.supportedStreams.value
                     val voltage = streams.find { it.pid.pidHex == "42" }?.formattedValue?.takeIf { it != "--" } ?: "not available yet"
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
                         put("connected", true)
+                        put("status", "CONNECTED_STREAMING")
                         put("driver_unit_system", if (isMetric) "METRIC (State speeds in km/h, temps in °C, pressures in kPa, distances in km)" else "SAE (State speeds in mph, temps in °F, pressures in psi, distances in miles)")
                         put("rpm", metrics.rpm)
                         put("is_engine_running", metrics.rpm > 300)
@@ -1741,6 +1772,7 @@ class GeminiAgentViewModel : ViewModel() {
                         put("fuel_trim_percent", metrics.fuelTrim)
                         put("mass_air_flow_gs", metrics.maf)
                         put("vehicle", obdManager.vehicleDetails.value ?: "Vehicle")
+                        put("vin", obdManager.vehicleVin.value ?: "Unknown")
                         val road = locationManager?.roadContext?.value
                         if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating...") {
                             put("current_road", road.streetName)
@@ -1770,6 +1802,13 @@ class GeminiAgentViewModel : ViewModel() {
                                 })
                             }
                             put("supported_streams", streamsArr)
+                        }
+                        if (opendbcSigs.isNotEmpty()) {
+                            val canObj = JSONObject()
+                            for ((k, sig) in opendbcSigs) {
+                                canObj.put(k, sig.formattedValue)
+                            }
+                            put("can_bus_dynamics_opendbc", canObj)
                         }
                         val m22 = obdManager.mode22Streams.value
                         if (m22.isNotEmpty()) {
@@ -2308,7 +2347,8 @@ class GeminiAgentViewModel : ViewModel() {
                 val now = System.currentTimeMillis()
                 val elapsedSec = (now - recordingStartMs) / 1000.0
                 val metricsSnap = obdManager.metrics.value
-                val streamsSnap = obdManager.supportedStreams.value.toList()
+                // Strip per-stream 300-point sparkline history so saved session JSONs stay compact (<100 KB instead of 20 MB)
+                val streamsSnap = obdManager.supportedStreams.value.map { it.copy(history = emptyList()) }
                 val mode22Snap = obdManager.mode22Streams.value.toList()
                 val roadSnap = _roadContext.value
 
@@ -3197,20 +3237,45 @@ class GeminiAgentViewModel : ViewModel() {
             }
         }
 
-        // 2. Periodic Silent DTC Polling while driving (checks Mode 03 & Mode 07 every 45s)
+        // 2. Push real-time connection & telemetry context into active Gemini Live voice session
+        // whenever the vehicle finishes connecting or starts streaming after voice mode was already started.
         viewModelScope.launch {
-            while (isActive) {
-                delay(45_000L)
-                val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
-                if (isConn) {
-                    try {
-                        val scanned = obdManager.scanAllDtcModes()
-                        if (scanned.isNotEmpty() || _dtcDetails.value.isNotEmpty()) {
-                            _dtcDetails.value = scanned
+            var lastPushedStateWasConnected = false
+            var lastPushedStreaming = false
+            var lastPushedVin: String? = null
+            var lastCanPushMs = 0L
+            kotlinx.coroutines.flow.combine(
+                obdManager.connectionState,
+                obdManager.isStreamingLiveData,
+                obdManager.vehicleVin,
+                obdManager.opendbcSignals
+            ) { conn, streaming, vin, canSigs ->
+                val isConn = conn is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
+                Pair(Triple(isConn, streaming, vin), canSigs.size)
+            }.collect { (stateTriple, canSigCount) ->
+                val (isConn, streaming, vin) = stateTriple
+                if (liveStreamManager?.isLiveSessionActive?.value == true) {
+                    val now = System.currentTimeMillis()
+                    val stateTransitioned = (isConn && !lastPushedStateWasConnected) ||
+                            (streaming && !lastPushedStreaming) ||
+                            (vin != null && vin != lastPushedVin) ||
+                            (canSigCount > 0 && lastCanPushMs == 0L)
+                    val periodicRefreshDue = isConn && (now - lastCanPushMs >= 15_000L)
+                    if (stateTransitioned || periodicRefreshDue) {
+                        delay(250) // allow initial PIDs/VIN to settle
+                        val snapshot = buildTelemetrySnapshotForLive()
+                        if (liveStreamManager?.injectTelemetryContextUpdate(snapshot) == true) {
+                            lastPushedStateWasConnected = isConn
+                            lastPushedStreaming = streaming
+                            lastPushedVin = vin
+                            lastCanPushMs = now
                         }
-                    } catch (e: Exception) {
-                        Log.w("GeminiAgentViewModel", "Silent DTC periodic scan error", e)
                     }
+                } else {
+                    lastPushedStateWasConnected = false
+                    lastPushedStreaming = false
+                    lastPushedVin = null
+                    lastCanPushMs = 0L
                 }
             }
         }
@@ -3226,7 +3291,7 @@ class GeminiAgentViewModel : ViewModel() {
                     val now = System.currentTimeMillis()
                     val elapsedSec = (now - sessionStartTimeMs) / 1000.0
                     val metricsSnap = obdManager.metrics.value
-                    val streamsSnap = obdManager.supportedStreams.value.toList()
+                    val streamsSnap = obdManager.supportedStreams.value.map { it.copy(history = emptyList()) }
                     val mode22Snap = obdManager.mode22Streams.value.toList()
                     val roadSnap = locationManager?.roadContext?.value ?: RoadContext()
 

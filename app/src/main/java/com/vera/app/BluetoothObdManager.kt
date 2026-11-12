@@ -850,12 +850,16 @@ class BluetoothObdManager {
         val stdiResp = sendAtCommand("STDI", 300)
 
         val combinedAdapterInfo = "$atiResp $at1Resp $stdiResp".lowercase()
-        val isCapable = isUsbConnection ||
+        val hasStnFirmware = !stdiResp.contains("?") && (
                 combinedAdapterInfo.contains("vlinker") ||
                 combinedAdapterInfo.contains("stn") ||
                 combinedAdapterInfo.contains("obdlink") ||
-                combinedAdapterInfo.contains("microsys") ||
                 combinedAdapterInfo.contains("stntool")
+        )
+        isStnAdapter = hasStnFirmware
+        val isCapable = isUsbConnection ||
+                hasStnFirmware ||
+                combinedAdapterInfo.contains("microsys")
 
         _isHighSpeedCanCapable.value = isCapable
         _adapterHardwareName.value = when {
@@ -867,7 +871,7 @@ class BluetoothObdManager {
             isUsbConnection -> "USB OBD Adapter (High-Speed)"
             else -> "Standard ELM327"
         }
-        Log.i(TAG, "Adapter identified: ${_adapterHardwareName.value} (High-Speed CAN capable=$isCapable)")
+        Log.i(TAG, "Adapter identified: ${_adapterHardwareName.value} (High-Speed CAN capable=$isCapable, STN=$isStnAdapter)")
 
         sendAtCommand("AT SP 0", 500)
         // Kickstart protocol auto-search with 0100
@@ -932,6 +936,10 @@ class BluetoothObdManager {
 
         discoveredPidDefinitions = if (supportedList.isNotEmpty()) supportedList else ObdPidRegistry.DEFAULT_PIDS
         Log.i(TAG, "Discovered ${discoveredPidDefinitions.size} supported PIDs on vehicle: ${discoveredPidDefinitions.map { it.pidHex }}")
+
+        if (supportedList.isNotEmpty()) {
+            _isStreamingLiveData.value = true
+        }
 
         // Initialize StateFlow list of Supported Streams
         _supportedStreams.value = discoveredPidDefinitions.map { LiveStreamData(pid = it) }
@@ -1477,7 +1485,7 @@ class BluetoothObdManager {
             val sb = StringBuilder()
             sb.append("CAN scan · protocol: ").append(protocol.ifBlank { "unknown" }).append('\n')
             sb.append("$totalFrames frames in ${durationMs / 1000.0}s · ${ids.size} distinct IDs")
-            if (bufferFullEvents > 0) sb.append(" · adapter buffer overflowed ${bufferFullEvents}x (link is slower than the bus)")
+            if (bufferFullEvents > 0) sb.append(" · high-speed bus (${bufferFullEvents}x raw burst saturation; hardware filter active for live dynamics)")
             sb.append('\n')
             if (totalFrames == 0) {
                 sb.append("No broadcast frames reached the OBD-II port. Possible causes: ignition/READY is off, ")
@@ -1485,7 +1493,7 @@ class BluetoothObdManager {
                 sb.append("passes diagnostic request/response traffic to the port.")
                 return sb.toString()
             }
-            val hints = setOf("024", "025", "0AA", "0B4", "1D2", "1C4", "2E4", "260")
+            val hints = setOf("024", "025", "0AA", "0B4", "1D2", "1C4", "224", "245", "2E4", "260")
             val seenHints = ids.map { it.id }.filter { it in hints }
             if (seenHints.isNotEmpty()) sb.append("Chassis/powertrain IDs commonly seen on Toyotas: ${seenHints.joinToString()}\n")
             ids.take(maxIds).forEach { s ->
@@ -1508,11 +1516,31 @@ class BluetoothObdManager {
 
     // While true, the stream reader must not interpret raw monitor-mode frames as OBD responses.
     @Volatile private var canSniffActive = false
+    @Volatile private var isStnAdapter = false
 
     private class CanAcc {
         var count = 0
         val distinct = HashSet<String>()
         val samples = ArrayDeque<String>()
+    }
+
+    /**
+     * Programs STN hardware CAN pass filters (`STFAC` + `STFPA <id>, 7FF`) on vLinker / OBDLink
+     * adapters so `STM` streams only the target `opendbc` CAN IDs without overflowing the UART buffer.
+     */
+    private suspend fun configureStnFiltersForProfile(profile: OpendbcManager.VehicleDbcProfile): Boolean {
+        if (!isStnAdapter || profile.filterCanIds.isEmpty()) return false
+        val clearResp = sendAtCommand("STFAC", 40)
+        if (clearResp.contains("?")) return false
+        var addedCount = 0
+        for (hexId in profile.filterCanIds) {
+            val cleanId = hexId.trim().uppercase().padStart(3, '0')
+            if (cleanId.length == 3) {
+                val r = sendAtCommand("STFPA $cleanId, 7FF", 30)
+                if (!r.contains("?")) addedCount++
+            }
+        }
+        return addedCount > 0
     }
 
     private fun writeRaw(text: String) {
@@ -1546,22 +1574,23 @@ class BluetoothObdManager {
     }
 
     /**
-     * Cleanly exits ELM327/STN `ATMA` monitor mode while keeping [canSniffActive] true until
+     * Cleanly exits ELM327/STN `ATMA`/`STM` monitor mode while keeping [canSniffActive] true until
      * all in-flight buffered USB/Bluetooth CAN frames have drained and the `>` prompt arrives.
+     * NEVER sends `\r` because `\r` at an already-stopped `>` prompt repeats the last command (`ATMA`)!
      */
     private suspend fun stopAtmaAndFlushBuffer() {
         try {
             canSniffActive = true
-            synchronized(responseBufferLock) {
-                promptReceived = false
+            if (!promptReceived) {
+                // Send a space character (not '\r') to abort active ATMA/STM without triggering repeat-last-command
+                writeRaw(" ")
+                val deadline = System.currentTimeMillis() + 450L
+                while (System.currentTimeMillis() < deadline && !promptReceived) {
+                    delay(25)
+                }
             }
-            writeRaw("\r")
-            val deadline = System.currentTimeMillis() + 650L
-            while (System.currentTimeMillis() < deadline && !promptReceived) {
-                delay(35)
-            }
-            // Extra settle delay for USB FIFO tail bytes after '>'
-            delay(60)
+            // Settle delay for any trailing USB FIFO bytes
+            delay(40)
             clearResponseBuffer()
         } catch (e: Exception) {
             Log.w(TAG, "stopAtmaAndFlushBuffer issue: ${e.message}")
@@ -1591,6 +1620,7 @@ class BluetoothObdManager {
         var protocol = ""
         var report: CanSniffReport? = null
         var lastUiEmitMs = 0L
+        var usedStnFilter = false
 
         fun drain(forceEmit: Boolean = false) {
             val snapshot = drainResponseBuffer()
@@ -1636,7 +1666,7 @@ class BluetoothObdManager {
                         }
                     }
                     val now = System.currentTimeMillis()
-                    if (decodedAny && (forceEmit || now - lastUiEmitMs >= 150L)) {
+                    if (decodedAny && (forceEmit || now - lastUiEmitMs >= 120L)) {
                         lastUiEmitMs = now
                         _opendbcSignals.value = LinkedHashMap(decodedMap)
                     }
@@ -1647,53 +1677,98 @@ class BluetoothObdManager {
         }
 
         try {
-            if (wasPolling) delay(300)
-            sendAtCommand("AT", 80)
-            protocol = sendAtCommand("AT DP", 150).replace("\r", " ").replace("\n", " ").trim()
-            sendAtCommand("AT S1", 100)
-            sendAtCommand("AT H1", 100)
+            if (wasPolling) delay(250)
+            sendAtCommand("AT", 60)
+            protocol = sendAtCommand("AT DP", 120).replace("\r", " ").replace("\n", " ").trim()
+            sendAtCommand("AT S1", 80)
+            sendAtCommand("AT H1", 80)
 
+            // Phase 1 (first ~2.5s): Unfiltered ATMA burst discovery to catalog all CAN IDs on the bus
+            val discoveryDurationMs = minOf(2500L, totalDurationMs / 2)
+            val discoveryDeadline = System.currentTimeMillis() + discoveryDurationMs
             canSniffActive = true
             responseMutex.withLock {
-                val deadline = started + totalDurationMs
-                var emptyBursts = 0
                 clearResponseBuffer()
                 writeRaw("ATMA\r")
+                var lastProgressFrames = 0
+                var lastProgressTime = System.currentTimeMillis()
 
-                var lastCheckFrames = 0
-                var lastCheckTime = System.currentTimeMillis()
-
-                while (System.currentTimeMillis() < deadline && emptyBursts < 3) {
-                    delay(90)
+                while (System.currentTimeMillis() < discoveryDeadline) {
+                    delay(70)
                     drain(forceEmit = false)
 
+                    val now = System.currentTimeMillis()
                     if (promptReceived) {
-                        // Adapter exited ATMA (e.g. BUFFER FULL or STOPPED) — restart ATMA if time remains
                         drain(forceEmit = false)
-                        if (System.currentTimeMillis() + 250L < deadline) {
+                        if (now + 200L < discoveryDeadline) {
+                            delay(35)
                             clearResponseBuffer()
                             writeRaw("ATMA\r")
+                            lastProgressTime = System.currentTimeMillis()
                         } else {
                             break
                         }
-                    }
-
-                    val now = System.currentTimeMillis()
-                    if (now - lastCheckTime >= 2000L) {
-                        if (total == lastCheckFrames) {
-                            emptyBursts++
-                            if (emptyBursts < 3 && now + 300L < deadline) {
-                                clearResponseBuffer()
-                                writeRaw("ATMA\r")
-                            }
-                        } else {
-                            emptyBursts = 0
+                    } else if (now - lastProgressTime >= 450L) {
+                        if (total == lastProgressFrames && now + 250L < discoveryDeadline) {
+                            writeRaw(" ")
+                            delay(40)
+                            clearResponseBuffer()
+                            writeRaw("ATMA\r")
                         }
-                        lastCheckFrames = total
-                        lastCheckTime = now
+                        lastProgressFrames = total
+                        lastProgressTime = System.currentTimeMillis()
                     }
                 }
                 drain(forceEmit = true)
+            }
+
+            // Cleanly stop Phase 1 ATMA before configuring Phase 2 hardware filter
+            stopAtmaAndFlushBuffer()
+
+            // Phase 2 (remaining ~5.5s): Hardware-filtered STM (or ATMA fallback) for zero-overflow real-time dynamics
+            val remainingMs = (started + totalDurationMs) - System.currentTimeMillis()
+            if (remainingMs > 400L) {
+                val prof = activeProfile
+                if (isStnAdapter && prof != null) {
+                    usedStnFilter = configureStnFiltersForProfile(prof)
+                }
+                val monitorCmd = if (usedStnFilter) "STM\r" else "ATMA\r"
+                canSniffActive = true
+                responseMutex.withLock {
+                    val deadline = started + totalDurationMs
+                    clearResponseBuffer()
+                    writeRaw(monitorCmd)
+                    var lastProgressFrames = total
+                    var lastProgressTime = System.currentTimeMillis()
+
+                    while (System.currentTimeMillis() < deadline) {
+                        delay(70)
+                        drain(forceEmit = false)
+
+                        val now = System.currentTimeMillis()
+                        if (promptReceived) {
+                            drain(forceEmit = false)
+                            if (now + 200L < deadline) {
+                                delay(35)
+                                clearResponseBuffer()
+                                writeRaw(monitorCmd)
+                                lastProgressTime = System.currentTimeMillis()
+                            } else {
+                                break
+                            }
+                        } else if (now - lastProgressTime >= 500L) {
+                            if (total == lastProgressFrames && now + 250L < deadline) {
+                                writeRaw(" ")
+                                delay(40)
+                                clearResponseBuffer()
+                                writeRaw(monitorCmd)
+                            }
+                            lastProgressFrames = total
+                            lastProgressTime = System.currentTimeMillis()
+                        }
+                    }
+                    drain(forceEmit = true)
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -1703,7 +1778,10 @@ class BluetoothObdManager {
             withContext(kotlinx.coroutines.NonCancellable) {
                 try {
                     stopAtmaAndFlushBuffer()
-                    sendAtCommand("AT H0", 100)
+                    if (usedStnFilter) {
+                        sendAtCommand("STFAC", 50)
+                    }
+                    sendAtCommand("AT H0", 80)
                     sendAtCommand("AT SH 7DF", 80)
                 } catch (e: Exception) {
                     Log.w(TAG, "CAN sniff cleanup issue", e)
@@ -1731,11 +1809,12 @@ class BluetoothObdManager {
     }
 
     /**
-     * Performs a fast passive CAN broadcast sample (default 450ms) inside the polling loop
-     * when connected via a high-speed CAN adapter, automatically fingerprinting the bus
-     * and populating [_opendbcSignals] with live updates.
+     * Performs a fast passive CAN broadcast sample (default 350ms) inside the polling loop
+     * when connected via a high-speed CAN adapter, using STN hardware pass filters (`STM`) when
+     * available so target `opendbc` signals (steering angle, wheel speeds, brake, pedal) stream
+     * without overflowing the adapter buffer.
      */
-    private suspend fun sampleCanBroadcastInline(durationMs: Long = 450L) {
+    private suspend fun sampleCanBroadcastInline(durationMs: Long = 350L) {
         if (isDemoMode || _isSniffingCan.value || !_isHighSpeedCanCapable.value) return
         if (_connectionState.value !is ConnectionState.Connected) return
 
@@ -1746,6 +1825,7 @@ class BluetoothObdManager {
             ?: OpendbcManager.findProfileForVehicle(_vehicleVin.value ?: "", _vehicleDetails.value ?: "")
                 ?.also { _activeOpendbcProfile.value = it }
         var lastUiEmitMs = 0L
+        var usedStnFilter = false
 
         fun drainBurst(forceEmit: Boolean = false) {
             val snapshot = drainResponseBuffer()
@@ -1780,7 +1860,7 @@ class BluetoothObdManager {
                         }
                     }
                     val now = System.currentTimeMillis()
-                    if (decodedAny && (forceEmit || now - lastUiEmitMs >= 150L)) {
+                    if (decodedAny && (forceEmit || now - lastUiEmitMs >= 100L)) {
                         lastUiEmitMs = now
                         _opendbcSignals.value = LinkedHashMap(decodedMap)
                     }
@@ -1789,16 +1869,31 @@ class BluetoothObdManager {
         }
 
         try {
-            sendAtCommand("AT S1", 50)
-            sendAtCommand("AT H1", 50)
+            sendAtCommand("AT S1", 40)
+            sendAtCommand("AT H1", 40)
+            val prof = activeProfile
+            if (isStnAdapter && prof != null) {
+                usedStnFilter = configureStnFiltersForProfile(prof)
+            }
+            val monitorCmd = if (usedStnFilter) "STM\r" else "ATMA\r"
             canSniffActive = true
             responseMutex.withLock {
                 clearResponseBuffer()
-                writeRaw("ATMA\r")
+                writeRaw(monitorCmd)
                 val burstEnd = System.currentTimeMillis() + durationMs
-                while (System.currentTimeMillis() < burstEnd && !promptReceived) {
-                    delay(75)
+                while (System.currentTimeMillis() < burstEnd) {
+                    delay(60)
                     drainBurst(forceEmit = false)
+                    if (promptReceived) {
+                        drainBurst(forceEmit = false)
+                        if (System.currentTimeMillis() + 90L < burstEnd) {
+                            delay(25)
+                            clearResponseBuffer()
+                            writeRaw(monitorCmd)
+                        } else {
+                            break
+                        }
+                    }
                 }
                 drainBurst(forceEmit = true)
             }
@@ -1807,8 +1902,11 @@ class BluetoothObdManager {
         } finally {
             try {
                 stopAtmaAndFlushBuffer()
-                sendAtCommand("AT H0", 50)
-                sendAtCommand("AT SH 7DF", 50)
+                if (usedStnFilter) {
+                    sendAtCommand("STFAC", 40)
+                }
+                sendAtCommand("AT H0", 40)
+                sendAtCommand("AT SH 7DF", 40)
             } catch (_: Exception) {
                 canSniffActive = false
             }
@@ -2023,6 +2121,7 @@ class BluetoothObdManager {
             var secondaryIdx = 0
             var cycleCount = 0
             var initialCanSampleDone = false
+            var consecutiveEmptyResponses = 0
 
             while (isActive) {
                 try {
@@ -2030,26 +2129,42 @@ class BluetoothObdManager {
                         // 1. Fast-Path: Query High-Priority Speed & RPM
                         for (pPid in priorityPids) {
                             if (isPollingPaused || !isActive) break
-                            sendAtCommand(pPid.fullCommand, 10)
+                            val rx = sendAtCommand(pPid.fullCommand, 10)
+                            if (rx.isBlank()) {
+                                consecutiveEmptyResponses++
+                            } else {
+                                consecutiveEmptyResponses = 0
+                            }
                         }
 
                         // 2. Interleaved Round-Robin: Query 1 or 2 secondary slower-changing PIDs
-                        if (secondaryPids.isNotEmpty()) {
+                        if (secondaryPids.isNotEmpty() && consecutiveEmptyResponses < 6) {
                             val countToPoll = minOf(2, secondaryPids.size)
                             for (i in 0 until countToPoll) {
                                 if (isPollingPaused || !isActive) break
                                 val secPid = secondaryPids[secondaryIdx % secondaryPids.size]
                                 secondaryIdx = (secondaryIdx + 1) % secondaryPids.size
-                                sendAtCommand(secPid.fullCommand, 10)
+                                val rx = sendAtCommand(secPid.fullCommand, 10)
+                                if (rx.isBlank()) {
+                                    consecutiveEmptyResponses++
+                                } else {
+                                    consecutiveEmptyResponses = 0
+                                }
                             }
                         }
 
+                        if (consecutiveEmptyResponses >= 8) {
+                            Log.w(TAG, "Adapter stopped responding (8 consecutive empty timeouts) — disconnecting cleanly.")
+                            disconnect()
+                            break
+                        }
+
                         // 3. High-Speed CAN Broadcast Sample: populate Advanced Vehicle Dynamics
-                        // automatically via CAN fingerprint + VIN/Make, and refresh frequently.
+                        // automatically via STN hardware filter (or ATMA) every 3 cycles (~1.2s).
                         cycleCount++
-                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % 6 == 0)) {
+                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % 3 == 0)) {
                             initialCanSampleDone = true
-                            sampleCanBroadcastInline(450L)
+                            sampleCanBroadcastInline(350L)
                         }
                     }
                     delay(30)
@@ -2761,6 +2876,7 @@ class BluetoothObdManager {
             _opendbcSignals.value = emptyMap()
             _activeOpendbcProfile.value = null
             _isHighSpeedCanCapable.value = false
+            isStnAdapter = false
             _adapterHardwareName.value = "Generic ELM327"
             _isStreamingLiveData.value = false
             _connectionState.value = ConnectionState.Disconnected

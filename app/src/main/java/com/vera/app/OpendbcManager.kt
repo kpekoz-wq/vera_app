@@ -336,8 +336,7 @@ object OpendbcManager {
                 0x25 to CanMessageDef(
                     "025", 0x25, "STEER_ANGLE_SENSOR",
                     listOf(
-                        CanSignalDef("Steering Angle", dbcBe(3), 12, Endianness.BIG_ENDIAN, 1.5, 0.0, -500.0, 500.0, "deg", signed = true),
-                        CanSignalDef("Steering Rate", dbcBe(35), 12, Endianness.BIG_ENDIAN, 1.0, 0.0, -2000.0, 2000.0, "deg/s", signed = true)
+                        CanSignalDef("Steering Angle", dbcBe(3), 12, Endianness.BIG_ENDIAN, 1.5, 0.0, -500.0, 500.0, "deg", signed = true)
                     )
                 ),
                 0x24 to CanMessageDef(

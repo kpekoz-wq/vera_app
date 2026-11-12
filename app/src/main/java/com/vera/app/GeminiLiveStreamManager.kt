@@ -143,6 +143,7 @@ class GeminiLiveStreamManager(private val context: Context) {
     private var lastApiKey: String = ""
     private var lastSystemInstruction: String = ""
     private var lastTelemetrySummary: String = ""
+    private var lastTelemetryProvider: (() -> String)? = null
     private var lastConversationHistory: String = ""
     private var lastOnMessageReceived: ((String) -> Unit)? = null
     private var lastOnUserTranscriptReceived: ((String) -> Unit)? = null
@@ -181,6 +182,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         systemInstruction: String,
         telemetrySummary: String,
         conversationHistory: String = "",
+        telemetryProvider: (() -> String)? = null,
         onMessageReceived: (String) -> Unit,
         onUserTranscriptReceived: ((String) -> Unit)? = null,
         onTurnComplete: (() -> Unit)? = null,
@@ -205,6 +207,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         lastApiKey = apiKey
         lastSystemInstruction = systemInstruction
         lastTelemetrySummary = telemetrySummary
+        lastTelemetryProvider = telemetryProvider
         lastConversationHistory = conversationHistory
         lastOnMessageReceived = onMessageReceived
         lastOnUserTranscriptReceived = onUserTranscriptReceived
@@ -250,8 +253,10 @@ class GeminiLiveStreamManager(private val context: Context) {
                 }
                 Log.i(TAG, "Gemini Live WebSocket opened successfully (isReconnect=$isReconnect, resuming=${resumeHandle != null}).")
 
-                // 1. Send Setup Frame FIRST with Voice, Tools, & Vehicle System Instructions
-                sendSetupFrame(ws, lastSystemInstruction, lastTelemetrySummary, lastConversationHistory, _voiceName.value, resumeHandle)
+                // 1. Send Setup Frame FIRST with Voice, Tools, & Fresh Vehicle System Instructions
+                val freshTelemetry = try { lastTelemetryProvider?.invoke() } catch (_: Exception) { null } ?: lastTelemetrySummary
+                lastTelemetrySummary = freshTelemetry
+                sendSetupFrame(ws, lastSystemInstruction, freshTelemetry, lastConversationHistory, _voiceName.value, resumeHandle)
 
                 // 2. Start Microphone PCM Audio Streaming AFTER setup frame is sent
                 startMicrophoneStreaming(ws)
@@ -1170,6 +1175,41 @@ class GeminiLiveStreamManager(private val context: Context) {
             webSocket?.cancel()
         } catch (_: Exception) {}
         webSocket = null
+    }
+
+    /**
+     * Silently updates the live WebSocket session's vehicle connection & telemetry context
+     * (`turnComplete = false`) whenever the OBD2 adapter connects or live telemetry starts streaming
+     * after the voice session was already opened.
+     */
+    fun injectTelemetryContextUpdate(telemetryText: String): Boolean {
+        lastTelemetrySummary = telemetryText
+        val ws = webSocket ?: return false
+        if (!_isLiveSessionActive.value || !setupCompleted) return false
+        return try {
+            val contextPrompt = "[SYSTEM LIVE TELEMETRY UPDATE — DO NOT SPEAK UNLESS SPOKEN TO]\nThe vehicle OBD2 connection and live telemetry state just updated:\n$telemetryText\nRemember: You ARE now connected to the vehicle and receiving live data. Use `get_live_data` and `get_vehicle_info` whenever the driver asks about their car."
+            val updateObj = JSONObject().apply {
+                put("clientContent", JSONObject().apply {
+                    put("turns", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("text", contextPrompt)
+                                })
+                            })
+                        })
+                    })
+                    put("turnComplete", false)
+                })
+            }
+            val sent = ws.send(updateObj.toString())
+            Log.i(TAG, "Injected silent telemetry context update into Gemini Live WebSocket (sent=$sent)")
+            sent
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to inject telemetry context update", e)
+            false
+        }
     }
 
     fun injectDriverAlert(alertText: String, isAdvisory: Boolean = false): Boolean {
