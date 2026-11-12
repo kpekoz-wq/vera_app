@@ -82,12 +82,21 @@ class VeraSentinelManager(
     private var connectionStartTime: Long = 0L
     private var lastEvaluatedTime: Long = 0L
 
+    // Charging-system debounce state: a single bad/zero sample, a cranking sag or a startup
+    // transient must never be reported as a failed alternator.
+    private var engineRunningSinceMs: Long = 0L
+    private var lowVoltageSinceMs: Long = 0L
+    private var highVoltageSinceMs: Long = 0L
+
     fun resetSession() {
         cancelAllWatchers()
         alertCooldowns.clear()
         announcedConfirmedDtcs.clear()
         announcedPendingDtcs.clear()
         connectionStartTime = 0L
+        engineRunningSinceMs = 0L
+        lowVoltageSinceMs = 0L
+        highVoltageSinceMs = 0L
         _alerts.value = emptyList()
         Log.i(TAG, "Sentinel session reset.")
     }
@@ -370,11 +379,13 @@ class VeraSentinelManager(
                 Triple("Vehicle Speed", "Vehicle Speed: $speed", phrase) to chosenIdx
             }
             paramKey.contains("trans") -> {
-                val trans = snapshot["trans_temp"] ?: "180°F"
+                val trans = snapshot["trans_temp"] ?: ""
                 val transVal = trans.replace("°F", "").replace("°C", "").trim().toDoubleOrNull() ?: 180.0
                 val isF = !trans.contains("°C")
                 val isElevated = (isF && transVal > 200.0) || (!isF && transVal > 93.0)
-                val pool = if (isElevated) {
+                val pool = if (trans.isBlank()) {
+                    listOf("I'm not getting a transmission temperature reading from this car, so I can't report it.")
+                } else if (isElevated) {
                     listOf(
                         "Transmission is running a bit warm at $trans.",
                         "Trans fluid temp is slightly elevated at $trans.",
@@ -405,9 +416,11 @@ class VeraSentinelManager(
                 Triple("Transmission Temp", "Transmission Temp: $trans", phrase) to chosenIdx
             }
             paramKey.contains("volt") -> {
-                val volt = snapshot["voltage"] ?: "14.1V"
+                val volt = snapshot["voltage"] ?: ""
                 val voltVal = volt.replace("V", "").trim().toDoubleOrNull() ?: 14.1
-                val pool = if (voltVal < 13.2) {
+                val pool = if (volt.isBlank()) {
+                    listOf("I'm not getting a battery voltage reading from the car right now.")
+                } else if (voltVal < 13.2) {
                     listOf(
                         "Voltage is sitting a bit low at $volt.",
                         "Battery is reading $volt, charging output looks low.",
@@ -575,9 +588,15 @@ class VeraSentinelManager(
         val coolantC = metrics.coolantTemp
         val fuelTrim = metrics.fuelTrim
 
-        val voltageStream = streams.find { it.pid.pidHex == "42" }?.rawValue
-            ?: streams.find { it.pid.name.contains("Voltage", ignoreCase = true) }?.rawValue
-            ?: 14.1
+        // Only trust a voltage that has really arrived from the ECU recently and is physically plausible.
+        // (Streams are created with rawValue = 0.0 before the first sample, which used to look like "0 V".)
+        val voltageStreamData = streams.find { it.pid.pidHex == "42" }
+            ?: streams.find { it.pid.name.contains("Voltage", ignoreCase = true) }
+        val voltageSampleOk = voltageStreamData != null &&
+            (voltageStreamData.history.isNotEmpty() || voltageStreamData.formattedValue != "--") &&
+            now - voltageStreamData.lastUpdated < 15_000L
+        val voltage: Double? = voltageStreamData?.rawValue?.takeIf { voltageSampleOk && it in 6.0..20.0 }
+        val voltageStream: Double = voltage ?: Double.NaN // NaN never satisfies a threshold comparison
 
         val intakeAirStream = streams.find { it.pid.pidHex == "0F" }?.rawValue ?: metrics.intakeAirTemp.toDouble()
         val intakeF = (intakeAirStream * 1.8 + 32).toInt()
@@ -645,8 +664,21 @@ class VeraSentinelManager(
             }
         }
 
-        // ── RULE 4: ALTERNATOR OVERCHARGING (CRITICAL: > 15.2V) ──
-        if (voltageStream > 15.2 && rpm > 400) {
+        // Track steady engine running so cranking / startup transients are ignored.
+        if (rpm > 550) {
+            if (engineRunningSinceMs == 0L) engineRunningSinceMs = now
+        } else if (rpm < 300) {
+            engineRunningSinceMs = 0L
+        }
+        val engineSettled = engineRunningSinceMs != 0L && now - engineRunningSinceMs >= 30_000L
+
+        // ── RULE 4: ALTERNATOR OVERCHARGING (CRITICAL: > 15.2V sustained 10s) ──
+        if (voltage != null && voltage > 15.2 && engineSettled) {
+            if (highVoltageSinceMs == 0L) highVoltageSinceMs = now
+        } else {
+            highVoltageSinceMs = 0L
+        }
+        if (highVoltageSinceMs != 0L && now - highVoltageSinceMs >= 10_000L) {
             if (canFireAlert("voltage_overcharge", 45_000L)) {
                 val voltFmt = String.format(java.util.Locale.US, "%.1fV", voltageStream)
                 postAlert(
@@ -662,8 +694,14 @@ class VeraSentinelManager(
             }
         }
 
-        // ── RULE 5: ALTERNATOR OFFLINE / DEAD BATTERY (CRITICAL: < 12.3V WITH ENGINE RUNNING) ──
-        if (voltageStream < 12.3 && rpm > 550) {
+        // ── RULE 5: ALTERNATOR OFFLINE / DEAD BATTERY (CRITICAL: < 12.3V sustained 20s, engine steadily running) ──
+        // A dropped/zero sample (voltage == null), cranking sag or the first 30s after start never counts.
+        if (voltage != null && voltage < 12.3 && engineSettled) {
+            if (lowVoltageSinceMs == 0L) lowVoltageSinceMs = now
+        } else {
+            lowVoltageSinceMs = 0L
+        }
+        if (lowVoltageSinceMs != 0L && now - lowVoltageSinceMs >= 20_000L) {
             if (canFireAlert("alternator_offline", 60_000L)) {
                 val voltFmt = String.format(java.util.Locale.US, "%.1fV", voltageStream)
                 postAlert(

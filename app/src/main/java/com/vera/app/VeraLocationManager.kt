@@ -291,22 +291,19 @@ class VeraLocationManager(
 
         val rawGpsSpeedMps = if (location.hasSpeed()) location.speed else 0f
         val gpsSpeedMph = (rawGpsSpeedMps * 2.23694).toDouble()
-        val speedMph = if (obdConnected) obdSpeedMph else gpsSpeedMph
-        val speedKmh = if (obdConnected) obdSpeedKmh.toDouble() else (rawGpsSpeedMps * 3.6).toDouble()
 
-        // Multi-Tier Motion Determination:
-        // Tier 1: Car's official OBD2 Speedometer (PID 010D).
-        //         Available on every OBD2 vehicle since 1996 and readable by any cheap $5 BT dongle.
-        //         - speedometer >= 2 km/h (~1.2 mph) -> definitively MOVING.
-        //         - speedometer == 0 km/h -> definitively STATIONARY / PARKED.
-        // Tier 2: Phone GPS Speedometer fallback (when OBD2 is disconnected or not yet connected):
-        //         - GPS speed >= 2.5 mph -> MOVING.
-        //         - GPS speed < 2.0 mph -> STATIONARY / PARKED.
-        val isMoving = if (obdConnected) {
-            obdSpeedKmh >= 2
-        } else {
-            gpsSpeedMph >= 2.5
-        }
+        // Fused Speedometer:
+        // Prefer OBD2 wheel/transmission speed if available and positive.
+        // Fallback instantly to Phone GPS speedometer if OBD speed is zero or still initializing.
+        val speedMph = if (obdConnected && obdSpeedKmh > 0) obdSpeedMph else gpsSpeedMph
+        val speedKmh = if (obdConnected && obdSpeedKmh > 0) obdSpeedKmh.toDouble() else (rawGpsSpeedMps * 3.6).toDouble()
+
+        // Fused Motion Determination:
+        // Vehicle is MOVING if either:
+        // 1. OBD speedometer reports >= 2 km/h (~1.2 mph), OR
+        // 2. Phone GPS speedometer reports >= 2.5 mph.
+        // Never let an unpolled or lagging OBD reading hold the motion state at 0 mph while the car is moving.
+        val isMoving = (obdConnected && obdSpeedKmh >= 2) || (gpsSpeedMph >= 2.5)
 
         val altMeters = if (location.hasAltitude()) location.altitude else 0.0
         val altFeet = altMeters * 3.28084

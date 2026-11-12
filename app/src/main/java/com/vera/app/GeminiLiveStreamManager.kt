@@ -16,6 +16,9 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,13 +49,12 @@ class GeminiLiveStreamManager(private val context: Context) {
         private const val SAMPLE_RATE_IN = 16000
         private const val SAMPLE_RATE_OUT = 24000
         private const val LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest"
+        /** If Gemini is flagged "speaking" but nothing has happened for this long, release the mic so she can't go deaf. */
+        private const val MODEL_ACTIVITY_WATCHDOG_MS = 30_000L
+        /** Give up (and tell the user) after this many failed reconnect attempts (~2 minutes). */
+        private const val MAX_RECONNECT_ATTEMPTS = 15
         val SUPPORTED_LIVE_VOICES = setOf(
-            "Aoede", "Charon", "Fenrir", "Kore", "Puck",
-            "Zephyr", "Leda", "Orus", "Callirrhoe", "Autonoe",
-            "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina",
-            "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
-            "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
-            "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+            "Aoede", "Kore", "Zephyr", "Fenrir", "Puck", "Charon"
         )
     }
 
@@ -154,6 +156,25 @@ class GeminiLiveStreamManager(private val context: Context) {
     private var isReconnecting = false
     private var reconnectAttempts = 0
 
+    /** Incremented every time a socket is created or torn down. Callbacks from older sockets are ignored. */
+    private val socketGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    /** Gemini session-resumption handle: lets a reconnect continue the SAME conversation server-side. */
+    @Volatile
+    private var resumeHandle: String? = null
+    /** True for a socket that is a reconnect (suppresses the "I'm back" greeting + mic gating). */
+    @Volatile
+    private var pendingReconnectSetup = false
+    /** True once the server has acknowledged our setup frame on the current socket. */
+    @Volatile
+    private var setupCompleted = false
+    /** Falls back to a plain setup frame if the server rejects resumption / compression fields. */
+    @Volatile
+    private var useSessionFeatures = true
+    @Volatile
+    private var lastModelActivityMs = 0L
+    private val toolSupervisor = SupervisorJob()
+    private var goAwayJob: Job? = null
+
     @SuppressLint("MissingPermission")
     fun startLiveSession(
         apiKey: String,
@@ -177,6 +198,9 @@ class GeminiLiveStreamManager(private val context: Context) {
         isExplicitlyStopped = false
         isReconnecting = false
         reconnectAttempts = 0
+        resumeHandle = null
+        pendingReconnectSetup = false
+        setupCompleted = false
 
         lastApiKey = apiKey
         lastSystemInstruction = systemInstruction
@@ -200,6 +224,7 @@ class GeminiLiveStreamManager(private val context: Context) {
 
         _isLiveSessionActive.value = true
         _isGeminiSpeaking.value = true // Initial state: suppress mic while connecting and greeting
+        lastModelActivityMs = System.currentTimeMillis()
 
         registerNetworkCallbackIfNeeded()
         initAudioPlayer()
@@ -211,15 +236,22 @@ class GeminiLiveStreamManager(private val context: Context) {
 
         val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$lastApiKey"
         val request = Request.Builder().url(wsUrl).build()
+        val myGen = socketGeneration.incrementAndGet()
+        pendingReconnectSetup = isReconnect
+        setupCompleted = false
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            private fun isStale() = myGen != socketGeneration.get()
+
             override fun onOpen(ws: WebSocket, response: Response) {
-                Log.i(TAG, "Gemini Live WebSocket opened successfully (isReconnect=$isReconnect).")
-                reconnectAttempts = 0
-                isReconnecting = false
+                if (isStale()) {
+                    ws.cancel()
+                    return
+                }
+                Log.i(TAG, "Gemini Live WebSocket opened successfully (isReconnect=$isReconnect, resuming=${resumeHandle != null}).")
 
                 // 1. Send Setup Frame FIRST with Voice, Tools, & Vehicle System Instructions
-                sendSetupFrame(ws, lastSystemInstruction, lastTelemetrySummary, lastConversationHistory, _voiceName.value)
+                sendSetupFrame(ws, lastSystemInstruction, lastTelemetrySummary, lastConversationHistory, _voiceName.value, resumeHandle)
 
                 // 2. Start Microphone PCM Audio Streaming AFTER setup frame is sent
                 startMicrophoneStreaming(ws)
@@ -231,63 +263,71 @@ class GeminiLiveStreamManager(private val context: Context) {
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                if (isStale()) return
                 handleServerMessage(ws, text, lastOnMessageReceived ?: {}, lastOnUserTranscriptReceived, lastOnTurnComplete, lastOnToolCall)
             }
 
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
+                if (isStale()) return
                 handleServerMessage(ws, bytes.utf8(), lastOnMessageReceived ?: {}, lastOnUserTranscriptReceived, lastOnTurnComplete, lastOnToolCall)
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                val err = "Gemini Live WebSocket Error: ${t.message}"
-                Log.i(TAG, err)
+                val httpCode = response?.code
+                Log.w(TAG, "Gemini Live WebSocket failure: ${t.message} (http=$httpCode, stale=${isStale()})")
 
-                // If user explicitly stopped, or if it's a normal shutdown/socket closure, suppress completely
-                if (isExplicitlyStopped) {
-                    return
-                }
-                val msg = t.message ?: ""
-                if (msg.contains("Socket closed", ignoreCase = true) ||
-                    msg.contains("Canceled", ignoreCase = true) ||
-                    t is java.io.InterruptedIOException ||
-                    (t is java.net.SocketException && msg.contains("closed", ignoreCase = true))) {
+                // Ignore failures from sockets we already replaced, or after an intentional stop
+                if (isStale() || isExplicitlyStopped || !_isLiveSessionActive.value) return
+
+                // Bad API key / bad request: retrying can never succeed, so tell the user instead of looping
+                if (httpCode != null && httpCode in 400..499 && httpCode != 429) {
+                    failSession("Gemini Live rejected the connection (HTTP $httpCode). Check the API key.")
                     return
                 }
 
-                if (_isLiveSessionActive.value) {
-                    attemptReconnect("Connection failure: ${t.message}")
-                } else {
-                    lastOnError?.invoke(t.message ?: "Connection failure")
-                    stopLiveSession()
-                }
+                // EVERY other failure (including "Socket closed" / timeouts) means the session is dead -> reconnect
+                onSocketLost("Connection failure: ${t.message}", null)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Gemini Live WebSocket closing: $reason ($code)")
-                if (isExplicitlyStopped || code == 1000) {
-                    stopLiveSession()
-                    return
-                }
-                if (_isLiveSessionActive.value) {
-                    attemptReconnect("Server closing ($code: $reason)")
-                } else {
-                    stopLiveSession()
-                }
+                Log.i(TAG, "Gemini Live WebSocket closing: $reason ($code, stale=${isStale()})")
+                if (isStale() || isExplicitlyStopped || !_isLiveSessionActive.value) return
+                // A server-initiated close (even code 1000 when its time limit is reached) must NOT end the
+                // hands-free session: reconnect and resume instead.
+                onSocketLost("Server closing ($code: $reason)", code)
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Gemini Live WebSocket closed ($code).")
-                if (isExplicitlyStopped || code == 1000) {
-                    _isLiveSessionActive.value = false
-                    return
-                }
-                if (_isLiveSessionActive.value) {
-                    attemptReconnect("Socket closed ($code)")
-                } else {
-                    _isLiveSessionActive.value = false
-                }
+                Log.i(TAG, "Gemini Live WebSocket closed ($code, stale=${isStale()}).")
+                if (isStale() || isExplicitlyStopped || !_isLiveSessionActive.value) return
+                onSocketLost("Socket closed ($code)", code)
             }
         })
+    }
+
+    /**
+     * Called when the current socket died unexpectedly. Falls back to a plain setup frame if the server
+     * rejected our resumption/compression fields before setup completed, then schedules a reconnect.
+     */
+    private fun onSocketLost(reason: String, closeCode: Int?) {
+        if (!setupCompleted && (closeCode == 1007 || closeCode == 1008)) {
+            if (useSessionFeatures) {
+                Log.w(TAG, "Server rejected setup ($closeCode). Retrying without session-resumption / compression.")
+                useSessionFeatures = false
+                resumeHandle = null
+            } else {
+                failSession("Gemini Live rejected the session setup ($closeCode).")
+                return
+            }
+        }
+        attemptReconnect(reason)
+    }
+
+    /** Stops the session and reports the error to the UI (stopLiveSession clears the callback first). */
+    private fun failSession(message: String) {
+        val callback = lastOnError
+        stopLiveSession()
+        callback?.invoke(message)
     }
 
     private fun sendSetupFrame(
@@ -295,9 +335,11 @@ class GeminiLiveStreamManager(private val context: Context) {
         systemInstruction: String,
         telemetrySummary: String,
         conversationHistory: String,
-        selectedVoice: String
+        selectedVoice: String,
+        resumeHandle: String? = null
     ) {
-        val historySection = if (conversationHistory.isNotBlank()) {
+        // When resuming, the server already holds the conversation, so do not paste history a second time
+        val historySection = if (conversationHistory.isNotBlank() && resumeHandle.isNullOrBlank()) {
             """
             
             PRIOR CONVERSATION HISTORY IN THIS SESSION (MAINTAIN CONTINUITY):
@@ -447,6 +489,16 @@ class GeminiLiveStreamManager(private val context: Context) {
                             })
                         })
                     })
+                    put(JSONObject().apply {
+                        put("name", "save_flight_recorder_snapshot")
+                        put("description", "Saves a rolling 5-minute flight data black-box snapshot of all vehicle sensor readings around this moment (RPM, speed, temps, fuel trims, transmission gear, topography). Invoke whenever driver asks to save, snapshot, record, or log data for this moment or an incident/spike.")
+                        put("parameters", JSONObject().apply {
+                            put("type", "OBJECT")
+                            put("properties", JSONObject().apply {
+                                put("reason", stringParam("Optional reason or description of the snapshot, e.g. 'Driver heard noise', 'RPM spike', 'Transmission slip'"))
+                            })
+                        })
+                    })
                 })
             })
         }
@@ -477,6 +529,16 @@ class GeminiLiveStreamManager(private val context: Context) {
                 })
                 put("inputAudioTranscription", JSONObject())
                 put("outputAudioTranscription", JSONObject())
+                if (useSessionFeatures) {
+                    // Lets a dropped connection continue the SAME conversation instead of starting over
+                    put("sessionResumption", JSONObject().apply {
+                        if (!resumeHandle.isNullOrBlank()) put("handle", resumeHandle)
+                    })
+                    // Removes the ~15 minute audio-session cap
+                    put("contextWindowCompression", JSONObject().apply {
+                        put("slidingWindow", JSONObject())
+                    })
+                }
             })
         }
 
@@ -486,6 +548,7 @@ class GeminiLiveStreamManager(private val context: Context) {
 
     private fun sendInitialGreetingTrigger(ws: WebSocket) {
         _isGeminiSpeaking.value = true
+        lastModelActivityMs = System.currentTimeMillis()
         val greetingPrompt = if (currentHasPriorHistory) {
             "The driver just reactivated hands-free voice mode during an ongoing conversation. Warmly acknowledge that you're back with them in one short, natural sentence (e.g. 'I'm back with you. Where were we?'), referencing the last topic if appropriate."
         } else {
@@ -579,11 +642,23 @@ class GeminiLiveStreamManager(private val context: Context) {
 
                 val readBytes = record.read(readBuffer, 0, readBuffer.size)
                 if (readBytes > 0) {
+                    // Never stream audio before the server has acknowledged our setup frame
+                    if (!setupCompleted) {
+                        accumStream.reset()
+                        continue
+                    }
+
                     // Suppress microphone transmission while Gemini is speaking to eliminate acoustic feedback and self-interruption
                     if (_isGeminiSpeaking.value) {
-                        accumStream.reset()
-                        _isUserSpeaking.value = false
-                        continue
+                        // Watchdog: if the "speaking" flag got stuck (missed turnComplete / cancelled tool call), release the mic
+                        if (System.currentTimeMillis() - lastModelActivityMs > MODEL_ACTIVITY_WATCHDOG_MS) {
+                            Log.w(TAG, "Speaking flag stuck with no model activity for ${MODEL_ACTIVITY_WATCHDOG_MS / 1000}s. Releasing microphone.")
+                            _isGeminiSpeaking.value = false
+                        } else {
+                            accumStream.reset()
+                            _isUserSpeaking.value = false
+                            continue
+                        }
                     }
 
                     // Calculate local audio energy (RMS) to immediately detect user speaking and hold timer open
@@ -615,11 +690,10 @@ class GeminiLiveStreamManager(private val context: Context) {
 
                         val audioChunkObj = JSONObject().apply {
                             put("realtimeInput", JSONObject().apply {
-                                put("mediaChunks", JSONArray().apply {
-                                    put(JSONObject().apply {
-                                        put("mimeType", "audio/pcm;rate=16000")
-                                        put("data", base64Pcm)
-                                    })
+                                // `audio` replaces the deprecated `mediaChunks` field
+                                put("audio", JSONObject().apply {
+                                    put("mimeType", "audio/pcm;rate=16000")
+                                    put("data", base64Pcm)
                                 })
                             })
                         }
@@ -677,6 +751,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                 val track = audioTrack ?: continue
 
                 val written = track.write(pcmBytes, 0, pcmBytes.size)
+                lastModelActivityMs = System.currentTimeMillis()
                 if (written > 0) {
                     totalFramesWritten += (written / 2) // 16-bit mono = 2 bytes per frame
                 }
@@ -756,15 +831,46 @@ class GeminiLiveStreamManager(private val context: Context) {
 
             // 0. Check for setup confirmation
             if (root.has("setupComplete") || root.has("setup_complete")) {
-                Log.i(TAG, "Gemini Live setup confirmed by server (isReconnecting=$isReconnecting).")
-                if (!isReconnecting) {
+                val wasReconnect = pendingReconnectSetup
+                Log.i(TAG, "Gemini Live setup confirmed by server (reconnect=$wasReconnect, resuming=${resumeHandle != null}).")
+                setupCompleted = true
+                pendingReconnectSetup = false
+                isReconnecting = false
+                reconnectAttempts = 0
+                lastModelActivityMs = System.currentTimeMillis()
+                if (!wasReconnect) {
                     sendInitialGreetingTrigger(ws)
                 } else {
+                    // Silent reconnect: no "I'm back" greeting, just go back to listening
                     _isGeminiSpeaking.value = false
-                    isReconnecting = false
-                    Log.i(TAG, "Silently reconnected to Gemini Live while driving. Resuming listening for driver.")
+                    Log.i(TAG, "Silently reconnected to Gemini Live. Resuming listening for driver.")
                 }
                 return
+            }
+
+            // 0b. Session resumption handle updates (lets us continue the same conversation after a drop)
+            val resumptionUpdate = root.optJSONObject("sessionResumptionUpdate") ?: root.optJSONObject("session_resumption_update")
+            if (resumptionUpdate != null) {
+                val newHandle = resumptionUpdate.optString("newHandle", resumptionUpdate.optString("new_handle", ""))
+                if (resumptionUpdate.optBoolean("resumable", true) && newHandle.isNotBlank()) {
+                    resumeHandle = newHandle
+                }
+            }
+
+            // 0c. Server is about to close the connection: reconnect proactively between turns
+            val goAway = root.optJSONObject("goAway") ?: root.optJSONObject("go_away")
+            if (goAway != null) {
+                val timeLeftSec = goAway.optString("timeLeft", goAway.optString("time_left", ""))
+                    .removeSuffix("s").toDoubleOrNull() ?: 10.0
+                Log.w(TAG, "Gemini Live goAway received (timeLeft=${timeLeftSec}s). Scheduling seamless reconnect.")
+                scheduleGoAwayReconnect(timeLeftSec)
+            }
+
+            // 0d. A pending tool call was cancelled (e.g. driver interrupted): drop it and release the mic
+            if (root.has("toolCallCancellation") || root.has("tool_call_cancellation")) {
+                Log.i(TAG, "Gemini Live cancelled pending tool call(s).")
+                toolSupervisor.cancelChildren()
+                _isGeminiSpeaking.value = false
             }
 
             // 1. Check for serverContent (model speech audio, user & model transcripts, interruptions)
@@ -810,7 +916,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                     turnCompletionJob?.cancel()
                     turnCompletionJob = null
                     _isGeminiSpeaking.value = true
-                    _isGeminiSpeaking.value = true
+                    lastModelActivityMs = System.currentTimeMillis()
 
                     val parts = modelTurn.optJSONArray("parts")
                     if (parts != null) {
@@ -859,6 +965,15 @@ class GeminiLiveStreamManager(private val context: Context) {
 
                 val functionCalls = toolCall.optJSONArray("functionCalls") ?: toolCall.optJSONArray("function_calls")
                 if (functionCalls != null && functionCalls.length() > 0) {
+                  // Run tools OFF the socket reader thread so slow OBD scans can't block pongs and drop the connection
+                  scope.launch(toolSupervisor) {
+                    val heartbeat = launch {
+                        while (isActive) {
+                            lastModelActivityMs = System.currentTimeMillis()
+                            delay(5000)
+                        }
+                    }
+                    try {
                     val responsesArray = JSONArray()
                     for (i in 0 until functionCalls.length()) {
                         val fc = functionCalls.optJSONObject(i) ?: continue
@@ -867,7 +982,7 @@ class GeminiLiveStreamManager(private val context: Context) {
                         val args = fc.optJSONObject("args") ?: JSONObject()
 
                         Log.i(TAG, "Gemini Live requested tool execution: $name ($callId)")
-                        val toolResult = onToolCall(name, callId, args)
+                        val toolResult = safeToolCall(onToolCall, name, callId, args)
 
                         responsesArray.put(JSONObject().apply {
                             put("name", name)
@@ -883,8 +998,15 @@ class GeminiLiveStreamManager(private val context: Context) {
                             put("functionResponses", responsesArray)
                         })
                     }
-                    ws.send(responseMsg.toString())
-                    Log.i(TAG, "Sent toolResponse for ${responsesArray.length()} tool(s).")
+                    if (isActive) {
+                        ws.send(responseMsg.toString())
+                        Log.i(TAG, "Sent toolResponse for ${responsesArray.length()} tool(s).")
+                    }
+                    } finally {
+                        heartbeat.cancel()
+                        lastModelActivityMs = System.currentTimeMillis()
+                    }
+                  }
                 }
             }
         } catch (e: Exception) {
@@ -902,7 +1024,8 @@ class GeminiLiveStreamManager(private val context: Context) {
         val args = funcCall.optJSONObject("args") ?: JSONObject()
 
         Log.i(TAG, "Gemini Live requested embedded tool execution: $name ($callId)")
-        val toolResult = onToolCall(name, callId, args)
+        scope.launch(toolSupervisor) {
+        val toolResult = safeToolCall(onToolCall, name, callId, args)
 
         val responseObj = JSONObject().apply {
             put("toolResponse", JSONObject().apply {
@@ -917,7 +1040,40 @@ class GeminiLiveStreamManager(private val context: Context) {
                 })
             })
         }
-        ws.send(responseObj.toString())
+        if (isActive) ws.send(responseObj.toString())
+        }
+    }
+
+    /** Runs a tool and converts any exception into an error payload so Gemini is never left waiting forever. */
+    private fun safeToolCall(
+        onToolCall: (String, String, JSONObject) -> JSONObject,
+        name: String,
+        callId: String,
+        args: JSONObject
+    ): JSONObject {
+        return try {
+            onToolCall(name, callId, args)
+        } catch (e: Exception) {
+            Log.w(TAG, "Tool '$name' failed", e)
+            JSONObject().apply { put("error", "Tool '$name' failed: ${e.message}") }
+        }
+    }
+
+    /**
+     * On a server goAway, wait for a gap in the conversation (or until the deadline) and then reconnect
+     * immediately using the resumption handle, so the driver never notices.
+     */
+    private fun scheduleGoAwayReconnect(timeLeftSec: Double) {
+        goAwayJob?.cancel()
+        goAwayJob = scope.launch {
+            val deadline = System.currentTimeMillis() + ((timeLeftSec - 3.0).coerceAtLeast(0.5) * 1000).toLong()
+            while (System.currentTimeMillis() < deadline && _isGeminiSpeaking.value) {
+                delay(200)
+            }
+            if (!isExplicitlyStopped && _isLiveSessionActive.value) {
+                attemptReconnect("Server goAway", immediate = true)
+            }
+        }
     }
 
     private fun registerNetworkCallbackIfNeeded() {
@@ -964,17 +1120,26 @@ class GeminiLiveStreamManager(private val context: Context) {
         networkCallback = null
     }
 
-    private fun attemptReconnect(reason: String) {
+    private fun attemptReconnect(reason: String, immediate: Boolean = false) {
         if (isExplicitlyStopped || !_isLiveSessionActive.value) return
 
         reconnectAttempts++
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            failSession("Lost connection to Gemini Live. Please restart the voice session.")
+            return
+        }
+        // A stale resumption handle can make the server reject us repeatedly; fall back to a fresh session.
+        if (resumeHandle != null && reconnectAttempts >= 3) {
+            Log.w(TAG, "Dropping resumption handle after repeated reconnect failures")
+            resumeHandle = null
+        }
         isReconnecting = true
         // Fast retries for momentary blips (1.5s, 3s, 4.5s), then steady 8s periodic probing
         // while networkCallback also actively listens for signal restoration to fast-track reconnect.
-        val backoffMs = if (reconnectAttempts <= 3) {
-            reconnectAttempts * 1500L
-        } else {
-            8000L
+        val backoffMs = when {
+            immediate -> 200L
+            reconnectAttempts <= 3 -> reconnectAttempts * 1500L
+            else -> 8000L
         }
         Log.w(TAG, "Cellular/network disconnect ($reason). Auto-reconnecting attempt #$reconnectAttempts in ${backoffMs}ms...")
 
@@ -989,6 +1154,8 @@ class GeminiLiveStreamManager(private val context: Context) {
     }
 
     private fun tearDownSocketAndMic() {
+        // Invalidate callbacks from the socket we are about to close so they can't trigger another reconnect.
+        socketGeneration.incrementAndGet()
         recordJob?.cancel()
         recordJob = null
 
@@ -1044,6 +1211,9 @@ class GeminiLiveStreamManager(private val context: Context) {
         reconnectAttempts = 0
         reconnectJob?.cancel()
         reconnectJob = null
+        goAwayJob?.cancel()
+        goAwayJob = null
+        toolSupervisor.cancelChildren()
 
         // Suppress any error reporting on intentional stop
         lastOnError = null

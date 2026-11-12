@@ -73,6 +73,7 @@ object Obdb {
         val service: Int,           // 0x01, 0x21 or 0x22 only
         val param: Int,             // PID (1 byte) or DID (2 bytes for service 22)
         val filter: YearFilter?,
+        val dbgFilter: YearFilter?, // Years where this command is unverified / debug-only
         val freqSeconds: Double,
         val signals: List<Signal>
     ) {
@@ -91,7 +92,7 @@ object Obdb {
     // Fields we cannot honour yet (29-bit, extended addressing, K-line, custom flow control...).
     private val UNSUPPORTED_KEYS = listOf("eax", "tst", "fcm1", "proto", "pri", "din", "dout", "baud", "init")
 
-    /** Parse a signalset file and keep only commands that apply to [modelYear]. */
+    /** Parse a signalset file and keep only verified commands that apply to [modelYear]. */
     fun parseSignalset(json: String, modelYear: Int?): ParseResult {
         val arr = JSONObject(json).optJSONArray("commands") ?: return ParseResult(emptyList(), 0)
         val out = ArrayList<Command>()
@@ -102,9 +103,21 @@ object Obdb {
             if (cmd == null) { unsupported++; continue }
             val f = cmd.filter
             if (modelYear != null && f != null && !f.matches(modelYear)) continue
+            // Skip commands flagged as debug/unverified for this model year in OBDb
+            val dbgF = cmd.dbgFilter
+            if (modelYear != null && dbgF != null && dbgF.matches(modelYear)) continue
             out.add(cmd)
         }
         return ParseResult(out, unsupported)
+    }
+
+    private fun parseYearFilter(f: JSONObject?): YearFilter? {
+        if (f == null || f.length() == 0) return null
+        return YearFilter(
+            fromYear = if (f.has("from")) f.getInt("from") else null,
+            toYear = if (f.has("to")) f.getInt("to") else null,
+            years = f.optJSONArray("years")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() }
+        )
     }
 
     private fun parseCommand(c: JSONObject): Command? {
@@ -133,14 +146,9 @@ object Obdb {
         }
         if (signals.isEmpty()) return null
 
-        val filter = c.optJSONObject("filter")?.let { f ->
-            if (f.length() == 0) null else YearFilter(
-                fromYear = if (f.has("from")) f.getInt("from") else null,
-                toYear = if (f.has("to")) f.getInt("to") else null,
-                years = f.optJSONArray("years")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() }
-            )
-        }
-        return Command(hdr, service, param, filter, c.optDouble("freq", 1.0), signals)
+        val filter = parseYearFilter(c.optJSONObject("filter"))
+        val dbgFilter = parseYearFilter(c.optJSONObject("dbgfilter"))
+        return Command(hdr, service, param, filter, dbgFilter, c.optDouble("freq", 1.0), signals)
     }
 
     private fun paramOf(v: Any): Int = when (v) {

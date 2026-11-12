@@ -97,6 +97,13 @@ data class RecordedCsvResult(
     val durationSeconds: Double
 )
 
+data class FlightSnapshotResult(
+    val success: Boolean,
+    val sampleCount: Int,
+    val durationSeconds: Double,
+    val filename: String
+)
+
 class GeminiAgentViewModel : ViewModel() {
 
     val obdManager = BluetoothObdManager()
@@ -143,8 +150,17 @@ class GeminiAgentViewModel : ViewModel() {
             }
             "$badge ${alert.title}\n${alert.message}"
         }
-        messages.add(ChatMessage("VERA", chatContent))
-        autoSaveCurrentSession()
+        viewModelScope.launch(Dispatchers.Main) {
+            messages.add(ChatMessage("VERA", chatContent))
+        }
+
+        // Automatic Black-Box Flight Snapshot: On mechanical/diagnostic alerts (misfire, overheating, lean spike),
+        // capture the 5-minute flight recorder window so the driver has all sensor data leading up to the failure!
+        if (alert.severity == SentinelSeverity.CRITICAL || alert.severity == SentinelSeverity.WARNING) {
+            saveFlightRecorderSnapshot("Sentinel anomaly: ${alert.title}")
+        } else {
+            autoSaveCurrentSession()
+        }
 
         // STRICT VOICE RULE: Only vocalize if live voice mode is active
         if (isVoiceModeActive) {
@@ -161,7 +177,7 @@ class GeminiAgentViewModel : ViewModel() {
                             if (!_isLiveSessionActive.value) {
                                 startGeminiLiveSession()
                             }
-                            startFollowUpWindow(15)
+                            startFollowUpWindow(FOLLOW_UP_WINDOW_SECONDS)
                         }
                     }
                 }
@@ -173,19 +189,20 @@ class GeminiAgentViewModel : ViewModel() {
         val metrics = obdManager.metrics.value
         val streams = obdManager.supportedStreams.value
         val isMetric = unitSystem.value == UnitSystem.METRIC
-        val volt = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
-        val trans = obdManager.mode22Streams.value.find { it.pid.name.contains("Transmission", ignoreCase = true) }?.formattedValue ?: "180°F"
+        val volt = streams.find { it.pid.pidHex == "42" }?.formattedValue?.takeIf { it != "--" }
+        val trans = obdManager.mode22Streams.value.find { it.pid.name.contains("Transmission", ignoreCase = true) }?.formattedValue
         val spd = if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"
         val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
         val trim = if (metrics.fuelTrim >= 0) "+${metrics.fuelTrim}%" else "${metrics.fuelTrim}%"
-        return mapOf(
-            "rpm" to "${metrics.rpm} RPM",
-            "speed" to spd,
-            "coolant" to temp,
-            "fuel_trim" to trim,
-            "voltage" to volt,
-            "trans_temp" to trans
-        )
+        // Only report values the car really sent. Missing ones are omitted (never invented).
+        return buildMap {
+            put("rpm", "${metrics.rpm} RPM")
+            put("speed", spd)
+            put("coolant", temp)
+            put("fuel_trim", trim)
+            if (volt != null) put("voltage", volt)
+            if (trans != null) put("trans_temp", trans)
+        }
     }
 
     private val _connectionStatus = MutableStateFlow("Disconnected")
@@ -204,6 +221,16 @@ class GeminiAgentViewModel : ViewModel() {
     val adapterHardwareName: StateFlow<String> = obdManager.adapterHardwareName
     val activeOpendbcProfile: StateFlow<OpendbcManager.VehicleDbcProfile?> = obdManager.activeOpendbcProfile
     val opendbcSignals: StateFlow<Map<String, OpendbcManager.DecodedOpendbcSignal>> = obdManager.opendbcSignals
+
+    val canSniffReport: StateFlow<BluetoothObdManager.CanSniffReport?> = obdManager.canSniffReport
+    val isSniffingCan: StateFlow<Boolean> = obdManager.isSniffingCan
+
+    /** Passive, receive-only scan of which CAN IDs this vehicle broadcasts on the OBD-II port. */
+    fun scanCanBus() {
+        viewModelScope.launch(Dispatchers.IO) {
+            obdManager.sniffCanBus()
+        }
+    }
 
     private val _isScanningObdb = MutableStateFlow(false)
     val isScanningObdb: StateFlow<Boolean> = _isScanningObdb.asStateFlow()
@@ -621,8 +648,7 @@ class GeminiAgentViewModel : ViewModel() {
             var audioPlaySuccess = false
             val cacheDir = appContext?.cacheDir
             val voiceKey = found.lowercase()
-            val accentKey = _liveVoiceAccent.value.replace(Regex("[^a-zA-Z0-9]"), "_").lowercase()
-            val cachedPreviewFile = if (cacheDir != null) java.io.File(cacheDir, "vera_voice_sample_${voiceKey}_${accentKey}.wav") else null
+            val cachedPreviewFile = if (cacheDir != null) java.io.File(cacheDir, "vera_voice_sample_${voiceKey}.wav") else null
 
             if (cachedPreviewFile != null && cachedPreviewFile.exists() && cachedPreviewFile.length() > 1000) {
                 withContext(Dispatchers.Main) {
@@ -642,25 +668,12 @@ class GeminiAgentViewModel : ViewModel() {
                         }
                         player.start()
                         audioPlaySuccess = true
-                        Log.i("VERA_Voice", "Played cached voice preview for '$found' ($accentKey)")
+                        Log.i("VERA_Voice", "Played cached voice preview for '$found'")
                     } catch (e: Exception) {
                         _isSpeaking.value = false
                     }
                 }
                 if (audioPlaySuccess) return@launch
-            }
-
-            val accentPrompt = when (_liveVoiceAccent.value) {
-                "British (RP)" -> "Speak with an authentic British Received Pronunciation accent: $samplePhrase"
-                "Scottish" -> "Speak with an authentic Scottish accent: $samplePhrase"
-                "Australian" -> "Speak with an authentic Australian accent: $samplePhrase"
-                "Irish" -> "Speak with an authentic Irish accent: $samplePhrase"
-                "Southern US" -> "Speak with a friendly Southern American drawl: $samplePhrase"
-                "New York / Boston" -> "Speak with a New York / Boston accent: $samplePhrase"
-                "Canadian" -> "Speak with a Canadian accent: $samplePhrase"
-                "German English" -> "Speak in English with a German accent: $samplePhrase"
-                "Indian English" -> "Speak with an Indian English accent: $samplePhrase"
-                else -> samplePhrase
             }
 
             if (geminiApiKey.isNotBlank() && cacheDir != null) {
@@ -686,7 +699,7 @@ class GeminiAgentViewModel : ViewModel() {
                                 put(JSONObject().apply {
                                     put("role", "user")
                                     put("parts", JSONArray().apply {
-                                        put(JSONObject().put("text", accentPrompt))
+                                        put(JSONObject().put("text", samplePhrase))
                                     })
                                 })
                             })
@@ -868,7 +881,15 @@ class GeminiAgentViewModel : ViewModel() {
             dtcs = dtcList
         )
 
-        val recordedCopy = synchronized(recordedSamples) { recordedSamples.toList() }
+        // Attach up to 300 samples (~5 minutes at 1Hz) from the black-box flight recorder.
+        // Keeps drive chat session JSON lightweight (~70-100 KB) while ensuring instant flight replay works!
+        val recordedCopy = synchronized(blackBoxBuffer) {
+            if (blackBoxBuffer.isNotEmpty()) {
+                blackBoxBuffer.toList()
+            } else {
+                synchronized(recordedSamples) { recordedSamples.takeLast(300) }
+            }
+        }
 
         val session = ChatSession(
             id = _currentSessionId.value,
@@ -1215,8 +1236,8 @@ class GeminiAgentViewModel : ViewModel() {
             mgr.isGeminiSpeaking.collect { speaking ->
                 _isGeminiSpeaking.value = speaking
                 if (!speaking && _isLiveSessionActive.value && _isHandsFreeVoiceActive.value) {
-                    // Vera just finished speaking: Start 15-second follow-up window!
-                    startFollowUpWindow(15)
+                    // Vera just finished speaking: open a follow-up window (30s so slow replies aren't cut off)
+                    startFollowUpWindow(FOLLOW_UP_WINDOW_SECONDS)
                 } else if (speaking) {
                     cancelFollowUpTimer()
                 }
@@ -1242,12 +1263,12 @@ class GeminiAgentViewModel : ViewModel() {
             if (_isHandsFreeVoiceActive.value && !_isLiveSessionActive.value) {
                 Log.i("GeminiAgentViewModel", "Wake word 'Hey Vera' detected: connecting live session")
                 startGeminiLiveSession()
-                startFollowUpWindow(15)
+                startFollowUpWindow(FOLLOW_UP_WINDOW_SECONDS)
             }
         }
     }
 
-    fun startFollowUpWindow(seconds: Int = 15) {
+    fun startFollowUpWindow(seconds: Int = FOLLOW_UP_WINDOW_SECONDS) {
         followUpTimerJob?.cancel()
         followUpTimerJob = viewModelScope.launch {
             for (s in seconds downTo 1) {
@@ -1261,7 +1282,7 @@ class GeminiAgentViewModel : ViewModel() {
                 return@launch
             }
             if (_isLiveSessionActive.value && _isHandsFreeVoiceActive.value) {
-                Log.i("GeminiAgentViewModel", "15-second follow-up window expired. Suspending live cloud stream.")
+                Log.i("GeminiAgentViewModel", "${seconds}-second follow-up window expired. Suspending live cloud stream.")
                 liveStreamManager?.stopLiveSession()
                 wakeWordManager?.startListening()
             }
@@ -1470,60 +1491,14 @@ class GeminiAgentViewModel : ViewModel() {
             """.trimIndent()
         }
 
-        val accentRules = when (_liveVoiceAccent.value) {
-            "British (RP)" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: BRITISH (RP / LONDON).
-                - Speak in English with a distinctive, warm, and articulate British Received Pronunciation (RP) accent.
-                - Adopt natural British phrasing, pronunciation, and cadence (crisp consonants, refined garage tone).
-            """.trimIndent()
-            "Scottish" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: SCOTTISH.
-                - Speak in English with an authentic, friendly Scottish accent, characteristic of a seasoned Scottish highland mechanic.
-                - Adopt natural Scottish cadence, vowels, and inflection.
-            """.trimIndent()
-            "Australian" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: AUSTRALIAN.
-                - Speak in English with a natural, upbeat, and conversational Australian accent and Aussie cadence.
-            """.trimIndent()
-            "Irish" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: IRISH.
-                - Speak in English with a warm, melodic, and authentic Irish accent and cadence.
-            """.trimIndent()
-            "Southern US" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: SOUTHERN US (COUNTRY DRAWL).
-                - Speak with a friendly, relaxed Southern American English drawl, typical of a seasoned Southern shade-tree mechanic.
-            """.trimIndent()
-            "New York / Boston" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: NEW YORK / BOSTONIAN.
-                - Speak with a sharp, fast-paced East Coast American (New York / Bostonian) accent and cadence.
-            """.trimIndent()
-            "Canadian" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: CANADIAN.
-                - Speak in natural Canadian English with friendly, clear Canadian pronunciation and cadence.
-            """.trimIndent()
-            "German English" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: GERMAN-ACCENTED ENGLISH.
-                - Speak in English with a precise, articulate German accent, characteristic of a German automotive master technician.
-            """.trimIndent()
-            "Indian English" -> """
-                REGIONAL ACCENT & VOCAL CADENCE: INDIAN ENGLISH.
-                - Speak in English with a clear, rhythmic, and natural Indian English accent.
-            """.trimIndent()
-            else -> """
-                REGIONAL ACCENT & VOCAL CADENCE: STANDARD AMERICAN.
-                - Speak in natural, clear, standard American English.
-            """.trimIndent()
-        }
-
         return """
-            You are VERA, an elite automotive master diagnostic technician and veteran shade-tree mechanic riding shotgun with the driver.
+            You are VERA (Vehicle Evaluation & Repair Assistant), an elite automotive master diagnostic technician and veteran shade-tree mechanic riding shotgun with the driver.
+            Your name VERA stands for "Vehicle Evaluation & Repair Assistant". Whenever asked what VERA stands for, your full name, or who you are, state clearly and proudly: "VERA stands for Vehicle Evaluation and Repair Assistant."
             You combine 30 years of hands-on garage wisdom, dealership master technician certification, and brilliant diagnostic deduction.
 
             You are interacting with the driver in REAL-TIME 2-WAY HANDS-FREE VOICE MODE over bidirectional audio while they are operating their vehicle.
 
             $unitRules
-
-            $accentRules
 
             CORE MISSION & ANTI-SYCOPHANCY PHILOSOPHY (DIAGNOSTIC TRUTH COMES FIRST):
             - YOUR HIGHEST OBJECTIVE IS THE DIAGNOSTIC TRUTH AND THE MECHANICAL HEALTH OF THE VEHICLE.
@@ -1543,6 +1518,15 @@ class GeminiAgentViewModel : ViewModel() {
                 - Stethoscope / long screwdriver test against engine blocks, alternators, and water pumps to isolate mechanical ticking vs. pulley bearing whine.
               * Realistic wrenching warnings: Warn about brittle plastic cooling connectors, aluminum head spark plug cross-threading, stuck exhaust studs, or bleeding air bubbles from tricky cooling systems.
 
+            OBD2 DATA QUIRKS (READ THIS BEFORE BLAMING THE CAR):
+            - The adapter reads the car's computers, not the dashboard. A reading of 0, "--", a flat-lined value, or an impossible jump (0 volts, -40 degrees, 255, 65535) is almost always a data dropout, a sensor this model doesn't have, or a PID this car doesn't support. It is NOT evidence of a failed part.
+            - BATTERY / ALTERNATOR VOLTAGE: PID 0142 is the computer's supply voltage. It reads low (9-11 V) while cranking, can sit near 12 V for the first several seconds after the engine catches, and hybrids and start-stop cars legitimately shut the engine off. NEVER suspect the alternator from a single reading, a reading at startup, or a 0 V reading. Only raise it if voltage stays under about 12.5 V for 30+ seconds with the engine steadily running AND the driver reports a dash battery light or symptoms. Healthy running voltage is roughly 13.5 to 14.8 V.
+            - A temperature of exactly -40 means the raw byte was zero (no data). Never report it as a real temperature.
+            - The first 30 seconds after connecting, the adapter is still probing protocols and the stream is warming up. Do not diagnose anything from that window.
+            - Different cars answer different PIDs. If a value is not in your telemetry snapshot, say it isn't available from this car. NEVER invent or assume a value.
+            - Enhanced (Mode 21/22) manufacturer PIDs are model-specific. If one looks implausible (negative oil temperature on a warm day), say the reading looks unreliable instead of diagnosing from it.
+            - If the dashboard shows no warning lights and the car drives normally, trust that over one odd OBD value. A one-off glitch that has cleared is not worth bringing up again.
+
             CRITICAL DRIVING & VOICE RULES:
             1. NATURAL HUMAN MECHANIC VOICE & CONVERSATION:
                - Speak naturally, warmly, and conversationally, like a seasoned, sharp mechanic sitting in the passenger seat.
@@ -1557,6 +1541,13 @@ class GeminiAgentViewModel : ViewModel() {
                - TRANSMISSION COMMANDED GEAR & PARK POSITION:
                  * On Ford and GM automatic transmissions, Mode 22 PID 11B3 (Commanded Gear) measures the PCM hydraulic shift solenoid commanded circuit.
                  * When the vehicle is STATIONARY / PARKED (speed 0 mph), the PCM commands hydraulic state 2 as the baseline for the Park/Neutral interlock. If the driver is parked and asks what gear they are in, tell them the transmission is in Park (or Neutral) and explain that state 2 is the stationary hydraulic solenoid baseline, NOT forward 2nd gear!
+               - INITIALIZING STREAM & NO HALLUCINATION DIRECTIVE:
+                 * When OBD2 is connected but the live stream is INITIALIZING (first frames still arriving from ECU):
+                 * If asked for live speed, gear, RPM, or temperatures right at connection time, state clearly: "I just connected to your OBD adapter and am establishing the live data stream with your vehicle; give me just a few moments to get the first readings." Never guess, fabricate, or hallucinate sensor values!
+               - BLACK-BOX FLIGHT RECORDER & MOMENT SNAPSHOTS:
+                 * When the driver asks you to save data, record this moment, snapshot an incident, or log a spike (e.g. "Vera, save that data", "record the last 5 minutes", "log that knock", "save a snapshot of that spike"):
+                 * You MUST invoke the `save_flight_recorder_snapshot` tool with a brief description or reason.
+                 * Confirm in one short natural sentence that you saved a 5-minute flight data black-box snapshot containing all vehicle readings around that moment.
                - If OBD2 is DISCONNECTED:
                  * You DO NOT have access to live vehicle telemetry, engine RPM, coolant temperature, speed, battery voltage, or trouble codes.
                  * You MUST NEVER state "everything looks fine", "all indicators look great", or guess sensor values when disconnected.
@@ -1618,10 +1609,28 @@ class GeminiAgentViewModel : ViewModel() {
             """.trimIndent()
         }
 
-        val metrics = obdManager.metrics.value
-        val dtcs = troubleCodes.value
         val vin = obdManager.vehicleVin.value ?: "Scanning/Pending"
         val vehicle = obdManager.vehicleDetails.value ?: "Vehicle"
+        val isStreaming = obdManager.isStreamingLiveData.value
+
+        if (!isStreaming) {
+            val road = locationManager?.roadContext?.value
+            val roadText = if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating road..." && road.streetName != "Locating...") {
+                road.formattedTopography
+            } else "Determining GPS road position..."
+
+            return """
+                Vehicle: $vehicle (VIN: $vin)
+                Road & Topography: $roadText
+                OBD2 Connection: Connected (Live Stream Initializing)
+                Live Telemetry: INITIALIZING - Polling loop has started; awaiting first live ECU sensor frames.
+                
+                DIRECTIVE: The OBD2 adapter is connected, but the live telemetry data stream is currently establishing communication with the vehicle ECU. If the driver asks what speed, gear, RPM, or temperatures they have right now, tell them clearly: "I just connected to your OBD adapter and am establishing the live data stream with your vehicle; give me just a few moments to get the first readings." Do NOT guess or hallucinate any sensor values.
+            """.trimIndent()
+        }
+
+        val metrics = obdManager.metrics.value
+        val dtcs = troubleCodes.value
         val m06 = obdManager.mode06Results.value
         val streams = obdManager.supportedStreams.value
         val m22Streams = obdManager.mode22Streams.value
@@ -1694,9 +1703,16 @@ class GeminiAgentViewModel : ViewModel() {
                             put("error", "OBD2 adapter is not connected to the vehicle. No live telemetry available. Instruct user to connect to the vehicle OBD2 adapter or launch Demo Mode.")
                         }
                     }
+                    if (!obdManager.isStreamingLiveData.value) {
+                        return JSONObject().apply {
+                            put("connected", true)
+                            put("status", "STREAM_INITIALIZING")
+                            put("error", "The OBD2 adapter is connected, but the live data stream is currently initializing with the vehicle ECU. Tell the driver that you just connected and are establishing the live stream, and to give you a moment.")
+                        }
+                    }
                     val metrics = obdManager.metrics.value
                     val streams = obdManager.supportedStreams.value
-                    val voltage = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
+                    val voltage = streams.find { it.pid.pidHex == "42" }?.formattedValue?.takeIf { it != "--" } ?: "not available yet"
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
                     JSONObject().apply {
@@ -1945,8 +1961,8 @@ class GeminiAgentViewModel : ViewModel() {
                     val isMetric = unitSystem.value == UnitSystem.METRIC
 
                     val transStream = m22.find { it.pid.name.contains("Transmission", ignoreCase = true) }
-                    val transTemp = transStream?.formattedValue ?: "Normal"
-                    val volt = streams.find { it.pid.pidHex == "42" }?.formattedValue ?: "14.1V"
+                    val transTemp = transStream?.formattedValue ?: "not available"
+                    val volt = streams.find { it.pid.pidHex == "42" }?.formattedValue?.takeIf { it != "--" } ?: "not available yet"
 
                     val misfireSummary = m06.filter { it.category.contains("Misfire", ignoreCase = true) }
                     val failingMisfires = misfireSummary.filter { it.status == Mode06Status.FAIL || it.testValue > 5.0 }
@@ -2007,6 +2023,21 @@ class GeminiAgentViewModel : ViewModel() {
                         put("mechanic_verdict", mechanicVerdict)
                     }
                 }
+                "save_flight_recorder_snapshot" -> {
+                    val reason = args.optString("reason", "Driver requested data snapshot")
+                    val res = saveFlightRecorderSnapshot(reason)
+                    JSONObject().apply {
+                        put("success", res.success)
+                        put("sample_count", res.sampleCount)
+                        put("duration_seconds", res.durationSeconds)
+                        put("filename", res.filename)
+                        put("message", if (res.success) {
+                            "Successfully saved 5-minute flight data black-box snapshot (${res.sampleCount} points) to ${res.filename}."
+                        } else {
+                            "No flight data recorded in buffer yet. Drive for a moment and try again."
+                        })
+                    }
+                }
                 else -> {
                     JSONObject().put("status", "unknown tool $name")
                 }
@@ -2019,6 +2050,18 @@ class GeminiAgentViewModel : ViewModel() {
 
     fun checkAndExecuteLocalMonitoringIntent(userText: String): Boolean {
         val lower = userText.lowercase().trim()
+
+        // 0. Check for flight recorder snapshot intent ("save that data", "log that spike", "record the last 5 minutes")
+        if (lower.contains("save that data") || lower.contains("save data") ||
+            lower.contains("save snapshot") || lower.contains("snapshot that") ||
+            lower.contains("log that spike") || lower.contains("log that knock") ||
+            lower.contains("record the last 5 minutes") || lower.contains("record last 5 minutes")) {
+            saveFlightRecorderSnapshot("Voice command: '$userText'")
+            if (isVoiceModeActive) {
+                speak("I've saved a 5-minute flight data black-box snapshot of all sensor readings to your Downloads.")
+            }
+            return true
+        }
 
         // 1. Check for cancellation
         if (lower.contains("stop monitor") || lower.contains("cancel monitor") ||
@@ -2239,6 +2282,9 @@ class GeminiAgentViewModel : ViewModel() {
     private val _recordedSamplesFlow = MutableStateFlow<List<RecordedDataSample>>(emptyList())
     val recordedSamplesFlow: StateFlow<List<RecordedDataSample>> = _recordedSamplesFlow.asStateFlow()
 
+    // 5-minute rolling in-memory black-box flight recorder (300 samples at 1Hz = 5 min).
+    // Always maintained in RAM when connected to vehicle; lightweight (~100 KB), zero continuous disk I/O.
+    private val blackBoxBuffer = java.util.ArrayDeque<RecordedDataSample>(300)
     private val recordedSamples = mutableListOf<RecordedDataSample>()
     private var recordingJob: kotlinx.coroutines.Job? = null
     private var recordingStartMs = 0L
@@ -2321,6 +2367,58 @@ class GeminiAgentViewModel : ViewModel() {
         lastRecordedCsvResult = result
         autoSaveCurrentSession()
         return result
+    }
+
+    /**
+     * Saves a snapshot of the rolling 5-minute flight data black-box buffer.
+     * Invoked when user asks ("Vera, save that data") or when Sentinel triggers an anomaly.
+     */
+    fun saveFlightRecorderSnapshot(reason: String = "Driver requested snapshot"): FlightSnapshotResult {
+        val samplesCopy = synchronized(blackBoxBuffer) { blackBoxBuffer.toList() }
+        if (samplesCopy.isEmpty()) {
+            return FlightSnapshotResult(success = false, sampleCount = 0, durationSeconds = 0.0, filename = "")
+        }
+        val durationSec = (samplesCopy.last().timestampMs - samplesCopy.first().timestampMs) / 1000.0
+        val timeStr = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+        val filename = "VERA_BlackBox_$timeStr.csv"
+        val csv = generateCsvData(
+            samples = samplesCopy,
+            vehicleDetails = obdManager.vehicleDetails.value,
+            vehicleVin = obdManager.vehicleVin.value,
+            unitSystem = _unitSystem.value
+        )
+        try {
+            val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val file = java.io.File(dir, filename)
+            file.writeText(csv)
+            Log.i("GeminiAgentViewModel", "Saved black-box flight snapshot to ${file.absolutePath} ($reason)")
+        } catch (e: Exception) {
+            Log.e("GeminiAgentViewModel", "Failed to write black-box snapshot to Downloads", e)
+        }
+
+        // Copy snapshot into recordedSamples so Replay / Graph immediately reflects this 5-minute capture
+        synchronized(recordedSamples) {
+            recordedSamples.clear()
+            recordedSamples.addAll(samplesCopy)
+        }
+        _recordedSamplesFlow.value = samplesCopy
+
+        viewModelScope.launch(Dispatchers.Main) {
+            messages.add(
+                ChatMessage(
+                    sender = "VERA",
+                    text = "📸 Captured 5-minute black-box snapshot (${samplesCopy.size} data points over ${durationSec.toInt()}s) for: $reason.\nSaved to Downloads/$filename"
+                )
+            )
+            autoSaveCurrentSession()
+        }
+
+        return FlightSnapshotResult(
+            success = true,
+            sampleCount = samplesCopy.size,
+            durationSeconds = durationSec,
+            filename = filename
+        )
     }
 
     fun onCsvSavedSuccessfully(result: RecordedCsvResult) {
@@ -2527,10 +2625,9 @@ class GeminiAgentViewModel : ViewModel() {
                             messages.add(
                                 ChatMessage(
                                     "System",
-                                    "🌐 OBDb Community Parameter Signalset Loaded: ${result.repo}/${result.file} (${result.commands.size} custom commands). Scanning signals in background..."
+                                    "🌐 OBDb Community Parameter Signalset Loaded: ${result.repo}/${result.file} (${result.commands.size} custom commands ready for Scan Mode 22)."
                                 )
                             )
-                            scanObdbSignals()
                         }
                     }
                     is ObdbRepository.LoadResult.NoData -> {
@@ -2556,7 +2653,8 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     private val systemPromptText = """
-        You are VERA, an elite automotive master diagnostic technician and veteran shade-tree mechanic riding shotgun with the driver.
+        You are VERA (Vehicle Evaluation & Repair Assistant), an elite automotive master diagnostic technician and veteran shade-tree mechanic riding shotgun with the driver.
+        Your name VERA stands for "Vehicle Evaluation & Repair Assistant". Whenever asked what your name means, what VERA stands for, or who you are, always state clearly: "VERA stands for Vehicle Evaluation and Repair Assistant."
         You combine 30 years of grease-under-the-fingernails garage wisdom, dealership master technician knowledge (ASE Master Certified caliber), and razor-sharp diagnostic deduction.
         
         Persona & Master Knowledge Base:
@@ -3117,13 +3215,14 @@ class GeminiAgentViewModel : ViewModel() {
             }
         }
 
-        // 3. Continuous Background Flight Data Logging while connected
+        // 3. Continuous Background Flight Data Logging while connected (5-minute rolling black-box buffer)
+        // Maintains a lightweight 300-sample in-memory circular window (~100 KB) with zero disk I/O.
         viewModelScope.launch {
             val sessionStartTimeMs = System.currentTimeMillis()
             while (isActive) {
                 delay(1000L)
                 val isConn = obdManager.connectionState.value is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
-                if (isConn && !_isRecording.value) {
+                if (isConn && obdManager.isStreamingLiveData.value) {
                     val now = System.currentTimeMillis()
                     val elapsedSec = (now - sessionStartTimeMs) / 1000.0
                     val metricsSnap = obdManager.metrics.value
@@ -3139,19 +3238,20 @@ class GeminiAgentViewModel : ViewModel() {
                         mode22Snapshots = mode22Snap,
                         roadContextSnapshot = roadSnap
                     )
-                    synchronized(recordedSamples) {
-                        if (recordedSamples.size >= 3600) {
-                            recordedSamples.removeAt(0)
+                    synchronized(blackBoxBuffer) {
+                        if (blackBoxBuffer.size >= 300) {
+                            blackBoxBuffer.removeFirst()
                         }
-                        recordedSamples.add(sample)
+                        blackBoxBuffer.addLast(sample)
                     }
-                    _recordedSamplesFlow.value = synchronized(recordedSamples) { recordedSamples.toList() }
                 }
             }
         }
     }
 
     companion object {
+        const val FOLLOW_UP_WINDOW_SECONDS = 30
+
         /**
          * Cleans up streaming speech recognition and LLM text artifacts:
          * 1. Eliminates spaces erroneously inserted across subword token boundaries (e.g. "fu el" -> "fuel").

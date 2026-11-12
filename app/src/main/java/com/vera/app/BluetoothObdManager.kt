@@ -300,171 +300,33 @@ data class Mode22StreamData(
 
 object Mode22Registry {
     val KNOWN_PIDS = listOf(
-        // Ford / Lincoln / Mercury
+        // Ford / Lincoln / Mercury (Verified Mode 22 PIDs; full model/year coverage provided via OBDb)
         Mode22PidDefinition("1E1C", "Transmission Temp", "Transmission", "°C", "Ford Transmission Fluid Temp (5R55/6R80/4R75)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 16.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1E01", "Transmission Temp Alt", "Transmission", "°C", "Ford Automatic Transmission Temp (5R110)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0931", "Transmission Temp Alt 2", "Transmission", "°C", "Ford Transmission Temp 6R80/10R80", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 16.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1674", "Cylinder Head Temp", "Engine", "°C", "Ford Cylinder Head Temperature (CHT)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 64.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) },
-        Mode22PidDefinition("1672", "Cylinder Head Temp Raw", "Engine", "°C", "Ford Cylinder Head Temperature Raw", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1304", "Engine Oil Pressure", "Engine Oil", "psi", "Ford Engine Oil Pressure Sensor", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.145 else 0.0 },
-        Mode22PidDefinition("1E1E", "Engine Oil Pressure Alt", "Engine Oil", "psi", "Ford Engine Oil Pressure Gauge", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.145 else 0.0 },
-        Mode22PidDefinition("056D", "Engine Oil Switch", "Engine Oil", "psi", "Ford Engine Oil Pressure Switch", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.5 },
         Mode22PidDefinition("1310", "Engine Oil Temp", "Engine Oil", "°C", "Ford Engine Oil Temperature", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0483", "EcoBoost Turbo Pressure", "Engine Boost", "psi", "Ford EcoBoost Turbocharger Gauge Pressure", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) * 0.03625) - 14.7 else 0.0 },
-        Mode22PidDefinition("0484", "EcoBoost Turbo Compressor", "Engine Boost", "psi", "Ford EcoBoost Compressor Outlet Pressure", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) * 0.03625) - 14.7 else 0.0 },
-        Mode22PidDefinition("162B", "Torque Converter Slip", "Transmission", "RPM", "Ford Torque Converter Lockup Slip Speed", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 4.0 else 0.0 },
-        Mode22PidDefinition("092A", "Torque Converter Slip Alt", "Transmission", "RPM", "Ford Torque Converter Lockup Slip", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 4.0 else 0.0 },
+        Mode22PidDefinition("162B", "Torque Converter Slip", "Transmission", "RPM", "Ford Torque Converter Lockup Slip Speed", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort() / 4.0 else 0.0 },
         Mode22PidDefinition("162C", "Transmission Gear Ratio", "Transmission", "Ratio", "Ford Transmission Gear Ratio", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
         Mode22PidDefinition("11B3", "Transmission Commanded Gear", "Transmission", "Gear", "Ford Transmission Commanded Gear", "Ford") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
-        Mode22PidDefinition("160E", "A/C Pressure Voltage", "Climate", "V", "Ford A/C Pressure Sensor Voltage", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1023.0 * 5.0 else 0.0 },
-        Mode22PidDefinition("0322", "A/C Pressure Gauge", "Climate", "psi", "Ford A/C Refrigerant Pressure", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.145 else 0.0 },
-        Mode22PidDefinition("11B6", "Fuel Rail High Pressure", "Fuel System", "kPa", "Ford Direct Injection High Pressure System", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 10.0 else 0.0 },
-        Mode22PidDefinition("11B7", "Fuel Pump Commanded", "Fuel System", "kPa", "Ford High Pressure Fuel Pump Commanded", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 10.0 else 0.0 },
         Mode22PidDefinition("054B", "Engine Oil Life", "Maintenance", "%", "Ford Engine Oil Life Remaining Index", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("1801", "AWD Clutch Duty", "Drivetrain", "%", "Ford AWD Transfer Case Torque Split Duty Cycle", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("404C", "Cluster Odometer", "Maintenance", "km", "Ford Instrument Cluster Total Odometer (2004-2008 F-150 / HEC)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() * 0.1 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() * 0.1 else 0.0 },
         Mode22PidDefinition("DD01", "Vehicle Odometer", "Maintenance", "km", "Ford Total Vehicle Odometer (IPC / BCM)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
         Mode22PidDefinition("042F", "Battery State of Charge", "Electrical", "%", "Ford 12V Battery State of Charge (BMS)", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("042C", "Battery Voltage (BCM)", "Electrical", "V", "Ford Battery Terminal Voltage (BCM)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
-        Mode22PidDefinition("11A2", "DPF Soot Load", "Emissions", "%", "Ford Diesel Particulate Filter Soot Load", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("11A3", "Exhaust Gas Temp 1", "Emissions", "°C", "Ford Exhaust Gas Temperature EGT1", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
-        Mode22PidDefinition("11A4", "Exhaust Gas Temp 2", "Emissions", "°C", "Ford Exhaust Gas Temperature EGT2", "Ford") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
-        Mode22PidDefinition("03B6", "Charge Air Cooler Temp", "Engine", "°C", "Ford Charge Air Cooler Temp (CAC)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("11A6", "Knock Retard Cyl 1", "Engine", "°", "Ford Knock Retard Cylinder 1", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
 
-        // GM / Chevrolet / GMC / Buick / Cadillac / Pontiac / Saturn
+        // GM / Chevrolet / GMC / Buick / Cadillac (Verified Mode 22 fallbacks)
         Mode22PidDefinition("1940", "Transmission Temp", "Transmission", "°C", "GM Transmission Fluid Temp (4L60E/4L80E)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1942", "Transmission Temp Alt", "Transmission", "°C", "GM Transmission Fluid Temp (6L80/8L90/10L90)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1943", "Torque Converter Slip", "Transmission", "RPM", "GM Torque Converter Clutch Slip", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
-        Mode22PidDefinition("1999", "Transmission Current Gear", "Transmission", "Gear", "GM Transmission Commanded Gear", "GM") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
         Mode22PidDefinition("1154", "Engine Oil Temp", "Engine Oil", "°C", "GM Engine Oil Temperature", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("1150", "Engine Oil Pressure", "Engine Oil", "kPa", "GM Engine Oil Pressure", "GM") { a -> (a.getOrNull(0) ?: 0) * 4.0 },
-        Mode22PidDefinition("1162", "Knock Retard", "Engine", "°", "GM Knock Retard Total", "GM") { a -> (a.getOrNull(0) ?: 0) * 0.3515 },
-        Mode22PidDefinition("1163", "Knock Retard Cyl 1", "Engine", "°", "GM Knock Retard Cylinder 1", "GM") { a -> (a.getOrNull(0) ?: 0) * 0.3515 },
-        Mode22PidDefinition("11A1", "Fuel Rail High Pressure", "Fuel System", "kPa", "GM Direct Injection Fuel Pressure", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.1 else 0.0 },
         Mode22PidDefinition("115A", "Engine Oil Life", "Maintenance", "%", "GM Oil Life Remaining Percentage", "GM") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("115C", "Vehicle Odometer", "Maintenance", "km", "GM Total Distance Odometer", "GM") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 64.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
-        Mode22PidDefinition("1141", "Ethanol Alcohol Percent", "Fuel System", "%", "GM FlexFuel Alcohol Content Sensor", "GM") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("1153", "Boost Pressure Sensor", "Engine Boost", "kPa", "GM Turbocharger / Supercharger Boost", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.05 else 0.0 },
-        Mode22PidDefinition("11B4", "Exhaust Gas Temp 1", "Emissions", "°C", "GM Duramax Exhaust Gas Temp 1", "GM") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
-        Mode22PidDefinition("11BD", "DPF Soot Mass", "Emissions", "g", "GM Duramax DPF Soot Accumulation Mass", "GM") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
-        Mode22PidDefinition("1165", "Camshaft Retard Offset", "Engine", "°", "GM CMP Camshaft Retard Offset", "GM") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
 
-        // Toyota / Lexus / Scion
-        Mode22PidDefinition("1620", "Transmission Pan Temp", "Transmission", "°C", "Toyota Transmission Fluid Temp Pan", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1621", "Transmission Outlet Temp", "Transmission", "°C", "Toyota Torque Converter Outlet Temp", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1624", "ATF Degradation Index", "Transmission", "counts", "Toyota Automatic Transmission Fluid Degradation", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
-        Mode22PidDefinition("1101", "Engine Oil Temp", "Engine Oil", "°C", "Toyota Engine Oil Temperature", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1625", "Hybrid HV Battery SoC", "Battery", "%", "Toyota High Voltage Battery State of Charge", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0) ?: 0) * 0.5 },
-        Mode22PidDefinition("1630", "Hybrid HV Battery Voltage", "Battery", "V", "Toyota High Voltage Battery Voltage", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.1 else 0.0 },
-        Mode22PidDefinition("1635", "HV Battery Cell Delta", "Hybrid Battery", "V", "Toyota High Voltage Battery Cell Max-Min Delta", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
-        Mode22PidDefinition("1628", "Hybrid MG1 Inverter Temp", "Hybrid Battery", "°C", "Toyota Hybrid Motor Generator 1 Inverter Temp", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1629", "Hybrid MG2 Inverter Temp", "Hybrid Battery", "°C", "Toyota Hybrid Motor Generator 2 Inverter Temp", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1638", "Hybrid MG1 RPM", "Hybrid Battery", "RPM", "Toyota Hybrid Motor Generator 1 Speed", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
-        Mode22PidDefinition("1639", "Hybrid MG2 RPM", "Hybrid Battery", "RPM", "Toyota Hybrid Motor Generator 2 Speed", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
-        Mode22PidDefinition("1631", "Auxiliary 12V Voltage", "Electrical", "V", "Toyota 12V Auxiliary Battery Voltage", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
-        Mode22PidDefinition("1626", "Vehicle Odometer", "Maintenance", "km", "Toyota Vehicle Total Odometer", "Toyota", servicePrefix = "21") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
-        Mode22PidDefinition("1681", "Tire Pressure FL", "Chassis", "psi", "Toyota TPMS Front Left Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
-        Mode22PidDefinition("1682", "Tire Pressure FR", "Chassis", "psi", "Toyota TPMS Front Right Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
-        Mode22PidDefinition("1683", "Tire Pressure RL", "Chassis", "psi", "Toyota TPMS Rear Left Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
-        Mode22PidDefinition("1684", "Tire Pressure RR", "Chassis", "psi", "Toyota TPMS Rear Right Pressure", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.2 },
-        Mode22PidDefinition("1620", "Transmission Pan Temp Alt", "Transmission", "°C", "Toyota Transmission Fluid Temp Pan", "Toyota", servicePrefix = "22") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1621", "Transmission Outlet Temp Alt", "Transmission", "°C", "Toyota Torque Converter Outlet Temp", "Toyota", servicePrefix = "22") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1101", "Engine Oil Temp Alt", "Engine Oil", "°C", "Toyota Engine Oil Temperature", "Toyota", servicePrefix = "22") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        // Toyota / Lexus / Scion (Verified Mode 21 1-byte PIDs; full hybrid/chassis set loaded via OBDb)
+        Mode22PidDefinition("28", "Vehicle Odometer", "Maintenance", "km", "Toyota Vehicle Total Odometer (Mode 21 PID 28)", "Toyota", servicePrefix = "21") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("82", "Transmission Pan Temp", "Transmission", "°C", "Toyota ATF Pan Temperature (Mode 21 PID 82)", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 256.0) - 40.0 else -40.0 },
 
-        // Honda / Acura
-        Mode22PidDefinition("2201", "Transmission Temp", "Transmission", "°C", "Honda Automatic Transmission Temp", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("2205", "Engine Oil Temp", "Engine Oil", "°C", "Honda Engine Oil Temperature", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("2210", "VTEC Solenoid Pressure", "Engine", "kPa", "Honda VTEC Pressure Solenoid", "Honda") { a -> (a.getOrNull(0) ?: 0) * 2.5 },
-        Mode22PidDefinition("2208", "Knock Retard", "Engine", "°", "Honda Knock Retard", "Honda") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
-        Mode22PidDefinition("2209", "CVT Pulley Ratio", "Transmission", "Ratio", "Honda CVT Pulley Speed Ratio", "Honda") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
-        Mode22PidDefinition("2220", "Hybrid IMA Battery SoC", "Battery", "%", "Honda IMA Hybrid Battery State of Charge", "Honda") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("2221", "Hybrid IMA Motor Temp", "Battery", "°C", "Honda IMA Hybrid Electric Motor Temp", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("2202", "Vehicle Odometer", "Maintenance", "km", "Honda Vehicle Total Odometer", "Honda") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
-        Mode22PidDefinition("2203", "Fuel Tank Level (Liters)", "Fuel System", "L", "Honda Fuel Remaining in Tank", "Honda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.5 },
-
-        // Chrysler / Dodge / Jeep / Ram / Fiat
-        Mode22PidDefinition("111E", "Transmission Temp", "Transmission", "°C", "Chrysler Transmission Fluid Temp", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("2101", "Transmission Temp Alt", "Transmission", "°C", "Chrysler Transmission Temp (Nag1/8HP70)", "Chrysler", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("111D", "Engine Oil Temp", "Engine Oil", "°C", "Chrysler Engine Oil Temperature", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1122", "Engine Oil Pressure", "Engine Oil", "psi", "Chrysler Engine Oil Pressure", "Chrysler") { a -> (a.getOrNull(0) ?: 0) * 1.0 },
-        Mode22PidDefinition("1120", "Torque Converter Slip", "Transmission", "RPM", "Chrysler Torque Converter Lockup Slip", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
-        Mode22PidDefinition("1130", "Cummins Fuel Rail Pressure", "Fuel System", "psi", "Chrysler Cummins Diesel Fuel Rail Pressure", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 1.0 else 0.0 },
-        Mode22PidDefinition("1131", "Cummins Turbo Boost", "Engine Boost", "psi", "Chrysler Cummins Turbocharger Boost Pressure", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.05 else 0.0 },
-        Mode22PidDefinition("1132", "Cummins Pre-Turbo EGT", "Emissions", "°C", "Chrysler Cummins Exhaust Gas Temp Pre-Turbo", "Chrysler") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
-        Mode22PidDefinition("1133", "Cummins DPF Soot Load", "Emissions", "%", "Chrysler Cummins DPF Soot Percentage", "Chrysler") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("01B4", "Vehicle Odometer", "Maintenance", "km", "Chrysler Total Vehicle Mileage", "Chrysler") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
-        Mode22PidDefinition("1140", "Tire Pressure FL", "Chassis", "psi", "Chrysler TPMS Front Left Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
-        Mode22PidDefinition("1141", "Tire Pressure FR", "Chassis", "psi", "Chrysler TPMS Front Right Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
-        Mode22PidDefinition("1142", "Tire Pressure RL", "Chassis", "psi", "Chrysler TPMS Rear Left Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
-        Mode22PidDefinition("1143", "Tire Pressure RR", "Chassis", "psi", "Chrysler TPMS Rear Right Pressure", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.25 },
-
-        // Nissan / Infiniti
-        Mode22PidDefinition("0005", "CVT Fluid Temp", "Transmission", "°C", "Nissan CVT Fluid Temperature", "Nissan", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0008", "CVT Degradation Count", "Transmission", "counts", "Nissan CVT Fluid Degradation Index", "Nissan", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
-        Mode22PidDefinition("0006", "Engine Oil Temp", "Engine Oil", "°C", "Nissan Engine Oil Temperature", "Nissan", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0007", "Engine Oil Pressure", "Engine Oil", "kPa", "Nissan Engine Oil Pressure", "Nissan", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 2.0 },
-        Mode22PidDefinition("0009", "Vehicle Odometer", "Maintenance", "km", "Nissan Vehicle Total Distance", "Nissan", servicePrefix = "21") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
-        Mode22PidDefinition("000B", "Fuel Tank Level", "Fuel System", "%", "Nissan Fuel Level Sensor", "Nissan", servicePrefix = "21") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("0015", "Steering Angle Sensor", "Chassis", "°", "Nissan Steering Wheel Angle Position", "Nissan", servicePrefix = "21") { a -> if (a.size >= 2) ((a[0] shl 8) or a[1]).toShort() * 0.1 else 0.0 },
-
-        // Volkswagen / Audi / SEAT / Skoda / Porsche (VAG)
-        Mode22PidDefinition("0101", "DSG Transmission Temp", "Transmission", "°C", "VW/Audi DSG Transmission Temp", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1001", "Transmission Temp Alt", "Transmission", "°C", "VW/Audi S-Tronic / Tiptronic Transmission Temp", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0105", "Engine Oil Temp", "Engine Oil", "°C", "VW/Audi Engine Oil Temperature", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("2005", "Engine Oil Temp (UDS)", "Engine Oil", "°C", "VW/Audi UDS Engine Oil Temperature", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0108", "Turbo Boost Actual", "Engine Boost", "kPa", "VW/Audi Turbocharger Actual Boost Pressure", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
-        Mode22PidDefinition("0109", "Turbo Boost Specified", "Engine Boost", "kPa", "VW/Audi Commanded Boost Pressure", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
-        Mode22PidDefinition("010A", "Total Misfires", "Engine", "counts", "VW/Audi Total Cylinder Misfire Counter", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
-        Mode22PidDefinition("0115", "DPF Soot Mass", "Emissions", "g", "VW/Audi TDI Diesel Particulate Filter Soot Mass", "Volkswagen") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
-        Mode22PidDefinition("0120", "Haldex AWD Coupling Temp", "Drivetrain", "°C", "VW/Audi 4Motion / Quattro Haldex Oil Temp", "Volkswagen") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0102", "Vehicle Odometer", "Maintenance", "km", "VW/Audi Vehicle Total Odometer", "Volkswagen") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
-
-        // Subaru
-        Mode22PidDefinition("1121", "CVT Fluid Temp", "Transmission", "°C", "Subaru Lineartronic CVT Fluid Temperature", "Subaru") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1125", "Engine Oil Temp", "Engine Oil", "°C", "Subaru Engine Oil Temperature", "Subaru") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1126", "Knock Learning FLKC", "Engine", "°", "Subaru Fine Learning Knock Correction", "Subaru") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.3515 },
-        Mode22PidDefinition("1127", "Turbo Boost Gauge", "Engine Boost", "psi", "Subaru Turbocharger Boost Pressure", "Subaru") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) * 0.0193) - 14.7 else 0.0 },
-        Mode22PidDefinition("1128", "VVT Intake Angle Left", "Engine", "°", "Subaru Variable Valve Timing Left", "Subaru") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
-        Mode22PidDefinition("1129", "VVT Intake Angle Right", "Engine", "°", "Subaru Variable Valve Timing Right", "Subaru") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
-        Mode22PidDefinition("112A", "CVT Oil Degradation", "Transmission", "counts", "Subaru Lineartronic Fluid Degradation Index", "Subaru") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toDouble() else 0.0 },
-
-        // BMW / Mini
-        Mode22PidDefinition("1001", "Transmission Temp", "Transmission", "°C", "BMW ZF 6HP/8HP Automatic Transmission Temp", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1002", "Engine Oil Temp", "Engine Oil", "°C", "BMW Engine Oil Temperature", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1003", "Engine Oil Pressure", "Engine Oil", "kPa", "BMW Engine Oil Pressure", "BMW") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) * 0.1 else 0.0 },
-        Mode22PidDefinition("1004", "Radiator Outlet Temp", "Cooling", "°C", "BMW Radiator Coolant Outlet Temperature", "BMW") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1005", "VANOS Intake Position", "Engine", "°", "BMW VANOS Camshaft Intake Position", "BMW") { a -> ((a.getOrNull(0) ?: 128) - 128) * 0.5 },
-        Mode22PidDefinition("1008", "Electric Coolant Pump", "Cooling", "%", "BMW Electric Water Pump Speed", "BMW") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-
-        // Hyundai / Kia / Genesis
-        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Hyundai/Kia Automatic Transmission Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0102", "Engine Oil Temp", "Engine Oil", "°C", "Hyundai/Kia Engine Oil Temperature", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0103", "DCT Clutch Temp", "Transmission", "°C", "Hyundai/Kia Dual-Clutch Gearbox Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0106", "EV/HV Battery SoC", "Battery", "%", "Hyundai/Kia EV High Voltage Battery State of Charge", "Hyundai") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("0107", "EV Battery Max Cell Volt", "Battery", "V", "Hyundai/Kia EV Maximum Battery Cell Voltage", "Hyundai") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
-        Mode22PidDefinition("0108", "EV Battery Min Cell Volt", "Battery", "V", "Hyundai/Kia EV Minimum Battery Cell Voltage", "Hyundai") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 1000.0 else 0.0 },
-        Mode22PidDefinition("0109", "EV Battery Pack Temp", "Battery", "°C", "Hyundai/Kia EV High Voltage Battery Pack Temp", "Hyundai") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-
-        // Mazda
-        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Mazda SkyActiv-Drive Automatic Transmission Temp", "Mazda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0105", "Engine Oil Temp", "Engine Oil", "°C", "Mazda SkyActiv Engine Oil Temperature", "Mazda") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0104", "Transmission Current Gear", "Transmission", "Gear", "Mazda Commanded Gear Position", "Mazda") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
-        Mode22PidDefinition("0109", "DPF Soot Accumulation", "Emissions", "%", "Mazda SkyActiv-D Diesel DPF Soot Load", "Mazda") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-
-        // Mercedes-Benz / Smart
-        Mode22PidDefinition("0101", "Transmission Temp", "Transmission", "°C", "Mercedes-Benz 7G/9G-Tronic Transmission Temp", "Mercedes") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0102", "Engine Oil Temp", "Engine Oil", "°C", "Mercedes-Benz Engine Oil Temperature", "Mercedes") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("0103", "Engine Oil Level", "Engine Oil", "mm", "Mercedes-Benz Electronic Oil Level Indicator", "Mercedes") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
-        Mode22PidDefinition("0104", "EGT Pre-Catalyst", "Emissions", "°C", "Mercedes-Benz Exhaust Gas Temp Before Catalytic Converter", "Mercedes") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 10.0) - 40.0 else 0.0 },
-
-        // Universal Fallback & Multi-Vehicle Sub-System PIDs
-        Mode22PidDefinition("0052", "Ethanol Content", "Fuel System", "%", "E85 Flex-Fuel Ethanol Concentration", "Universal") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("11AF", "DPF Soot Mass", "Emissions", "%", "Diesel Particulate Filter Soot Load Accumulation", "Universal") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("11B2", "Steering Angle", "Chassis", "°", "Steering Wheel Angle Position", "Universal") { a -> if (a.size >= 2) ((a[0] shl 8) or a[1]).toShort() * 0.1 else 0.0 },
-        Mode22PidDefinition("1610", "A/C Evaporator Temp", "Climate", "°C", "A/C Evaporator Core Temp (Anti-Freeze Guard)", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1001", "Transmission Temp (Univ)", "Transmission", "°C", "Universal Transmission Fluid Temp", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1002", "Engine Oil Temp (Univ)", "Engine Oil", "°C", "Universal Engine Oil Temp", "Universal") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 }
+        // Chrysler / Dodge / Jeep / Ram
+        Mode22PidDefinition("01B4", "Vehicle Odometer", "Maintenance", "km", "Chrysler Total Vehicle Mileage", "Chrysler") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 }
     )
 
     fun getPidsForManufacturer(manufacturer: String): List<Mode22PidDefinition> {
@@ -484,38 +346,13 @@ object Mode22Registry {
         val isChrysler = m.contains("CHRYSLER") || m.contains("DODGE") || m.contains("JEEP") || m.contains("RAM") || m.contains("FIAT") ||
                          wmi.startsWith("1C") || wmi.startsWith("2C") || wmi.startsWith("3C") || wmi.startsWith("1J") || wmi.startsWith("1D") || wmi.startsWith("2D") || wmi.startsWith("3D") || wmi.startsWith("1B") || wmi.startsWith("3B")
 
-        val isHonda = m.contains("HONDA") || m.contains("ACURA") || wmi.startsWith("1H") || wmi.startsWith("2H") || wmi.startsWith("JH") || wmi.startsWith("5J")
-        val isNissan = m.contains("NISSAN") || m.contains("INFINITI") || wmi.startsWith("JN") || wmi.startsWith("1N") || wmi.startsWith("5N")
-
-        val isVag = m.contains("VOLKSWAGEN") || m.contains("VW") || m.contains("AUDI") || m.contains("PORSCHE") || m.contains("SEAT") || m.contains("SKODA") ||
-                    wmi.startsWith("WV") || wmi.startsWith("WA") || wmi.startsWith("WP") || wmi.startsWith("3V") || wmi.startsWith("1V")
-
-        val isSubaru = m.contains("SUBARU") || wmi.startsWith("JF") || wmi.startsWith("4S")
-        val isBmw = m.contains("BMW") || m.contains("MINI") || wmi.startsWith("WB") || wmi.startsWith("4U") || wmi.startsWith("5U") || wmi.startsWith("WM")
-        val isHyundai = m.contains("HYUNDAI") || m.contains("KIA") || m.contains("GENESIS") ||
-                        wmi.startsWith("KM") || wmi.startsWith("KN") || wmi.startsWith("5N") || wmi.startsWith("5X")
-        val isMazda = m.contains("MAZDA") || wmi.startsWith("JM") || wmi.startsWith("1Y") || wmi.startsWith("4F")
-        val isMercedes = m.contains("MERCEDES") || m.contains("BENZ") || m.contains("SMART") ||
-                         wmi.startsWith("WD") || wmi.startsWith("4J") || wmi.startsWith("55")
-
-        val match = KNOWN_PIDS.filter { pid ->
+        return KNOWN_PIDS.filter { pid ->
             val pM = pid.manufacturer.uppercase()
             (isFord && pM == "FORD") ||
             (isGm && pM == "GM") ||
             (isToyota && pM == "TOYOTA") ||
-            (isChrysler && pM == "CHRYSLER") ||
-            (isHonda && pM == "HONDA") ||
-            (isNissan && pM == "NISSAN") ||
-            (isVag && (pM == "VOLKSWAGEN" || pM == "VAG")) ||
-            (isSubaru && pM == "SUBARU") ||
-            (isBmw && pM == "BMW") ||
-            (isHyundai && pM == "HYUNDAI") ||
-            (isMazda && pM == "MAZDA") ||
-            (isMercedes && pM == "MERCEDES") ||
-            pid.manufacturer == "Universal"
+            (isChrysler && pM == "CHRYSLER")
         }
-
-        return if (match.isNotEmpty()) match else KNOWN_PIDS.filter { it.manufacturer == "Universal" }
     }
 }
 
@@ -571,6 +408,10 @@ class BluetoothObdManager {
     // Reactive StateFlow exposing total vehicle odometer in kilometers
     private val _vehicleOdometerKm = MutableStateFlow<Double?>(null)
     val vehicleOdometerKm: StateFlow<Double?> = _vehicleOdometerKm.asStateFlow()
+
+    // Reactive StateFlow indicating whether live telemetry frames (Mode 01) are actively streaming
+    private val _isStreamingLiveData = MutableStateFlow(false)
+    val isStreamingLiveData: StateFlow<Boolean> = _isStreamingLiveData.asStateFlow()
 
     // High-Speed CAN & opendbc StateFlows
     private val _isHighSpeedCanCapable = MutableStateFlow(false)
@@ -671,8 +512,39 @@ class BluetoothObdManager {
 
     // Synchronization for synchronous AT command-response flow
     private val responseMutex = Mutex()
+    private val responseBufferLock = Any()
     private var latestResponse = StringBuilder()
-    private var promptReceived = false
+    @Volatile private var promptReceived = false
+
+    private fun clearResponseBuffer() {
+        synchronized(responseBufferLock) {
+            latestResponse.setLength(0)
+            promptReceived = false
+        }
+    }
+
+    private fun drainResponseBuffer(): String {
+        return synchronized(responseBufferLock) {
+            val s = latestResponse.toString()
+            latestResponse.setLength(0)
+            s
+        }
+    }
+
+    private fun peekResponseBuffer(): String {
+        return synchronized(responseBufferLock) {
+            latestResponse.toString()
+        }
+    }
+
+    private fun appendResponseText(text: String) {
+        synchronized(responseBufferLock) {
+            if (latestResponse.length > 65536) {
+                latestResponse.delete(0, 32768)
+            }
+            latestResponse.append(text)
+        }
+    }
 
     var isDemoMode = false
         private set
@@ -690,6 +562,7 @@ class BluetoothObdManager {
         _connectionState.value = ConnectionState.Connected("Demo ECU Simulator")
         _vehicleVin.value = vinStr
         _vehicleDetails.value = vehicleDetailsStr
+        _isStreamingLiveData.value = true
 
         if (demoPreset == DemoVehiclePreset.DIRTY_ECU) {
             val dirtyDtcs = listOf("P0305", "P0171")
@@ -934,9 +807,6 @@ class BluetoothObdManager {
 
                 // Query and decode 17-character VIN via Mode 09 PID 02 to verify active ECU communication
                 fetchVehicleVin()
-
-                // Query vehicle odometer reading via standard Mode 01 PID A6 or Mode 22 enhanced manufacturer PID
-                fetchVehicleOdometer()
 
                 _connectionState.value = ConnectionState.Connected(device.name ?: "OBD Device")
 
@@ -1380,6 +1250,12 @@ class BluetoothObdManager {
             return demoResults
         }
         val loaded = (_obdbLoadedResult.value as? ObdbRepository.LoadResult.Loaded) ?: return emptyMap()
+        // Wait if an active CAN broadcast sniff is running so we never collide on the serial stream
+        var sniffWait = 0
+        while ((_isSniffingCan.value || canSniffActive) && sniffWait < 50) {
+            delay(200)
+            sniffWait++
+        }
         val wasPolling = pollingJob?.isActive == true
         isPollingPaused = true
         pollingJob?.cancel()
@@ -1392,6 +1268,8 @@ class BluetoothObdManager {
 
             val runner = ObdbRunner { cmd -> sendAtCommand(cmd, 100) }
             val commandsByHeader = loaded.commands.groupBy { it.hdr }
+            val allSignalsById = loaded.commands.flatMap { it.signals }.associateBy { it.id }
+            val updatedOpendbc = LinkedHashMap(_opendbcSignals.value)
 
             for ((hdr, cmds) in commandsByHeader) {
                 var consecutiveNulls = 0
@@ -1408,10 +1286,44 @@ class BluetoothObdManager {
                         for ((sigId, valObj) in sigVals) {
                             if (valObj != null) {
                                 resultsMap[sigId] = valObj
+                                val numVal = (valObj as? Number)?.toDouble()
+                                val sigMeta = allSignalsById[sigId]
+                                if (numVal != null) {
+                                    // Update vehicle odometer if an OBDb odometer signal was read
+                                    if ((sigId.endsWith("_ODO") || sigMeta?.name?.equals("Odometer", ignoreCase = true) == true) && numVal in 10.0..1_500_000.0) {
+                                        _vehicleOdometerKm.value = numVal
+                                    }
+                                    // Bridge OBDb chassis/dynamics signals into _opendbcSignals if present
+                                    val dynMap: Pair<String, Pair<Double, String>>? = when {
+                                        sigId.contains("STEER_ANGLE") || sigId.contains("STEERING_ANGLE") -> "Steering Angle" to (numVal to "deg")
+                                        sigId.contains("LAT_G") -> "Lateral G" to (numVal to "g")
+                                        sigId.contains("LNG_G") || sigId.contains("LONG_G") -> "Longitudinal G" to (numVal to "g")
+                                        sigId.contains("YAW_RATE") -> "Yaw Rate" to (numVal to "deg/s")
+                                        sigId.contains("TIRE_FL_SPD") || sigId.contains("FL_WHEEL_VSS") -> "Wheel FL" to ((numVal * 0.621371) to "mph")
+                                        sigId.contains("TIRE_FR_SPD") || sigId.contains("FR_WHEEL_VSS") -> "Wheel FR" to ((numVal * 0.621371) to "mph")
+                                        sigId.contains("TIRE_RL_SPD") || sigId.contains("RL_WHEEL_VSS") -> "Wheel RL" to ((numVal * 0.621371) to "mph")
+                                        sigId.contains("TIRE_RR_SPD") || sigId.contains("RR_WHEEL_VSS") -> "Wheel RR" to ((numVal * 0.621371) to "mph")
+                                        else -> null
+                                    }
+                                    if (dynMap != null) {
+                                        val (dynName, valAndUnit) = dynMap
+                                        val (v, u) = valAndUnit
+                                        updatedOpendbc[dynName] = OpendbcManager.DecodedOpendbcSignal(
+                                            name = dynName,
+                                            value = v,
+                                            formattedValue = OpendbcManager.formatSignalValue(v, u),
+                                            unit = u
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            if (updatedOpendbc.size > _opendbcSignals.value.size) {
+                _opendbcSignals.value = updatedOpendbc
             }
 
             runner.restoreHeader()
@@ -1542,6 +1454,371 @@ class BluetoothObdManager {
         return "$make • $model • $year • VIN: $vin"
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Passive CAN bus sniffer (diagnostic). Listens with ATMA (monitor all) and reports which
+    // broadcast CAN IDs actually reach the OBD-II port on this vehicle. Receive-only: nothing is
+    // ever transmitted to the car. Used to find out what Advanced Dynamics can really decode.
+    // ---------------------------------------------------------------------------------------------
+    data class CanIdStat(
+        val id: String,
+        val count: Int,
+        val distinctPayloads: Int,
+        val samplePayloads: List<String>
+    )
+
+    data class CanSniffReport(
+        val protocol: String,
+        val durationMs: Long,
+        val totalFrames: Int,
+        val bufferFullEvents: Int,
+        val ids: List<CanIdStat>
+    ) {
+        fun toDisplayText(maxIds: Int = 14): String {
+            val sb = StringBuilder()
+            sb.append("CAN scan · protocol: ").append(protocol.ifBlank { "unknown" }).append('\n')
+            sb.append("$totalFrames frames in ${durationMs / 1000.0}s · ${ids.size} distinct IDs")
+            if (bufferFullEvents > 0) sb.append(" · adapter buffer overflowed ${bufferFullEvents}x (link is slower than the bus)")
+            sb.append('\n')
+            if (totalFrames == 0) {
+                sb.append("No broadcast frames reached the OBD-II port. Possible causes: ignition/READY is off, ")
+                sb.append("the adapter does not support monitor mode (ATMA), or this vehicle's gateway only ")
+                sb.append("passes diagnostic request/response traffic to the port.")
+                return sb.toString()
+            }
+            val hints = setOf("024", "025", "0AA", "0B4", "1D2", "1C4", "2E4", "260")
+            val seenHints = ids.map { it.id }.filter { it in hints }
+            if (seenHints.isNotEmpty()) sb.append("Chassis/powertrain IDs commonly seen on Toyotas: ${seenHints.joinToString()}\n")
+            ids.take(maxIds).forEach { s ->
+                sb.append(s.id.padEnd(4)).append(' ')
+                    .append("x${s.count}".padEnd(6)).append(' ')
+                    .append(s.samplePayloads.lastOrNull() ?: "")
+                    .append(if (s.distinctPayloads > 1) "  (varies)" else "  (static)")
+                    .append('\n')
+            }
+            if (ids.size > maxIds) sb.append("… and ${ids.size - maxIds} more IDs (see debug log)")
+            return sb.toString().trimEnd()
+        }
+    }
+
+    private val _canSniffReport = MutableStateFlow<CanSniffReport?>(null)
+    val canSniffReport: StateFlow<CanSniffReport?> = _canSniffReport.asStateFlow()
+
+    private val _isSniffingCan = MutableStateFlow(false)
+    val isSniffingCan: StateFlow<Boolean> = _isSniffingCan.asStateFlow()
+
+    // While true, the stream reader must not interpret raw monitor-mode frames as OBD responses.
+    @Volatile private var canSniffActive = false
+
+    private class CanAcc {
+        var count = 0
+        val distinct = HashSet<String>()
+        val samples = ArrayDeque<String>()
+    }
+
+    private fun writeRaw(text: String) {
+        val bytes = text.toByteArray(Charsets.US_ASCII)
+        if (isUsbConnection && usbSerialPort != null) {
+            try {
+                usbSerialPort?.write(bytes, 1000)
+            } catch (e: Exception) {
+                Log.e(TAG, "USB raw write error", e)
+            }
+        } else {
+            try {
+                outputStream?.write(bytes)
+                outputStream?.flush()
+            } catch (e: Exception) {
+                Log.e(TAG, "Bluetooth raw write error", e)
+            }
+        }
+    }
+
+    /** Parses "0B4 00 12 AB ..." (headers on, spaces on). Returns id to payload or null. */
+    private fun parseCanFrameLine(line: String): Pair<String, String>? {
+        val tokens = line.trim().uppercase().split(' ').filter { it.isNotEmpty() }
+        if (tokens.size < 2) return null
+        val id = tokens[0]
+        fun isHex(s: String) = s.all { it in '0'..'9' || it in 'A'..'F' }
+        if ((id.length != 3 && id.length != 8) || !isHex(id)) return null
+        val data = tokens.drop(1)
+        if (data.size > 8 || !data.all { it.length == 2 && isHex(it) }) return null
+        return id to data.joinToString(" ")
+    }
+
+    /**
+     * Cleanly exits ELM327/STN `ATMA` monitor mode while keeping [canSniffActive] true until
+     * all in-flight buffered USB/Bluetooth CAN frames have drained and the `>` prompt arrives.
+     */
+    private suspend fun stopAtmaAndFlushBuffer() {
+        try {
+            canSniffActive = true
+            synchronized(responseBufferLock) {
+                promptReceived = false
+            }
+            writeRaw("\r")
+            val deadline = System.currentTimeMillis() + 650L
+            while (System.currentTimeMillis() < deadline && !promptReceived) {
+                delay(35)
+            }
+            // Extra settle delay for USB FIFO tail bytes after '>'
+            delay(60)
+            clearResponseBuffer()
+        } catch (e: Exception) {
+            Log.w(TAG, "stopAtmaAndFlushBuffer issue: ${e.message}")
+        } finally {
+            canSniffActive = false
+            clearResponseBuffer()
+        }
+    }
+
+    suspend fun sniffCanBus(totalDurationMs: Long = 8000L): CanSniffReport? {
+        if (isDemoMode || _isSniffingCan.value) return null
+        if (_connectionState.value !is ConnectionState.Connected) return null
+
+        _isSniffingCan.value = true
+        val wasPolling = pollingJob?.isActive == true
+        isPollingPaused = true
+        pollingJob?.cancel()
+
+        val started = System.currentTimeMillis()
+        val stats = LinkedHashMap<String, CanAcc>()
+        val decodedMap = LinkedHashMap(_opendbcSignals.value)
+        var activeProfile = _activeOpendbcProfile.value
+            ?: OpendbcManager.findProfileForVehicle(_vehicleVin.value ?: "", _vehicleDetails.value ?: "")
+                ?.also { _activeOpendbcProfile.value = it }
+        var total = 0
+        var bufferFull = 0
+        var protocol = ""
+        var report: CanSniffReport? = null
+        var lastUiEmitMs = 0L
+
+        fun drain(forceEmit: Boolean = false) {
+            val snapshot = drainResponseBuffer()
+            if (snapshot.isEmpty()) {
+                if (forceEmit && decodedMap.isNotEmpty()) {
+                    _opendbcSignals.value = LinkedHashMap(decodedMap)
+                }
+                return
+            }
+            if (snapshot.contains("BUFFER FULL", ignoreCase = true)) bufferFull++
+            val batchFrames = mutableListOf<Pair<String, String>>()
+            for (line in snapshot.split('\n', '\r')) {
+                val frame = parseCanFrameLine(line) ?: continue
+                total++
+                val acc = stats.getOrPut(frame.first) { CanAcc() }
+                acc.count++
+                if (acc.distinct.size < 64) acc.distinct.add(frame.second)
+                acc.samples.addLast(frame.second)
+                if (acc.samples.size > 3) acc.samples.removeFirst()
+                batchFrames.add(frame)
+            }
+            if (batchFrames.isNotEmpty()) {
+                val observedIds = stats.keys.mapNotNull { it.toIntOrNull(16) }.toSet()
+                val resolved = OpendbcManager.resolveBestProfile(
+                    vin = _vehicleVin.value ?: "",
+                    make = _vehicleDetails.value ?: "",
+                    observedCanIds = observedIds
+                )
+                if (resolved != null && resolved.platformName != activeProfile?.platformName) {
+                    activeProfile = resolved
+                    _activeOpendbcProfile.value = resolved
+                }
+                val prof = activeProfile
+                if (prof != null) {
+                    var decodedAny = false
+                    for (frame in batchFrames) {
+                        val sigs = OpendbcManager.decodeCanFrame(prof, "${frame.first} ${frame.second}")
+                        if (sigs.isNotEmpty()) {
+                            for (sig in sigs) {
+                                decodedMap[sig.name] = sig
+                            }
+                            decodedAny = true
+                        }
+                    }
+                    val now = System.currentTimeMillis()
+                    if (decodedAny && (forceEmit || now - lastUiEmitMs >= 150L)) {
+                        lastUiEmitMs = now
+                        _opendbcSignals.value = LinkedHashMap(decodedMap)
+                    }
+                }
+            } else if (forceEmit && decodedMap.isNotEmpty()) {
+                _opendbcSignals.value = LinkedHashMap(decodedMap)
+            }
+        }
+
+        try {
+            if (wasPolling) delay(300)
+            sendAtCommand("AT", 80)
+            protocol = sendAtCommand("AT DP", 150).replace("\r", " ").replace("\n", " ").trim()
+            sendAtCommand("AT S1", 100)
+            sendAtCommand("AT H1", 100)
+
+            canSniffActive = true
+            responseMutex.withLock {
+                val deadline = started + totalDurationMs
+                var emptyBursts = 0
+                clearResponseBuffer()
+                writeRaw("ATMA\r")
+
+                var lastCheckFrames = 0
+                var lastCheckTime = System.currentTimeMillis()
+
+                while (System.currentTimeMillis() < deadline && emptyBursts < 3) {
+                    delay(90)
+                    drain(forceEmit = false)
+
+                    if (promptReceived) {
+                        // Adapter exited ATMA (e.g. BUFFER FULL or STOPPED) — restart ATMA if time remains
+                        drain(forceEmit = false)
+                        if (System.currentTimeMillis() + 250L < deadline) {
+                            clearResponseBuffer()
+                            writeRaw("ATMA\r")
+                        } else {
+                            break
+                        }
+                    }
+
+                    val now = System.currentTimeMillis()
+                    if (now - lastCheckTime >= 2000L) {
+                        if (total == lastCheckFrames) {
+                            emptyBursts++
+                            if (emptyBursts < 3 && now + 300L < deadline) {
+                                clearResponseBuffer()
+                                writeRaw("ATMA\r")
+                            }
+                        } else {
+                            emptyBursts = 0
+                        }
+                        lastCheckFrames = total
+                        lastCheckTime = now
+                    }
+                }
+                drain(forceEmit = true)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "CAN sniff failed", e)
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable) {
+                try {
+                    stopAtmaAndFlushBuffer()
+                    sendAtCommand("AT H0", 100)
+                    sendAtCommand("AT SH 7DF", 80)
+                } catch (e: Exception) {
+                    Log.w(TAG, "CAN sniff cleanup issue", e)
+                } finally {
+                    canSniffActive = false
+                }
+                if (decodedMap.isNotEmpty()) {
+                    _opendbcSignals.value = LinkedHashMap(decodedMap)
+                }
+                val ids = stats.entries
+                    .sortedByDescending { it.value.count }
+                    .map { CanIdStat(it.key, it.value.count, it.value.distinct.size, it.value.samples.toList()) }
+                val finished = CanSniffReport(protocol, System.currentTimeMillis() - started, total, bufferFull, ids)
+                report = finished
+                _canSniffReport.value = finished
+                logElmExchange("CAN SNIFF", finished.toDisplayText(40).replace("\n", " | "))
+                isPollingPaused = false
+                _isSniffingCan.value = false
+                if (wasPolling && pollingJob?.isActive != true && _connectionState.value is ConnectionState.Connected) {
+                    startPollingLoop()
+                }
+            }
+        }
+        return report
+    }
+
+    /**
+     * Performs a fast passive CAN broadcast sample (default 450ms) inside the polling loop
+     * when connected via a high-speed CAN adapter, automatically fingerprinting the bus
+     * and populating [_opendbcSignals] with live updates.
+     */
+    private suspend fun sampleCanBroadcastInline(durationMs: Long = 450L) {
+        if (isDemoMode || _isSniffingCan.value || !_isHighSpeedCanCapable.value) return
+        if (_connectionState.value !is ConnectionState.Connected) return
+
+        val capturedFrames = mutableListOf<Pair<String, String>>()
+        val observedIds = mutableSetOf<Int>()
+        val decodedMap = LinkedHashMap(_opendbcSignals.value)
+        var activeProfile = _activeOpendbcProfile.value
+            ?: OpendbcManager.findProfileForVehicle(_vehicleVin.value ?: "", _vehicleDetails.value ?: "")
+                ?.also { _activeOpendbcProfile.value = it }
+        var lastUiEmitMs = 0L
+
+        fun drainBurst(forceEmit: Boolean = false) {
+            val snapshot = drainResponseBuffer()
+            if (snapshot.isEmpty()) return
+            val batchFrames = mutableListOf<Pair<String, String>>()
+            for (line in snapshot.split('\n', '\r')) {
+                val frame = parseCanFrameLine(line) ?: continue
+                capturedFrames.add(frame)
+                batchFrames.add(frame)
+                frame.first.toIntOrNull(16)?.let { observedIds.add(it) }
+            }
+            if (batchFrames.isNotEmpty()) {
+                val resolved = OpendbcManager.resolveBestProfile(
+                    vin = _vehicleVin.value ?: "",
+                    make = _vehicleDetails.value ?: "",
+                    observedCanIds = observedIds
+                )
+                if (resolved != null && resolved.platformName != activeProfile?.platformName) {
+                    activeProfile = resolved
+                    _activeOpendbcProfile.value = resolved
+                }
+                val prof = activeProfile
+                if (prof != null) {
+                    var decodedAny = false
+                    for (frame in batchFrames) {
+                        val sigs = OpendbcManager.decodeCanFrame(prof, "${frame.first} ${frame.second}")
+                        if (sigs.isNotEmpty()) {
+                            for (sig in sigs) {
+                                decodedMap[sig.name] = sig
+                            }
+                            decodedAny = true
+                        }
+                    }
+                    val now = System.currentTimeMillis()
+                    if (decodedAny && (forceEmit || now - lastUiEmitMs >= 150L)) {
+                        lastUiEmitMs = now
+                        _opendbcSignals.value = LinkedHashMap(decodedMap)
+                    }
+                }
+            }
+        }
+
+        try {
+            sendAtCommand("AT S1", 50)
+            sendAtCommand("AT H1", 50)
+            canSniffActive = true
+            responseMutex.withLock {
+                clearResponseBuffer()
+                writeRaw("ATMA\r")
+                val burstEnd = System.currentTimeMillis() + durationMs
+                while (System.currentTimeMillis() < burstEnd && !promptReceived) {
+                    delay(75)
+                    drainBurst(forceEmit = false)
+                }
+                drainBurst(forceEmit = true)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Inline CAN broadcast sample interrupted: ${e.message}")
+        } finally {
+            try {
+                stopAtmaAndFlushBuffer()
+                sendAtCommand("AT H0", 50)
+                sendAtCommand("AT SH 7DF", 50)
+            } catch (_: Exception) {
+                canSniffActive = false
+            }
+        }
+
+        if (decodedMap.isNotEmpty() && decodedMap != _opendbcSignals.value) {
+            _opendbcSignals.value = LinkedHashMap(decodedMap)
+        }
+    }
+
     /**
      * Sends an AT command and waits for the prompt '>' response.
      */
@@ -1551,8 +1828,7 @@ class BluetoothObdManager {
             return "BLOCKED"
         }
         return responseMutex.withLock {
-            latestResponse.clear()
-            promptReceived = false
+            clearResponseBuffer()
 
             val fullCommand = "$command\r"
             val bytes = fullCommand.toByteArray(Charsets.US_ASCII)
@@ -1571,7 +1847,7 @@ class BluetoothObdManager {
             val startTime = System.currentTimeMillis()
             while (!promptReceived) {
                 // SAE J1979 / ISO 15765-4: Extend timeout up to 5000ms if ECU sends 7F xx 78 (Response Pending)
-                val currentText = latestResponse.toString()
+                val currentText = peekResponseBuffer()
                 if (currentText.contains("7F") && currentText.contains("78")) {
                     maxTimeout = 5000L
                 }
@@ -1581,7 +1857,7 @@ class BluetoothObdManager {
                 }
                 delay(15)
             }
-            val result = latestResponse.toString().trim()
+            val result = peekResponseBuffer().trim()
             Log.d(TAG, "TX: [$command] -> RX: [$result]")
             logElmExchange(command, result)
             delay(delayMs)
@@ -1595,7 +1871,7 @@ class BluetoothObdManager {
     private fun startStreamReader() {
         workerJob?.cancel()
         workerJob = ioScope.launch {
-            val buffer = ByteArray(1024)
+            val buffer = ByteArray(2048)
             val lineBuilder = StringBuilder()
             try {
                 while (isActive) {
@@ -1607,9 +1883,9 @@ class BluetoothObdManager {
                         inputStream?.read(buffer) ?: -1
                     } else { -1 }
 
-                    if (bytesRead == -1) {
+                    if (bytesRead <= 0) {
                         if (!isUsbConnection && inputStream == null) break
-                        delay(20)
+                        delay(15)
                         continue
                     }
 
@@ -1617,27 +1893,39 @@ class BluetoothObdManager {
                         val c = buffer[i].toInt().toChar()
                         when (c) {
                             '>' -> {
-                                promptReceived = true
                                 if (lineBuilder.isNotEmpty()) {
-                                    latestResponse.append(lineBuilder.toString())
+                                    appendResponseText(lineBuilder.toString())
                                     lineBuilder.clear()
                                 }
-                                val fullText = latestResponse.toString()
-                                processResponse(fullText)
+                                promptReceived = true
+                                if (!canSniffActive) {
+                                    val fullText = peekResponseBuffer()
+                                    try {
+                                        processResponse(fullText)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Error parsing response frame", e)
+                                    }
+                                }
                             }
                             '\r', '\n' -> {
                                 if (lineBuilder.isNotEmpty()) {
                                     val line = lineBuilder.toString().trim()
-                                    latestResponse.append(line).append("\n")
+                                    appendResponseText("$line\n")
                                     lineBuilder.clear()
                                 }
                             }
                             else -> {
-                                lineBuilder.append(c)
+                                if (lineBuilder.length < 4096) {
+                                    lineBuilder.append(c)
+                                } else {
+                                    lineBuilder.clear()
+                                }
                             }
                         }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Stream reader error or disconnected", e)
                 disconnect()
@@ -1653,6 +1941,7 @@ class BluetoothObdManager {
      */
     private fun processResponse(fullResponse: String) {
         if (fullResponse.isBlank()) return
+        if (canSniffActive) return // raw monitor-mode frames, not OBD responses
         val lines = fullResponse.split("\r", "\n")
         for (rawLine in lines) {
             val cleaned = rawLine.replace(" ", "").uppercase()
@@ -1663,6 +1952,10 @@ class BluetoothObdManager {
             val payloads = ObdParser.extractPayloads(rawLine)
             for (payload in payloads) {
                 if (payload.size >= 2 && payload[0] == 0x41) {
+                    if (!_isStreamingLiveData.value) {
+                        _isStreamingLiveData.value = true
+                        Log.i(TAG, "First live Mode 01 telemetry frame received. isStreamingLiveData = true")
+                    }
                     val pidHex = String.format("%02X", payload[1])
                     val dataBytes = payload.copyOfRange(2, payload.size)
 
@@ -1705,22 +1998,61 @@ class BluetoothObdManager {
     }
 
     /**
-     * Periodic PID polling loop dynamically polling all discovered supported PIDs.
+     * High-performance prioritized PID polling loop.
+     * Splits PIDs into:
+     * - Priority PIDs: Speed (010D), RPM (010C), Throttle (0111) which change rapidly and demand high refresh rates.
+     * - Secondary PIDs: Coolant, trims, intake temp, MAF, baro, fuel level, which change slowly.
+     * On each cycle:
+     * - All Priority PIDs are queried immediately.
+     * - 1 or 2 Secondary PIDs are queried round-robin.
+     * This provides 5-8 Hz responsiveness for speedometer & tachometer, while preventing slow PIDs or timeouts
+     * from starving motion and speed detection!
      */
     private fun startPollingLoop() {
         pollingJob?.cancel()
         pollingJob = ioScope.launch {
-            val pidsToPoll = if (discoveredPidDefinitions.isNotEmpty()) discoveredPidDefinitions else ObdPidRegistry.DEFAULT_PIDS
+            val allPids = if (discoveredPidDefinitions.isNotEmpty()) discoveredPidDefinitions else ObdPidRegistry.DEFAULT_PIDS
+
+            // Priority: Speed (0D), RPM (0C), Throttle (11)
+            val priorityHexes = setOf("0D", "0C", "11")
+            val priorityPids = allPids.filter { it.pidHex.uppercase() in priorityHexes }.ifEmpty {
+                listOfNotNull(ObdPidRegistry.KNOWN_PIDS["0D"], ObdPidRegistry.KNOWN_PIDS["0C"])
+            }
+            val secondaryPids = allPids.filter { it.pidHex.uppercase() !in priorityHexes }
+
+            var secondaryIdx = 0
+            var cycleCount = 0
+            var initialCanSampleDone = false
+
             while (isActive) {
                 try {
                     if (!isPollingPaused) {
-                        for (pidDef in pidsToPoll) {
+                        // 1. Fast-Path: Query High-Priority Speed & RPM
+                        for (pPid in priorityPids) {
                             if (isPollingPaused || !isActive) break
-                            val fastCmd = pidDef.fullCommand
-                            sendAtCommand(fastCmd, 10)
+                            sendAtCommand(pPid.fullCommand, 10)
+                        }
+
+                        // 2. Interleaved Round-Robin: Query 1 or 2 secondary slower-changing PIDs
+                        if (secondaryPids.isNotEmpty()) {
+                            val countToPoll = minOf(2, secondaryPids.size)
+                            for (i in 0 until countToPoll) {
+                                if (isPollingPaused || !isActive) break
+                                val secPid = secondaryPids[secondaryIdx % secondaryPids.size]
+                                secondaryIdx = (secondaryIdx + 1) % secondaryPids.size
+                                sendAtCommand(secPid.fullCommand, 10)
+                            }
+                        }
+
+                        // 3. High-Speed CAN Broadcast Sample: populate Advanced Vehicle Dynamics
+                        // automatically via CAN fingerprint + VIN/Make, and refresh frequently.
+                        cycleCount++
+                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % 6 == 0)) {
+                            initialCanSampleDone = true
+                            sampleCanBroadcastInline(450L)
                         }
                     }
-                    delay(50)
+                    delay(30)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in polling loop", e)
                     break
@@ -1987,6 +2319,11 @@ class BluetoothObdManager {
             return dtcs
         }
 
+        if (_isSniffingCan.value || canSniffActive) {
+            Log.d(TAG, "Skipping scanAllDtcModes while CAN broadcast sniff is active")
+            return emptyList()
+        }
+
         val wasPolling = pollingJob?.isActive == true
         isPollingPaused = true
         pollingJob?.cancel()
@@ -2169,6 +2506,12 @@ class BluetoothObdManager {
 
         val results = mutableListOf<Mode22StreamData>()
 
+        var sniffWait = 0
+        while ((_isSniffingCan.value || canSniffActive) && sniffWait < 50) {
+            delay(200)
+            sniffWait++
+        }
+
         val wasPolling = pollingJob?.isActive == true
         isPollingPaused = true
         pollingJob?.cancel()
@@ -2237,16 +2580,19 @@ class BluetoothObdManager {
                     for (payload in payloads) {
                         if (payload.size >= 2 && (payload[0] == 0x61 || payload[0] == 0x62)) {
                             val pidByteCount = pidDef.pidHex.length / 2
-                            var headerLen = 1 + pidByteCount
+                            val headerLen = 1 + pidByteCount
 
-                            // Determine if payload includes full PID bytes after response service byte
-                            if (payload.size > pidByteCount + 1) {
-                                val pidHi = pidDef.pidHex.substring(0, 2).toIntOrNull(16) ?: 0
-                                if (payload[1] != pidHi) {
-                                    headerLen = 1
+                            // A positive response must echo the identifier we asked for (SAE J1979 / UDS / KWP).
+                            // If it doesn't, the ECU answered a DIFFERENT parameter (e.g. Toyota replies to
+                            // "21 16 20" with "61 20 ..."). Treating those bytes as our value produced the
+                            // bogus negative oil/trans temperatures, so ignore the reply entirely.
+                            val echoMatches = payload.size >= headerLen &&
+                                (0 until pidByteCount).all { i ->
+                                    payload[1 + i] == (pidDef.pidHex.substring(i * 2, i * 2 + 2).toIntOrNull(16) ?: -1)
                                 }
-                            } else {
-                                headerLen = 1
+                            if (!echoMatches) {
+                                Log.d(TAG, "Mode 22 scan: ignoring reply that does not echo PID ${pidDef.pidHex}: ${payload.joinToString(" ") { String.format("%02X", it) }}")
+                                continue
                             }
 
                             val dataBytes = if (payload.size > headerLen) payload.copyOfRange(headerLen, payload.size) else intArrayOf()
@@ -2263,7 +2609,7 @@ class BluetoothObdManager {
                                     val isBogus = when (pidDef.unit) {
                                         "kPa" -> rawVal > 50000.0 || rawVal < 0.0
                                         "bar" -> rawVal > 500.0 || rawVal < 0.0
-                                        "°C" -> rawVal > 300.0 || rawVal < -50.0
+                                        "°C" -> rawVal > 300.0 || rawVal <= -40.0 // -40 °C is the 'raw byte = 0' sentinel (no sensor / not populated)
                                         "psi" -> rawVal > 5000.0 || rawVal < -15.0
                                         "%" -> rawVal > 100.0 || rawVal < 0.0
                                         "RPM" -> rawVal > 10000.0 || rawVal < -1000.0
@@ -2416,6 +2762,7 @@ class BluetoothObdManager {
             _activeOpendbcProfile.value = null
             _isHighSpeedCanCapable.value = false
             _adapterHardwareName.value = "Generic ELM327"
+            _isStreamingLiveData.value = false
             _connectionState.value = ConnectionState.Disconnected
             Log.i(TAG, "Disconnected successfully.")
         }
@@ -2526,7 +2873,6 @@ class BluetoothObdManager {
             initializeElm327()
             discoverSupportedPids()
             fetchVehicleVin()
-            fetchVehicleOdometer()
 
             _connectionState.value = ConnectionState.Connected("Wi-Fi OBD ($host:$port)")
             startPollingLoop()
@@ -2595,7 +2941,6 @@ class BluetoothObdManager {
             initializeElm327()
             discoverSupportedPids()
             fetchVehicleVin()
-            fetchVehicleOdometer()
 
             val devName = device.manufacturerName ?: "Vgate vLinker FS USB"
             _connectionState.value = ConnectionState.Connected("USB: $devName")
