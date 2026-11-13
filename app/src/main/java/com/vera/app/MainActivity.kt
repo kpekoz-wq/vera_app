@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.widget.Toast
 import android.net.Uri
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -344,7 +345,7 @@ fun generateChatTranscriptText(
         for ((idx, msg) in messages.withIndex()) {
             val senderLabel = when (msg.sender) {
                 "User" -> "YOU"
-                "VERA", "OttoAI" -> "VERA MECHANIC"
+                "VERA", "OttoAI" -> "VERA AI"
                 "VERA (Live)", "OttoAI (Live)" -> "VERA (LIVE)"
                 else -> msg.sender.uppercase()
             }
@@ -675,14 +676,16 @@ fun formatObdbValueWithUnit(
     if (valObj == null) return Pair("--", "")
     val rawVal = (valObj as? Number)?.toDouble()
     val idLower = sigId.lowercase()
+    val nameLower = (sig?.name ?: "").lowercase()
     val rawUnit = (sig?.unit?.lowercase()?.trim()?.takeIf { it.isNotBlank() }) ?: when {
-        idLower.contains("rpm") -> "rpm"
-        idLower.contains("temp") || idLower.contains("coolant") || idLower.contains("intake") || idLower.contains("ambient") -> "celsius"
-        idLower.contains("fuel") || idLower.contains("level") || idLower.contains("charge") || idLower.contains("percent") || idLower.contains("soc") -> "percent"
+        idLower.contains("rpm") || nameLower.contains("rpm") -> "rpm"
+        idLower.contains("temp") || idLower.contains("coolant") || idLower.contains("intake") || idLower.contains("ambient") || nameLower.contains("temp") -> "celsius"
+        idLower.contains("fuel") || idLower.contains("level") || idLower.contains("charge") || idLower.contains("percent") || idLower.contains("soc") || nameLower.contains("soc") -> "percent"
         idLower.contains("pressure") || idLower.contains("psi") || idLower.contains("kpa") || idLower.contains("tire") || idLower.contains("baro") -> "psi"
-        idLower.contains("speed") -> "kilometersperhour"
+        idLower.contains("speed") || nameLower.contains("speed") -> "kilometersperhour"
         idLower.contains("odo") || idLower.contains("distance") || idLower.contains("trip") -> "kilometers"
-        idLower.contains("volt") -> "volts"
+        idLower.contains("volt") || nameLower.contains("voltage") -> "volts"
+        idLower.contains("curr") || nameLower.contains("current") -> "amperes"
         idLower.contains("angle") || idLower.contains("deg") -> "degrees"
         else -> ""
     }
@@ -753,23 +756,496 @@ fun formatObdbValueWithUnit(
                     Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "psi")
                 }
             }
+            "bar" -> {
+                if (unitSystem == UnitSystem.SAE) {
+                    Pair(String.format(java.util.Locale.US, "%.1f", rawVal * 14.5038), "psi")
+                } else {
+                    Pair(String.format(java.util.Locale.US, "%.2f", rawVal), "bar")
+                }
+            }
             "percent", "%" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "%")
             "volts", "v" -> Pair(String.format(java.util.Locale.US, "%.2f", rawVal), "V")
-            "degrees", "°" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "°")
+            "amperes", "amps", "a" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "A")
+            "milliamperes", "ma" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "mA")
+            "watts", "w" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "W")
+            "kilowatts", "kw" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "kW")
+            "ohms", "ohm" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "Ω")
+            "newtonmeters", "nm" -> {
+                if (unitSystem == UnitSystem.SAE) {
+                    Pair(String.format(java.util.Locale.US, "%.0f", rawVal * 0.737562), "lb-ft")
+                } else {
+                    Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "Nm")
+                }
+            }
+            "gramspersecond", "g/s" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "g/s")
+            "milliseconds", "ms" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "ms")
+            "degrees", "°", "deg" -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), "°")
             "rpm" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "RPM")
-            "seconds", "sec" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "sec")
-            "offon" -> Pair(if (rawVal > 0) "ON" else "OFF", "")
-            "scalar", "count", "counts" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "")
+            "seconds", "sec", "s" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "sec")
+            "offon", "onoff", "boolean", "bool" -> Pair(if (rawVal > 0.0) "ON" else "OFF", "STATUS")
+            "noyes", "yesno" -> Pair(if (rawVal > 0.0) "YES" else "NO", "STATUS")
+            "scalar", "count", "counts", "none", "" -> Pair(String.format(java.util.Locale.US, "%.0f", rawVal), "")
             else -> Pair(String.format(java.util.Locale.US, "%.1f", rawVal), rawUnit)
         }
     } else {
-        val strVal = valObj.toString()
-        if (rawUnit == "offon") {
-            val isOff = strVal == "0" || strVal.equals("OFF", ignoreCase = true)
-            return Pair(if (isOff) "OFF" else "ON", "")
+        val strVal = valObj.toString().trim()
+        if (strVal.isBlank() || strVal.equals("null", ignoreCase = true) || strVal == "--") {
+            return Pair("--", "")
         }
-        return Pair(strVal, rawUnit)
+        if (rawUnit == "offon" || rawUnit == "onoff") {
+            val isOff = strVal == "0" || strVal == "0.0" || strVal.equals("OFF", ignoreCase = true) || strVal.equals("FALSE", ignoreCase = true)
+            return Pair(if (isOff) "OFF" else "ON", "STATUS")
+        }
+        if (rawUnit == "noyes" || rawUnit == "yesno") {
+            val isNo = strVal == "0" || strVal == "0.0" || strVal.equals("NO", ignoreCase = true) || strVal.equals("FALSE", ignoreCase = true)
+            return Pair(if (isNo) "NO" else "YES", "STATUS")
+        }
+        return Pair(strVal, if (rawUnit in listOf("offon", "noyes", "yesno", "onoff", "none")) "" else rawUnit)
     }
+}
+
+enum class CustomPidCategory(val displayName: String) {
+    HYBRID_EV("Hybrid / HV Battery"),
+    POWERTRAIN("Engine & Fuel"),
+    TRANSMISSION("Transmission"),
+    ELECTRICAL("12V & Electrical"),
+    CHASSIS_TPMS("Brakes & Tires"),
+    CLIMATE_BODY("Climate & Body"),
+    STATUS_SWITCHES("Switches & Status")
+}
+
+enum class PidHealthStatus {
+    NORMAL,
+    MARGINAL,
+    OUT_OF_RANGE
+}
+
+data class CustomPidItem(
+    val key: String,
+    val name: String,
+    val formattedValue: String,
+    val unit: String,
+    val category: CustomPidCategory,
+    val isBooleanStatus: Boolean,
+    val rawPidId: String,
+    val healthStatus: PidHealthStatus = PidHealthStatus.NORMAL,
+    val normalRangeLabel: String? = null
+)
+
+/**
+ * Evaluates a Custom PID against professional scan-tool operating thresholds (Snap-on / Autel style)
+ * and returns (PidHealthStatus, expectedNormalRangeString).
+ */
+fun evaluateCustomPidHealth(
+    name: String,
+    rawPidId: String,
+    formattedValue: String,
+    unit: String,
+    category: CustomPidCategory
+): Pair<PidHealthStatus, String?> {
+    val numVal = formattedValue.replace(",", "").toDoubleOrNull() ?: return Pair(PidHealthStatus.NORMAL, null)
+    val text = "$name $rawPidId".lowercase()
+    val u = unit.lowercase()
+
+    // 1. Transmission Fluid Temp (TFT / ATF)
+    if ((text.contains("trans") || text.contains("atf") || text.contains("tft") || text.contains("cvt")) && (u.contains("f") || u.contains("c"))) {
+        return if (u.contains("f")) {
+            val status = when {
+                numVal > 235.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal > 215.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 140–215 °F")
+        } else {
+            val status = when {
+                numVal > 113.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal > 102.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 60–102 °C")
+        }
+    }
+
+    // 2. Engine Oil Temp (EOT)
+    if (text.contains("oil") && (text.contains("temp") || text.contains("eot")) && (u.contains("f") || u.contains("c"))) {
+        return if (u.contains("f")) {
+            val status = when {
+                numVal > 245.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal > 230.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 180–230 °F")
+        } else {
+            val status = when {
+                numVal > 118.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal > 110.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 82–110 °C")
+        }
+    }
+
+    // 3. Cylinder Head Temp / Engine Coolant Temp
+    if ((text.contains("cylinder head") || text.contains("cht") || text.contains("coolant")) && (u.contains("f") || u.contains("c"))) {
+        return if (u.contains("f")) {
+            val status = when {
+                numVal > 235.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal > 220.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 180–220 °F")
+        } else {
+            val status = when {
+                numVal > 113.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal > 104.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 82–104 °C")
+        }
+    }
+
+    // 4. Hybrid / HV Battery & MG1/MG2 Inverter Temperatures
+    if (category == CustomPidCategory.HYBRID_EV && (u.contains("f") || u.contains("c"))) {
+        val isInverterOrMotor = text.contains("mg1") || text.contains("mg2") || text.contains("inverter") || text.contains("motor")
+        return if (isInverterOrMotor) {
+            if (u.contains("f")) {
+                val status = when {
+                    numVal > 195.0 -> PidHealthStatus.OUT_OF_RANGE
+                    numVal > 170.0 -> PidHealthStatus.MARGINAL
+                    else -> PidHealthStatus.NORMAL
+                }
+                Pair(status, "Spec: < 170 °F")
+            } else {
+                val status = when {
+                    numVal > 90.0 -> PidHealthStatus.OUT_OF_RANGE
+                    numVal > 77.0 -> PidHealthStatus.MARGINAL
+                    else -> PidHealthStatus.NORMAL
+                }
+                Pair(status, "Spec: < 77 °C")
+            }
+        } else {
+            if (u.contains("f")) {
+                val status = when {
+                    numVal > 122.0 -> PidHealthStatus.OUT_OF_RANGE
+                    numVal > 108.0 -> PidHealthStatus.MARGINAL
+                    else -> PidHealthStatus.NORMAL
+                }
+                Pair(status, "Spec: 60–108 °F")
+            } else {
+                val status = when {
+                    numVal > 50.0 -> PidHealthStatus.OUT_OF_RANGE
+                    numVal > 42.0 -> PidHealthStatus.MARGINAL
+                    else -> PidHealthStatus.NORMAL
+                }
+                Pair(status, "Spec: 15–42 °C")
+            }
+        }
+    }
+
+    // 5. 12V Aux Battery / Control Module Voltage
+    if (u == "v" && (category == CustomPidCategory.ELECTRICAL || text.contains("12v") || text.contains("aux") || text.contains("bcm") || text.contains("battery voltage"))) {
+        val status = when {
+            numVal < 11.7 || numVal > 15.2 -> PidHealthStatus.OUT_OF_RANGE
+            numVal < 12.3 || numVal > 14.8 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: 12.4–14.8 V")
+    }
+
+    // 6. Ignition Knock Retard & VCT Cam Phaser Timing Error (only for timing angle in degrees, NOT raw knock sensor voltage/noise)
+    val isDegrees = u == "°" || u == "deg" || u == "degrees"
+    val isTimingRetardOrPhaserError = isDegrees && (
+        (text.contains("knock") && (text.contains("retard") || text.contains("timing") || text.contains("kr"))) ||
+        (text.contains("phaser") && text.contains("error")) ||
+        (text.contains("vct") && text.contains("error"))
+    )
+    if (isTimingRetardOrPhaserError) {
+        val absVal = kotlin.math.abs(numVal)
+        val status = when {
+            absVal > 3.5 -> PidHealthStatus.OUT_OF_RANGE
+            absVal > 1.2 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: 0.0–1.2°")
+    }
+
+    // 7. Torque Converter Slip
+    if (text.contains("slip") && u == "rpm") {
+        val absVal = kotlin.math.abs(numVal)
+        val status = when {
+            absVal > 90.0 -> PidHealthStatus.OUT_OF_RANGE
+            absVal > 35.0 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: 0–35 RPM")
+    }
+
+    // 8. Engine Oil Pressure
+    if (text.contains("oil") && text.contains("pressure")) {
+        return if (u == "psi") {
+            val status = when {
+                numVal < 12.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal < 22.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 25–65 psi")
+        } else {
+            val status = when {
+                numVal < 80.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal < 150.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 170–450 kPa")
+        }
+    }
+
+    // 9. Fuel Rail Pressure (Low-pressure port injection)
+    if (text.contains("fuel rail") && u == "psi" && numVal < 120.0) {
+        val status = when {
+            numVal < 22.0 || numVal > 75.0 -> PidHealthStatus.OUT_OF_RANGE
+            numVal < 30.0 || numVal > 65.0 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: 32–60 psi")
+    }
+
+    // 10. Tire Pressure (TPMS)
+    if ((text.contains("tire") || text.contains("tpms")) && (u == "psi" || u == "bar" || u == "kpa")) {
+        return if (u == "psi") {
+            val status = when {
+                numVal < 24.0 || numVal > 46.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal < 28.5 || numVal > 40.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 30–38 psi")
+        } else if (u == "bar") {
+            val status = when {
+                numVal < 1.65 || numVal > 3.2 -> PidHealthStatus.OUT_OF_RANGE
+                numVal < 1.95 || numVal > 2.8 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 2.1–2.6 bar")
+        } else {
+            val status = when {
+                numVal < 165.0 || numVal > 320.0 -> PidHealthStatus.OUT_OF_RANGE
+                numVal < 195.0 || numVal > 280.0 -> PidHealthStatus.MARGINAL
+                else -> PidHealthStatus.NORMAL
+            }
+            Pair(status, "Spec: 210–260 kPa")
+        }
+    }
+
+    // 11. 12V Battery State of Charge & Engine Oil Life Remaining
+    if ((text.contains("12v") && text.contains("soc")) || (text.contains("battery") && text.contains("soc") && category == CustomPidCategory.ELECTRICAL)) {
+        val status = when {
+            numVal < 45.0 -> PidHealthStatus.OUT_OF_RANGE
+            numVal < 65.0 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: 70–100%")
+    }
+    if (text.contains("oil life") && u == "%") {
+        val status = when {
+            numVal <= 5.0 -> PidHealthStatus.OUT_OF_RANGE
+            numVal <= 15.0 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: > 15%")
+    }
+    if (text.contains("fuel pump") && text.contains("duty") && u == "%") {
+        val status = when {
+            numVal > 90.0 -> PidHealthStatus.OUT_OF_RANGE
+            numVal > 75.0 -> PidHealthStatus.MARGINAL
+            else -> PidHealthStatus.NORMAL
+        }
+        return Pair(status, "Spec: 25–65%")
+    }
+
+    return Pair(PidHealthStatus.NORMAL, null)
+}
+
+fun isHybridOrEvVehicle(vehicleDetails: String?, obdbRepoName: String? = null): Boolean {
+    val combined = "${vehicleDetails ?: ""} ${obdbRepoName ?: ""}".lowercase()
+    val hybridKeywords = listOf(
+        "prius", "hybrid", "prime", "ct200h", "es300h", "rx400h", "rx450h", "nx300h", "ux250h",
+        "rav4 hv", "camry hv", "highlander hv", "avalon hv", "corolla hv", "sienna", "venza",
+        "volt", "bolt", "leaf", "tesla", "mach-e", "lightning", "ioniq", "niro", "kona ev",
+        "ev6", "id.4", "e-tron", "taycan", "insight", "clarity", "cr-z", "accord hybrid", "cr-v hybrid"
+    )
+    return hybridKeywords.any { combined.contains(it) }
+}
+
+fun buildUnifiedCustomPidList(
+    mode22Streams: List<Mode22StreamData>,
+    obdbLoadedResult: ObdbRepository.LoadResult?,
+    obdbSignalResults: Map<String, Any?>,
+    unitSystem: UnitSystem,
+    vehicleDetails: String?,
+    isMoving: Boolean = false
+): List<CustomPidItem> {
+    val loaded = obdbLoadedResult as? ObdbRepository.LoadResult.Loaded
+    val isHybridOrEv = isHybridOrEvVehicle(vehicleDetails, loaded?.repo)
+    val result = mutableListOf<CustomPidItem>()
+    val seenNames = mutableSetOf<String>()
+
+    // 1. Mode 22 Enhanced Streams
+    for (stream in mode22Streams) {
+        val (valStr, unitStr) = formatMode22ValueWithUnit(stream.rawValue, stream.pid, unitSystem, isMoving)
+        if (valStr == "--" || valStr.isBlank()) continue
+        val catLower = stream.pid.category.lowercase()
+        val cat = when {
+            catLower == "transmission" -> CustomPidCategory.TRANSMISSION
+            catLower == "battery" || catLower == "electrical" -> CustomPidCategory.ELECTRICAL
+            catLower == "chassis" || catLower == "tpms" || catLower == "brakes" -> CustomPidCategory.CHASSIS_TPMS
+            catLower == "climate" || catLower == "body" -> CustomPidCategory.CLIMATE_BODY
+            catLower == "hybrid" -> if (isHybridOrEv) CustomPidCategory.HYBRID_EV else continue
+            else -> CustomPidCategory.POWERTRAIN
+        }
+        val cleanName = stream.pid.name.trim()
+        val rawPidId = "${stream.pid.servicePrefix}${stream.pid.pidHex}"
+        val (health, specLabel) = evaluateCustomPidHealth(cleanName, rawPidId, valStr, unitStr, cat)
+        if (seenNames.add(cleanName.lowercase())) {
+            result.add(
+                CustomPidItem(
+                    key = "M22_${stream.pid.pidHex}",
+                    name = cleanName,
+                    formattedValue = valStr,
+                    unit = unitStr,
+                    category = cat,
+                    isBooleanStatus = false,
+                    rawPidId = rawPidId,
+                    healthStatus = health,
+                    normalRangeLabel = specLabel
+                )
+            )
+        }
+    }
+
+    // 2. OBDb Community Signalset Parameters
+    val allSignals = loaded?.commands?.flatMap { it.signals }?.associateBy { it.id } ?: emptyMap()
+    for ((sigId, valObj) in obdbSignalResults) {
+        if (valObj == null) continue
+        val sig = allSignals[sigId]
+        val (fmtVal, fmtUnit) = formatObdbValueWithUnit(valObj, sig, sigId, unitSystem)
+        if (fmtVal == "--" || fmtVal.isBlank() || fmtVal.equals("null", ignoreCase = true)) continue
+
+        val cleanName = (sig?.name?.takeIf { it.isNotBlank() } ?: sigId).trim()
+        val combinedMeta = "${sig?.path ?: ""} $cleanName $sigId".lowercase()
+        val isBool = fmtUnit == "STATUS" || fmtVal in setOf("ON", "OFF", "YES", "NO")
+
+        val isHybridSignal = combinedMeta.contains("hybrid") || combinedMeta.contains("hv_") ||
+                combinedMeta.contains("mg1") || combinedMeta.contains("mg2") ||
+                combinedMeta.contains("inverter") || combinedMeta.contains("block_") ||
+                combinedMeta.contains("traction") || combinedMeta.contains("regen") ||
+                (combinedMeta.contains("soc") && !combinedMeta.contains("12v") && !combinedMeta.contains("aux"))
+
+        // Never show hybrid battery / MG1 / MG2 parameters on an exclusively gas car
+        if (isHybridSignal && !isHybridOrEv) continue
+
+        val category = when {
+            isBool -> CustomPidCategory.STATUS_SWITCHES
+            isHybridSignal -> CustomPidCategory.HYBRID_EV
+            combinedMeta.contains("trans") || combinedMeta.contains("gear") || combinedMeta.contains("atf") ||
+                    combinedMeta.contains("cvt") || combinedMeta.contains("clutch") || combinedMeta.contains("slip") ||
+                    combinedMeta.contains("tft") -> CustomPidCategory.TRANSMISSION
+            combinedMeta.contains("tire") || combinedMeta.contains("tpms") || combinedMeta.contains("wheel") ||
+                    combinedMeta.contains("brake") || combinedMeta.contains("abs") || combinedMeta.contains("steer") ||
+                    combinedMeta.contains("yaw") -> CustomPidCategory.CHASSIS_TPMS
+            combinedMeta.contains("ac_") || combinedMeta.contains("a/c") || combinedMeta.contains("climate") ||
+                    combinedMeta.contains("cabin") || combinedMeta.contains("blower") || combinedMeta.contains("evaporator") ||
+                    combinedMeta.contains("solar") || combinedMeta.contains("door") || combinedMeta.contains("window") ||
+                    combinedMeta.contains("seat") -> CustomPidCategory.CLIMATE_BODY
+            combinedMeta.contains("12v") || combinedMeta.contains("aux") || combinedMeta.contains("alternator") ||
+                    combinedMeta.contains("volt") || fmtUnit in setOf("V", "A", "mA") -> CustomPidCategory.ELECTRICAL
+            else -> CustomPidCategory.POWERTRAIN
+        }
+
+        val displayUnit = if (fmtUnit == "STATUS") "" else fmtUnit
+        val (health, specLabel) = evaluateCustomPidHealth(cleanName, sigId, fmtVal, displayUnit, category)
+        if (seenNames.add(cleanName.lowercase())) {
+            result.add(
+                CustomPidItem(
+                    key = "OBDB_$sigId",
+                    name = cleanName,
+                    formattedValue = fmtVal,
+                    unit = displayUnit,
+                    category = category,
+                    isBooleanStatus = isBool,
+                    rawPidId = sigId,
+                    healthStatus = health,
+                    normalRangeLabel = specLabel
+                )
+            )
+        }
+    }
+
+    return result
+}
+
+fun selectDefaultFavoriteCustomPids(
+    items: List<CustomPidItem>,
+    isHybridOrEv: Boolean,
+    maxCount: Int = 8
+): Set<String> {
+    val numericItems = items.filter { !it.isBooleanStatus }
+    if (numericItems.isEmpty()) return items.take(maxCount).map { it.key }.toSet()
+
+    fun scoreItem(item: CustomPidItem): Int {
+        val text = "${item.name} ${item.rawPidId}".lowercase()
+        val healthBonus = when (item.healthStatus) {
+            PidHealthStatus.OUT_OF_RANGE -> 200
+            PidHealthStatus.MARGINAL -> 150
+            PidHealthStatus.NORMAL -> 0
+        }
+        val baseScore = if (isHybridOrEv) {
+            when {
+                text.contains("state of charge") || text.contains("soc") -> 100
+                text.contains("mg1") || text.contains("mg2") || text.contains("inverter") -> 95
+                (item.category == CustomPidCategory.HYBRID_EV && (item.unit.contains("°") || text.contains("temp"))) -> 92
+                (item.category == CustomPidCategory.HYBRID_EV && item.unit in setOf("A", "V", "kW", "W")) -> 88
+                text.contains("aux") || text.contains("12v") || (item.category == CustomPidCategory.ELECTRICAL && item.unit == "V") -> 84
+                text.contains("trans") || text.contains("atf") || text.contains("coolant") || text.contains("oil temp") -> 80
+                text.contains("tire") || text.contains("tpms") || text.contains("brake") -> 75
+                text.contains("fuel") -> 70
+                item.category == CustomPidCategory.HYBRID_EV -> 65
+                item.unit.isNotBlank() -> 50
+                else -> 20
+            }
+        } else {
+            when {
+                text.contains("transmission") || text.contains("tft") || text.contains("atf") -> 100
+                text.contains("oil temp") || text.contains("oil pressure") || text.contains("oil life") -> 96
+                text.contains("cylinder head") || text.contains("cht") || text.contains("coolant") -> 92
+                text.contains("torque converter") || text.contains("slip") || text.contains("gear") -> 88
+                text.contains("battery") || text.contains("voltage") || text.contains("alternator") -> 84
+                text.contains("fuel") || text.contains("rail") || text.contains("boost") || text.contains("exhaust") || text.contains("knock") -> 80
+                text.contains("tire") || text.contains("tpms") -> 76
+                item.category == CustomPidCategory.POWERTRAIN && item.unit.isNotBlank() -> 60
+                item.unit.isNotBlank() -> 45
+                else -> 20
+            }
+        }
+        return baseScore + healthBonus
+    }
+
+    return numericItems
+        .sortedByDescending { scoreItem(it) }
+        .take(maxCount)
+        .map { it.key }
+        .toSet()
+}
+
+fun selectDefaultLiveStreams(streams: List<LiveStreamData>): Set<String> {
+    val keyPids = setOf("0C", "0D", "04", "05", "11", "2F", "10", "0F")
+    val found = streams.filter { keyPids.contains(it.pid.pidHex.uppercase()) }.map { it.pid.pidHex }.toSet()
+    return if (found.isNotEmpty()) found else streams.take(8).map { it.pid.pidHex }.toSet()
+}
+
+fun selectDefaultMode06(monitors: List<Mode06TestResult>): Set<String> {
+    val flagged = monitors.filter { it.status != Mode06Status.PASS }.map { it.name }.toSet()
+    if (flagged.isNotEmpty()) return flagged
+    val misfireOrCat = monitors.filter { it.category.contains("Misfire", ignoreCase = true) || it.category.contains("Catalyst", ignoreCase = true) }.map { it.name }.toSet()
+    return if (misfireOrCat.isNotEmpty()) misfireOrCat else monitors.take(8).map { it.name }.toSet()
 }
 
 fun formatMode06ValueWithUnit(rawValue: Double, unit: String, unitSystem: UnitSystem): Pair<String, String> {
@@ -1098,7 +1574,13 @@ fun TapeDeckRecordButton(
 }
 
 @Composable
-fun Mode06MonitorCard(m06: Mode06TestResult, unitSystem: UnitSystem = UnitSystem.SAE) {
+fun Mode06MonitorCard(
+    m06: Mode06TestResult,
+    unitSystem: UnitSystem = UnitSystem.SAE,
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
+) {
     val statusBgColor = when (m06.status) {
         Mode06Status.PASS -> Color(0xFF1B5E20)
         Mode06Status.WARNING -> Color(0xFFE65100)
@@ -1115,7 +1597,9 @@ fun Mode06MonitorCard(m06: Mode06TestResult, unitSystem: UnitSystem = UnitSystem
     val (formattedVal, displayUnit) = formatMode06ValueWithUnit(m06.testValue, m06.unit, unitSystem)
 
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
@@ -1150,17 +1634,32 @@ fun Mode06MonitorCard(m06: Mode06TestResult, unitSystem: UnitSystem = UnitSystem
                     )
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = statusBgColor
-                ) {
-                    Text(
-                        text = m06.status.name,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = statusTextColor,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = statusBgColor
+                    ) {
+                        Text(
+                            text = m06.status.name,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = statusTextColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    if (onToggleFavorite != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(
+                            onClick = onToggleFavorite,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            DashboardStarIcon(
+                                isSelected = isFavorite,
+                                tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1237,20 +1736,54 @@ fun Mode06MonitorCard(m06: Mode06TestResult, unitSystem: UnitSystem = UnitSystem
 }
 
 @Composable
-fun FullScreenMode06InspectorView(
+fun FullScreenMode06PickerView(
     results: List<Mode06TestResult>,
+    favoriteKeys: Set<String>,
     unitSystem: UnitSystem = UnitSystem.SAE,
+    isConnected: Boolean = true,
+    isScanning: Boolean = false,
+    onToggleFavorite: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onClearFavorites: () -> Unit,
+    onSelectFlagged: () -> Unit,
+    onSelectSmartDefaults: () -> Unit,
+    onSelectMonitor: ((Mode06TestResult) -> Unit)? = null,
     onBack: () -> Unit,
     onScan: () -> Unit
 ) {
+    BackHandler(onBack = onBack)
+
+    var searchQuery by remember { mutableStateOf("") }
     var activeCategory by remember { mutableStateOf("ALL") }
 
-    val categories = remember(results) {
-        listOf("ALL") + results.map { it.category }.distinct()
+    val flaggedCount = remember(results) {
+        results.count { it.status != Mode06Status.PASS }
     }
 
-    val filteredResults = remember(results, activeCategory) {
-        if (activeCategory == "ALL") results else results.filter { it.category == activeCategory }
+    val categories = remember(results, flaggedCount) {
+        buildList {
+            add("ALL")
+            if (flaggedCount > 0) add("FLAGGED")
+            add("FAVORITES")
+            addAll(results.map { it.category }.distinct())
+        }
+    }
+
+    val filteredResults = remember(results, activeCategory, favoriteKeys, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        results.filter { m ->
+            val matchesCat = when (activeCategory) {
+                "ALL" -> true
+                "FLAGGED" -> m.status != Mode06Status.PASS
+                "FAVORITES" -> favoriteKeys.contains(m.name)
+                else -> m.category == activeCategory
+            }
+            val matchesSearch = q.isEmpty() ||
+                    m.name.lowercase().contains(q) ||
+                    m.category.lowercase().contains(q) ||
+                    m.midHex.lowercase().contains(q)
+            matchesCat && matchesSearch
+        }
     }
 
     Surface(
@@ -1279,28 +1812,180 @@ fun FullScreenMode06InspectorView(
 
                 FilledTonalButton(
                     onClick = onScan,
+                    enabled = isConnected && !isScanning,
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                 ) {
-                    Text("Scan Mode 06", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scanning...", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    } else {
+                        Text("Scan Mode 06", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "On-Board Diagnostic Monitor Inspector",
+                text = "Mode 06 Monitor Catalog",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Text(
-                text = "Mode 06 Component Test Results & Limits",
+                text = "${favoriteKeys.size} Pinned to Dashboard • ${results.size} Evaluated Tests" + (if (flaggedCount > 0) " • $flaggedCount Flagged" else ""),
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (flaggedCount > 0) Color(0xFFFFCA28) else MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Search Bar
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search Monitors",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                text = "Search monitors (Misfire, O2, EVAP, Catalyst)...",
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Quick Actions Row
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    Surface(
+                        onClick = onSelectSmartDefaults,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = "Auto-Pick Best",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+                if (flaggedCount > 0) {
+                    item {
+                        Surface(
+                            onClick = onSelectFlagged,
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFE65100).copy(alpha = 0.25f),
+                            border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFFFCA28))
+                        ) {
+                            Text(
+                                text = "Pin Flagged ($flaggedCount)",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFFCA28),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+                item {
+                    Surface(
+                        onClick = onSelectAll,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Select All",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+                item {
+                    Surface(
+                        onClick = onClearFavorites,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Clear",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Category Filter Chips Row
             LazyRow(
@@ -1320,7 +2005,7 @@ fun FullScreenMode06InspectorView(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            if (filteredResults.isEmpty()) {
+            if (results.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1328,7 +2013,21 @@ fun FullScreenMode06InspectorView(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No monitor tests available in this category. Tap 'Scan Mode 06' to evaluate ECU monitors.",
+                        text = "No monitor tests available. Tap 'Scan Mode 06' while connected to evaluate ECU monitors.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (filteredResults.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No monitors match \"$searchQuery\" in $activeCategory.",
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1342,7 +2041,1717 @@ fun FullScreenMode06InspectorView(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(filteredResults) { m06 ->
-                        Mode06MonitorCard(m06, unitSystem)
+                        Mode06MonitorCard(
+                            m06 = m06,
+                            unitSystem = unitSystem,
+                            isFavorite = favoriteKeys.contains(m06.name),
+                            onToggleFavorite = { onToggleFavorite(m06.name) },
+                            onClick = if (onSelectMonitor != null) ({ onSelectMonitor(m06) }) else null
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FullScreenLiveStreamPickerView(
+    allStreams: List<LiveStreamData>,
+    favoriteKeys: Set<String>,
+    unitSystem: UnitSystem = UnitSystem.SAE,
+    isConnected: Boolean = true,
+    onToggleFavorite: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onClearFavorites: () -> Unit,
+    onSelectSmartDefaults: () -> Unit,
+    onInspectStream: (LiveStreamData) -> Unit,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+
+    var searchQuery by remember { mutableStateOf("") }
+    var activeTab by remember { mutableStateOf("ALL") }
+
+    val tabs = listOf("ALL", "FAVORITES")
+
+    val filteredStreams = remember(allStreams, favoriteKeys, searchQuery, activeTab) {
+        val q = searchQuery.trim().lowercase()
+        allStreams.filter { s ->
+            val matchesTab = when (activeTab) {
+                "ALL" -> true
+                "FAVORITES" -> favoriteKeys.contains(s.pid.pidHex)
+                else -> true
+            }
+            val matchesSearch = q.isEmpty() ||
+                    s.pid.name.lowercase().contains(q) ||
+                    s.pid.description.lowercase().contains(q) ||
+                    s.pid.pidHex.lowercase().contains(q) ||
+                    s.pid.unit.lowercase().contains(q)
+            matchesTab && matchesSearch
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            // Top Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text("← Dashboard", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Live Data Streams Selector",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = "${favoriteKeys.size} Pinned to Dashboard • ${allStreams.size} Discovered OBD2 Streams",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Search Bar
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search Streams",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                text = "Search live streams (RPM, Speed, Temp, MAF, O2)...",
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Quick Actions Row
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    Surface(
+                        onClick = onSelectSmartDefaults,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = "Auto-Pick Best (8 Gauges)",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+                item {
+                    Surface(
+                        onClick = onSelectAll,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Select All",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+                item {
+                    Surface(
+                        onClick = onClearFavorites,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Clear",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Tabs Row
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(tabs) { tab ->
+                    val isSelected = tab == activeTab
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { activeTab = tab },
+                        label = { Text(tab, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (allStreams.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No live streams detected yet. Connect to vehicle OBD2 adapter to discover live sensors.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (filteredStreams.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No live streams match \"$searchQuery\" in $activeTab.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredStreams, key = { it.pid.pidHex }) { stream ->
+                        val isFav = favoriteKeys.contains(stream.pid.pidHex)
+                        val (formattedVal, formattedUnit) = formatValueWithUnit(stream.rawValue, stream.pid, unitSystem)
+
+                        OutlinedCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onInspectStream(stream) },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.outlinedCardColors(
+                                containerColor = if (isFav) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                            ),
+                            border = if (isFav) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                            else androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "PID $${stream.pid.pidHex.uppercase()}",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = stream.pid.name,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    if (stream.pid.description.isNotBlank() && stream.pid.description != stream.pid.name) {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = stream.pid.description,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = formattedVal,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = formattedUnit,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(10.dp))
+
+                                    IconButton(
+                                        onClick = { onToggleFavorite(stream.pid.pidHex) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        DashboardStarIcon(
+                                            isSelected = isFav,
+                                            tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class CanSignalDisplayItem(
+    val key: String,
+    val name: String,
+    val value: String,
+    val unit: String,
+    val isLive: Boolean
+)
+
+@Composable
+fun FullScreenAdvancedDynamicsPickerView(
+    opendbcSignals: Map<String, OpendbcManager.DecodedOpendbcSignal>,
+    favoriteKeys: Set<String>,
+    unitSystem: UnitSystem = UnitSystem.SAE,
+    isConnected: Boolean = true,
+    isScanning: Boolean = false,
+    onToggleFavorite: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onClearFavorites: () -> Unit,
+    onSelectSmartDefaults: () -> Unit,
+    onInspectSignal: (String, String, String) -> Unit,
+    onScan: () -> Unit,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+
+    var searchQuery by remember { mutableStateOf("") }
+    var activeTab by remember { mutableStateOf("ALL") }
+
+    val spdUnit = if (unitSystem == UnitSystem.SAE) "mph" else "km/h"
+    val pressUnit = if (unitSystem == UnitSystem.SAE) "psi" else "bar"
+
+    val standardSignals = remember(unitSystem, isConnected) {
+        listOf(
+            CanSignalDisplayItem("Steering Angle", "Steering Angle", "--", "deg", false),
+            CanSignalDisplayItem("Brake Pressure", "Brake Pressure", "--", pressUnit, false),
+            CanSignalDisplayItem("Accelerator", "Accelerator", "--", "%", false),
+            CanSignalDisplayItem("Yaw Rate", "Yaw Rate", "--", "deg/s", false),
+            CanSignalDisplayItem("Wheel FL", "Wheel FL", "--", spdUnit, false),
+            CanSignalDisplayItem("Wheel FR", "Wheel FR", "--", spdUnit, false),
+            CanSignalDisplayItem("Wheel RL", "Wheel RL", "--", spdUnit, false),
+            CanSignalDisplayItem("Wheel RR", "Wheel RR", "--", spdUnit, false)
+        )
+    }
+
+    val allSignalItems = remember(opendbcSignals, standardSignals) {
+        if (opendbcSignals.isNotEmpty()) {
+            opendbcSignals.values.map { sig ->
+                val cleanVal = sig.formattedValue.replace(sig.unit, "").trim()
+                CanSignalDisplayItem(
+                    key = sig.name,
+                    name = sig.name,
+                    value = cleanVal,
+                    unit = sig.unit,
+                    isLive = true
+                )
+            }
+        } else {
+            standardSignals
+        }
+    }
+
+    val filteredItems = remember(allSignalItems, favoriteKeys, searchQuery, activeTab) {
+        val q = searchQuery.trim().lowercase()
+        allSignalItems.filter { item ->
+            val matchesTab = when (activeTab) {
+                "ALL" -> true
+                "FAVORITES" -> favoriteKeys.contains(item.key)
+                else -> true
+            }
+            val matchesSearch = q.isEmpty() ||
+                    item.name.lowercase().contains(q) ||
+                    item.unit.lowercase().contains(q)
+            matchesTab && matchesSearch
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            // Top Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text("← Dashboard", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                FilledTonalButton(
+                    onClick = onScan,
+                    enabled = isConnected && !isScanning,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scanning...", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    } else {
+                        Text("Scan CAN Bus", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Advanced Dynamics Signal Selector",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = "${favoriteKeys.size} Pinned to Dashboard • ${allSignalItems.size} CAN Chassis Signals",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Search Bar
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search Signals",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                text = "Search CAN signals (Steering, Brake, Wheel, Yaw)...",
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Quick Actions Row
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    Surface(
+                        onClick = onSelectSmartDefaults,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = "Auto-Pick Best (8 Gauges)",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+                item {
+                    Surface(
+                        onClick = onSelectAll,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Select All",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+                item {
+                    Surface(
+                        onClick = onClearFavorites,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Clear",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Tabs Row
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(listOf("ALL", "FAVORITES")) { tab ->
+                    val isSelected = tab == activeTab
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { activeTab = tab },
+                        label = { Text(tab, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (filteredItems.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No CAN signals match \"$searchQuery\" in $activeTab.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredItems, key = { it.key }) { item ->
+                        val isFav = favoriteKeys.contains(item.key)
+
+                        OutlinedCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onInspectSignal(item.name, item.value, item.unit) },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.outlinedCardColors(
+                                containerColor = if (isFav) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                            ),
+                            border = if (isFav) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                            else androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (item.isLive) "CAN 100Hz" else "CHASSIS",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = item.name,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = item.value,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = item.unit,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(10.dp))
+
+                                    IconButton(
+                                        onClick = { onToggleFavorite(item.key) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        DashboardStarIcon(
+                                            isSelected = isFav,
+                                            tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Modern, Clean, Flat Automotive Instrument Cluster / Dashboard Warning Icons
+// -----------------------------------------------------------------------------
+
+@Composable
+fun DashboardInspectorIcon(
+    tint: Color = MaterialTheme.colorScheme.primary,
+    modifier: Modifier = Modifier.size(13.dp)
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.13f
+        // Flat circular gauge lens
+        drawCircle(
+            color = tint,
+            radius = w * 0.34f,
+            center = Offset(w * 0.42f, h * 0.42f),
+            style = Stroke(width = stroke)
+        )
+        // Gauge needle inside lens
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.42f, h * 0.42f),
+            end = Offset(w * 0.56f, h * 0.28f),
+            strokeWidth = stroke * 0.9f,
+            cap = StrokeCap.Round
+        )
+        // Diagonal handle
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.67f, h * 0.67f),
+            end = Offset(w * 0.90f, h * 0.90f),
+            strokeWidth = stroke * 1.15f,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+fun DashboardClusterTuneIcon(
+    tint: Color = MaterialTheme.colorScheme.primary,
+    modifier: Modifier = Modifier.size(13.dp)
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.12f
+        // Three flat horizontal equalizer/cluster selector rails with indicator nodes
+        val y1 = h * 0.24f
+        val y2 = h * 0.50f
+        val y3 = h * 0.76f
+        drawLine(tint, Offset(w * 0.12f, y1), Offset(w * 0.88f, y1), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.12f, y2), Offset(w * 0.88f, y2), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.12f, y3), Offset(w * 0.88f, y3), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawCircle(tint, radius = w * 0.13f, center = Offset(w * 0.34f, y1))
+        drawCircle(tint, radius = w * 0.13f, center = Offset(w * 0.68f, y2))
+        drawCircle(tint, radius = w * 0.13f, center = Offset(w * 0.44f, y3))
+    }
+}
+
+@Composable
+fun DashboardStarIcon(
+    isSelected: Boolean,
+    tint: Color,
+    modifier: Modifier = Modifier.size(16.dp)
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val cx = w * 0.5f
+        val cy = h * 0.5f
+        val outerR = w * 0.44f
+        val innerR = w * 0.19f
+        val path = Path()
+        for (i in 0 until 10) {
+            val r = if (i % 2 == 0) outerR else innerR
+            val angle = Math.toRadians((i * 36.0) - 90.0)
+            val x = cx + (r * Math.cos(angle)).toFloat()
+            val y = cy + (r * Math.sin(angle)).toFloat()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+        if (isSelected) {
+            drawPath(path, color = tint)
+        } else {
+            drawPath(path, color = tint, style = Stroke(width = w * 0.10f, cap = StrokeCap.Round))
+        }
+    }
+}
+
+@Composable
+fun DashboardAlertTriangleIcon(
+    tint: Color,
+    modifier: Modifier = Modifier.size(14.dp)
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.11f
+        val tri = Path().apply {
+            moveTo(w * 0.50f, h * 0.12f)
+            lineTo(w * 0.90f, h * 0.86f)
+            lineTo(w * 0.10f, h * 0.86f)
+            close()
+        }
+        drawPath(tri, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+        // Exclamation stem & dot inside master warning triangle
+        drawLine(tint, Offset(w * 0.50f, h * 0.38f), Offset(w * 0.50f, h * 0.62f), strokeWidth = stroke * 1.05f, cap = StrokeCap.Round)
+        drawCircle(tint, radius = w * 0.065f, center = Offset(w * 0.50f, h * 0.74f))
+    }
+}
+
+@Composable
+fun SendPaperPlaneIcon(
+    tint: Color,
+    modifier: Modifier = Modifier.size(18.dp)
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.10f
+        // Clean, flat, geometric paper airplane icon pointing top-right
+        val wingPath = Path().apply {
+            moveTo(w * 0.90f, h * 0.12f) // Nose tip (top-right)
+            lineTo(w * 0.10f, h * 0.45f) // Left wing tip
+            lineTo(w * 0.42f, h * 0.58f) // Center fold notch
+            lineTo(w * 0.55f, h * 0.90f) // Bottom tail tip
+            close()
+        }
+        drawPath(wingPath, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+        // Inner crease line from nose tip to center fold notch
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.90f, h * 0.12f),
+            end = Offset(w * 0.42f, h * 0.58f),
+            strokeWidth = stroke * 0.95f,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+fun ChatEventFlatIcon(
+    eventType: String,
+    tint: Color,
+    modifier: Modifier = Modifier.size(15.dp)
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.105f
+        when (eventType) {
+            "CAR" -> {
+                // Flat, modern vehicle profile icon
+                val body = Path().apply {
+                    moveTo(w * 0.08f, h * 0.66f)
+                    lineTo(w * 0.08f, h * 0.50f)
+                    lineTo(w * 0.22f, h * 0.46f)
+                    lineTo(w * 0.34f, h * 0.26f)
+                    lineTo(w * 0.68f, h * 0.26f)
+                    lineTo(w * 0.82f, h * 0.46f)
+                    lineTo(w * 0.92f, h * 0.50f)
+                    lineTo(w * 0.92f, h * 0.66f)
+                    close()
+                }
+                drawPath(body, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+                // Wheels
+                drawCircle(tint, radius = w * 0.11f, center = Offset(w * 0.27f, h * 0.70f), style = Stroke(width = stroke))
+                drawCircle(tint, radius = w * 0.11f, center = Offset(w * 0.73f, h * 0.70f), style = Stroke(width = stroke))
+            }
+            "SIGNAL" -> {
+                // Flat, modern diagnostic pulse / telemetry waveform icon
+                val wave = Path().apply {
+                    moveTo(w * 0.08f, h * 0.52f)
+                    lineTo(w * 0.28f, h * 0.52f)
+                    lineTo(w * 0.40f, h * 0.20f)
+                    lineTo(w * 0.56f, h * 0.82f)
+                    lineTo(w * 0.68f, h * 0.42f)
+                    lineTo(w * 0.78f, h * 0.52f)
+                    lineTo(w * 0.92f, h * 0.52f)
+                }
+                drawPath(wave, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+            }
+            "REC" -> {
+                // Flat recording indicator (outer ring + solid inner core)
+                drawCircle(tint, radius = w * 0.38f, center = Offset(w * 0.5f, h * 0.5f), style = Stroke(width = stroke))
+                drawCircle(tint, radius = w * 0.18f, center = Offset(w * 0.5f, h * 0.5f))
+            }
+            "SAVE" -> {
+                // Flat telemetry document / snapshot card icon
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(w * 0.18f, h * 0.12f),
+                    size = Size(w * 0.64f, h * 0.76f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.10f, w * 0.10f),
+                    style = Stroke(width = stroke)
+                )
+                drawLine(tint, Offset(w * 0.32f, h * 0.36f), Offset(w * 0.68f, h * 0.36f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.32f, h * 0.52f), Offset(w * 0.68f, h * 0.52f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.32f, h * 0.68f), Offset(w * 0.54f, h * 0.68f), strokeWidth = stroke, cap = StrokeCap.Round)
+            }
+            "TRASH" -> {
+                // Flat minimal bin icon
+                drawLine(tint, Offset(w * 0.20f, h * 0.26f), Offset(w * 0.80f, h * 0.26f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.38f, h * 0.16f), Offset(w * 0.62f, h * 0.16f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(w * 0.26f, h * 0.26f),
+                    size = Size(w * 0.48f, h * 0.60f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.08f, w * 0.08f),
+                    style = Stroke(width = stroke)
+                )
+            }
+            "MODEL" -> {
+                // Flat geometric 4-point AI spark / star icon
+                val spark = Path().apply {
+                    moveTo(w * 0.50f, h * 0.10f)
+                    lineTo(w * 0.62f, h * 0.38f)
+                    lineTo(w * 0.90f, h * 0.50f)
+                    lineTo(w * 0.62f, h * 0.62f)
+                    lineTo(w * 0.50f, h * 0.90f)
+                    lineTo(w * 0.38f, h * 0.62f)
+                    lineTo(w * 0.10f, h * 0.50f)
+                    lineTo(w * 0.38f, h * 0.38f)
+                    close()
+                }
+                drawPath(spark, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+            }
+            "WARN" -> {
+                val tri = Path().apply {
+                    moveTo(w * 0.50f, h * 0.14f)
+                    lineTo(w * 0.88f, h * 0.84f)
+                    lineTo(w * 0.12f, h * 0.84f)
+                    close()
+                }
+                drawPath(tri, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+                drawLine(tint, Offset(w * 0.50f, h * 0.40f), Offset(w * 0.50f, h * 0.62f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawCircle(tint, radius = w * 0.06f, center = Offset(w * 0.50f, h * 0.73f))
+            }
+            else -> {
+                // Flat info badge
+                drawCircle(tint, radius = w * 0.38f, center = Offset(w * 0.5f, h * 0.5f), style = Stroke(width = stroke))
+                drawCircle(tint, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.33f))
+                drawLine(tint, Offset(w * 0.5f, h * 0.46f), Offset(w * 0.5f, h * 0.70f), strokeWidth = stroke, cap = StrokeCap.Round)
+            }
+        }
+    }
+}
+
+@Composable
+fun DashboardPidIcon(
+    item: CustomPidItem,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    modifier: Modifier = Modifier.size(16.dp)
+) {
+    val nameLower = item.name.lowercase()
+    val unitLower = item.unit.lowercase()
+    val isTemp = unitLower.contains("°") || nameLower.contains("temp") || nameLower.contains("coolant") || nameLower.contains("cht") || nameLower.contains("atf") || nameLower.contains("tft")
+
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.10f
+
+        when {
+            // 1. Instrument Cluster Thermometer + Fluid Waves (Coolant / ATF / Oil / Inverter Temp)
+            isTemp -> {
+                drawLine(tint, Offset(w * 0.5f, h * 0.14f), Offset(w * 0.5f, h * 0.58f), strokeWidth = stroke * 1.1f, cap = StrokeCap.Round)
+                drawCircle(tint, radius = w * 0.14f, center = Offset(w * 0.5f, h * 0.64f))
+                // Two horizontal tick marks on thermometer stem
+                drawLine(tint, Offset(w * 0.54f, h * 0.25f), Offset(w * 0.68f, h * 0.25f), strokeWidth = stroke * 0.85f, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.54f, h * 0.40f), Offset(w * 0.68f, h * 0.40f), strokeWidth = stroke * 0.85f, cap = StrokeCap.Round)
+                // Flat coolant waves at base
+                drawLine(tint, Offset(w * 0.16f, h * 0.86f), Offset(w * 0.84f, h * 0.86f), strokeWidth = stroke * 0.9f, cap = StrokeCap.Round)
+            }
+
+            // 2. Hybrid / HV Battery & Electric Drive Ready Lamp (High-Voltage Lightning Emblem)
+            item.category == CustomPidCategory.HYBRID_EV -> {
+                drawCircle(tint, radius = w * 0.42f, center = Offset(w * 0.5f, h * 0.5f), style = Stroke(width = stroke))
+                val bolt = Path().apply {
+                    moveTo(w * 0.55f, h * 0.20f)
+                    lineTo(w * 0.34f, h * 0.52f)
+                    lineTo(w * 0.50f, h * 0.52f)
+                    lineTo(w * 0.45f, h * 0.80f)
+                    lineTo(w * 0.66f, h * 0.48f)
+                    lineTo(w * 0.50f, h * 0.48f)
+                    close()
+                }
+                drawPath(bolt, color = tint)
+            }
+
+            // 3. 12V Battery / Charging System Dashboard Warning Lamp
+            item.category == CustomPidCategory.ELECTRICAL -> {
+                // Battery terminals
+                drawRect(tint, topLeft = Offset(w * 0.22f, h * 0.18f), size = Size(w * 0.14f, h * 0.08f))
+                drawRect(tint, topLeft = Offset(w * 0.64f, h * 0.18f), size = Size(w * 0.14f, h * 0.08f))
+                // Battery body outline
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(w * 0.12f, h * 0.26f),
+                    size = Size(w * 0.76f, h * 0.56f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.08f),
+                    style = Stroke(width = stroke)
+                )
+                // Minus sign (left) and Plus sign (right)
+                drawLine(tint, Offset(w * 0.24f, h * 0.54f), Offset(w * 0.38f, h * 0.54f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.62f, h * 0.54f), Offset(w * 0.76f, h * 0.54f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.69f, h * 0.47f), Offset(w * 0.69f, h * 0.61f), strokeWidth = stroke, cap = StrokeCap.Round)
+            }
+
+            // 4. Transmission / Drivetrain Planetary Gear Lamp
+            item.category == CustomPidCategory.TRANSMISSION -> {
+                val cx = w * 0.5f
+                val cy = h * 0.5f
+                drawCircle(tint, radius = w * 0.28f, center = Offset(cx, cy), style = Stroke(width = stroke * 1.1f))
+                drawCircle(tint, radius = w * 0.11f, center = Offset(cx, cy))
+                for (i in 0 until 8) {
+                    val angle = Math.toRadians(i * 45.0)
+                    val x1 = cx + (w * 0.28f * Math.cos(angle)).toFloat()
+                    val y1 = cy + (h * 0.28f * Math.sin(angle)).toFloat()
+                    val x2 = cx + (w * 0.42f * Math.cos(angle)).toFloat()
+                    val y2 = cy + (h * 0.42f * Math.sin(angle)).toFloat()
+                    drawLine(tint, Offset(x1, y1), Offset(x2, y2), strokeWidth = stroke * 1.15f, cap = StrokeCap.Round)
+                }
+            }
+
+            // 5. Brakes / ABS / TPMS Tire Warning Lamp
+            item.category == CustomPidCategory.CHASSIS_TPMS -> {
+                val cx = w * 0.5f
+                val cy = h * 0.5f
+                drawCircle(tint, radius = w * 0.32f, center = Offset(cx, cy), style = Stroke(width = stroke))
+                // Brake shoe arcs on left & right (! style)
+                drawArc(
+                    color = tint,
+                    startAngle = 140f,
+                    sweepAngle = 80f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.06f, h * 0.12f),
+                    size = Size(w * 0.88f, h * 0.76f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = tint,
+                    startAngle = -40f,
+                    sweepAngle = 80f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.06f, h * 0.12f),
+                    size = Size(w * 0.88f, h * 0.76f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+                drawCircle(tint, radius = w * 0.09f, center = Offset(cx, cy))
+            }
+
+            // 6. Climate / Cabin Airflow Lamp
+            item.category == CustomPidCategory.CLIMATE_BODY -> {
+                val cx = w * 0.5f
+                val cy = h * 0.5f
+                for (i in 0 until 3) {
+                    val angle = Math.toRadians(i * 60.0)
+                    val dx = (w * 0.38f * Math.cos(angle)).toFloat()
+                    val dy = (h * 0.38f * Math.sin(angle)).toFloat()
+                    drawLine(tint, Offset(cx - dx, cy - dy), Offset(cx + dx, cy + dy), strokeWidth = stroke, cap = StrokeCap.Round)
+                }
+            }
+
+            // 7. Binary Switch / Status Indicator Lamp
+            item.category == CustomPidCategory.STATUS_SWITCHES -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(w * 0.12f, h * 0.28f),
+                    size = Size(w * 0.76f, h * 0.44f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(h * 0.22f),
+                    style = Stroke(width = stroke)
+                )
+                val knobX = if (item.formattedValue in setOf("ON", "YES")) w * 0.64f else w * 0.36f
+                drawCircle(tint, radius = w * 0.13f, center = Offset(knobX, h * 0.5f))
+            }
+
+            // 8. Default Powertrain / Check Engine Block Outline Lamp
+            else -> {
+                val p = Path().apply {
+                    moveTo(w * 0.26f, h * 0.32f)
+                    lineTo(w * 0.72f, h * 0.32f)
+                    lineTo(w * 0.84f, h * 0.44f)
+                    lineTo(w * 0.84f, h * 0.72f)
+                    lineTo(w * 0.26f, h * 0.72f)
+                    lineTo(w * 0.16f, h * 0.60f)
+                    lineTo(w * 0.16f, h * 0.42f)
+                    close()
+                }
+                drawPath(p, color = tint, style = Stroke(width = stroke))
+                // Top valve cover & front pulley
+                drawLine(tint, Offset(w * 0.36f, h * 0.20f), Offset(w * 0.62f, h * 0.20f), strokeWidth = stroke, cap = StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.49f, h * 0.20f), Offset(w * 0.49f, h * 0.32f), strokeWidth = stroke)
+            }
+        }
+    }
+}
+
+@Composable
+fun FullScreenCustomPidPickerView(
+    allItems: List<CustomPidItem>,
+    favoriteKeys: Set<String>,
+    isHybridOrEv: Boolean,
+    vehicleTitle: String,
+    isConnected: Boolean = true,
+    isScanning: Boolean,
+    onToggleFavorite: (String) -> Unit,
+    onApplySmartDefaults: () -> Unit,
+    onSelectQuestionable: () -> Unit,
+    onSelectAllGauges: () -> Unit,
+    onClearFavorites: () -> Unit,
+    onInspectItem: ((CustomPidItem) -> Unit)? = null,
+    onScan: () -> Unit,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+
+    var searchQuery by remember { mutableStateOf("") }
+    var activeTab by remember { mutableStateOf("ALL") }
+
+    val questionableCount = remember(allItems) {
+        allItems.count { it.healthStatus != PidHealthStatus.NORMAL }
+    }
+
+    val availableTabs = remember(allItems, isHybridOrEv, questionableCount) {
+        buildList {
+            add("ALL")
+            if (questionableCount > 0) {
+                add("FLAGGED")
+            }
+            add("FAVORITES")
+            if (isHybridOrEv && allItems.any { it.category == CustomPidCategory.HYBRID_EV }) {
+                add(CustomPidCategory.HYBRID_EV.displayName)
+            }
+            for (cat in listOf(
+                CustomPidCategory.POWERTRAIN,
+                CustomPidCategory.TRANSMISSION,
+                CustomPidCategory.ELECTRICAL,
+                CustomPidCategory.CHASSIS_TPMS,
+                CustomPidCategory.CLIMATE_BODY,
+                CustomPidCategory.STATUS_SWITCHES
+            )) {
+                if (allItems.any { it.category == cat }) {
+                    add(cat.displayName)
+                }
+            }
+        }
+    }
+
+    val filteredItems = remember(allItems, favoriteKeys, searchQuery, activeTab) {
+        val q = searchQuery.trim().lowercase()
+        allItems.filter { item ->
+            val matchesTab = when (activeTab) {
+                "ALL" -> !item.isBooleanStatus || q.isNotEmpty()
+                "FLAGGED" -> item.healthStatus != PidHealthStatus.NORMAL
+                "FAVORITES" -> favoriteKeys.contains(item.key)
+                else -> item.category.displayName == activeTab
+            }
+            val matchesSearch = q.isEmpty() ||
+                    item.name.lowercase().contains(q) ||
+                    item.category.displayName.lowercase().contains(q) ||
+                    item.rawPidId.lowercase().contains(q) ||
+                    item.unit.lowercase().contains(q)
+            matchesTab && matchesSearch
+        }
+    }
+
+    val groupedItems = remember(filteredItems) {
+        filteredItems.groupBy { it.category }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            // Top Navigation Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text("← Dashboard", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                FilledTonalButton(
+                    onClick = onScan,
+                    enabled = isConnected && !isScanning,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scanning...", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    } else {
+                        Text("Rescan ECU", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Title & Stats Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "$vehicleTitle Custom PID Catalog",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = buildString {
+                            append("${favoriteKeys.size} Pinned • ${allItems.size} Valid Signals")
+                            if (questionableCount > 0) {
+                                append(" • $questionableCount Out of Spec / Marginal")
+                            }
+                        },
+                        fontSize = 11.sp,
+                        color = if (questionableCount > 0) Color(0xFFFFCA28) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Vertically Centered Custom Search Bar (Prevents Material3 OutlinedTextField clipping)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search PIDs",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                text = "Search sensors (Battery, Temp, Oil, Tire)...",
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Category Filter Tabs
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(availableTabs) { tab ->
+                    val isSelected = tab == activeTab
+                    val label = when (tab) {
+                        "FAVORITES" -> "Favorites (${favoriteKeys.size})"
+                        "FLAGGED" -> "Flagged ($questionableCount)"
+                        else -> tab
+                    }
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { activeTab = tab },
+                        leadingIcon = if (tab == "FLAGGED") {
+                            {
+                                DashboardAlertTriangleIcon(
+                                    tint = if (isSelected) Color(0xFFFF5252) else Color(0xFFFFCA28),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        } else null,
+                        label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                }
+            }
+
+            // Quick Actions Row (Smart Defaults / Select Questionable / All Gauges / Clear)
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                item {
+                    Surface(
+                        onClick = onApplySmartDefaults,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = "Auto-Pick Best",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+
+                item {
+                    val hasFlagged = questionableCount > 0
+                    Surface(
+                        onClick = onSelectQuestionable,
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (hasFlagged) Color(0xFFE65100).copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceVariant,
+                        border = if (hasFlagged) androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFFFCA28)) else null
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DashboardAlertTriangleIcon(
+                                tint = if (hasFlagged) Color(0xFFFFCA28) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Pin Questionable ($questionableCount)",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (hasFlagged) Color(0xFFFFCA28) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Surface(
+                        onClick = onSelectAllGauges,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "All Gauges",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+
+                item {
+                    Surface(
+                        onClick = onClearFavorites,
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "Clear",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            if (allItems.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No Custom PIDs scanned yet.\nTap 'Rescan ECU' while connected to discover all parameters for this vehicle.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (filteredItems.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No parameters match \"$searchQuery\" in $activeTab.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    groupedItems.forEach { (category, catItems) ->
+                        item(key = "hdr_${category.name}") {
+                            Text(
+                                text = "${category.displayName.uppercase()} (${catItems.size})",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.8.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 6.dp, bottom = 2.dp, start = 2.dp)
+                            )
+                        }
+                        items(catItems, key = { it.key }) { item ->
+                            val isFav = favoriteKeys.contains(item.key)
+                            val baseAccentColor = when (item.category) {
+                                CustomPidCategory.HYBRID_EV -> Color(0xFF00E676)
+                                CustomPidCategory.POWERTRAIN -> Color(0xFF00E5FF)
+                                CustomPidCategory.TRANSMISSION -> Color(0xFFFFB74D)
+                                CustomPidCategory.ELECTRICAL -> Color(0xFF64B5F6)
+                                CustomPidCategory.CHASSIS_TPMS -> Color(0xFFFF8A65)
+                                CustomPidCategory.CLIMATE_BODY -> Color(0xFF81D4FA)
+                                CustomPidCategory.STATUS_SWITCHES -> Color(0xFFB0BEC5)
+                            }
+                            val accentColor = when (item.healthStatus) {
+                                PidHealthStatus.OUT_OF_RANGE -> Color(0xFFFF5252)
+                                PidHealthStatus.MARGINAL -> Color(0xFFFFCA28)
+                                PidHealthStatus.NORMAL -> baseAccentColor
+                            }
+                            val rowSurfaceColor = when {
+                                item.healthStatus == PidHealthStatus.OUT_OF_RANGE -> Color(0xFFB71C1C).copy(alpha = 0.18f)
+                                item.healthStatus == PidHealthStatus.MARGINAL -> Color(0xFFE65100).copy(alpha = 0.16f)
+                                isFav -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                            }
+                            val rowBorderColor = when {
+                                item.healthStatus == PidHealthStatus.OUT_OF_RANGE -> Color(0xFFFF5252).copy(alpha = 0.85f)
+                                item.healthStatus == PidHealthStatus.MARGINAL -> Color(0xFFFFCA28).copy(alpha = 0.80f)
+                                isFav -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                            }
+
+                            Surface(
+                                onClick = { onToggleFavorite(item.key) },
+                                shape = RoundedCornerShape(12.dp),
+                                color = rowSurfaceColor,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    width = if (item.healthStatus != PidHealthStatus.NORMAL || isFav) 1.1.dp else 0.5.dp,
+                                    color = rowBorderColor
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(accentColor.copy(alpha = 0.16f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            DashboardPidIcon(
+                                                item = item,
+                                                tint = accentColor,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.width(10.dp))
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = item.name,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                )
+                                                if (item.healthStatus != PidHealthStatus.NORMAL) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    val badgeBg = if (item.healthStatus == PidHealthStatus.OUT_OF_RANGE) Color(0xFFB71C1C) else Color(0xFFE65100)
+                                                    val badgeFg = if (item.healthStatus == PidHealthStatus.OUT_OF_RANGE) Color(0xFFFF8A80) else Color(0xFFFFE082)
+                                                    val badgeText = if (item.healthStatus == PidHealthStatus.OUT_OF_RANGE) "OUT OF SPEC" else "MARGINAL"
+                                                    Surface(
+                                                        shape = RoundedCornerShape(5.dp),
+                                                        color = badgeBg
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            DashboardAlertTriangleIcon(
+                                                                tint = badgeFg,
+                                                                modifier = Modifier.size(10.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(3.dp))
+                                                            Text(
+                                                                text = badgeText,
+                                                                fontSize = 8.sp,
+                                                                fontWeight = FontWeight.ExtraBold,
+                                                                color = badgeFg
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                text = buildString {
+                                                    append("${item.category.displayName} • ${item.rawPidId}")
+                                                    if (!item.normalRangeLabel.isNullOrBlank()) {
+                                                        append(" • ${item.normalRangeLabel}")
+                                                    }
+                                                },
+                                                fontSize = 10.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = if (item.healthStatus != PidHealthStatus.NORMAL) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    // Live Reading + Favorite Star
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (item.isBooleanStatus) {
+                                            val isPositive = item.formattedValue in setOf("ON", "YES")
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = if (isPositive) Color(0xFF1B5E20) else MaterialTheme.colorScheme.surfaceVariant
+                                            ) {
+                                                Text(
+                                                    text = item.formattedValue,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = if (isPositive) Color(0xFF81C784) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                )
+                                            }
+                                        } else {
+                                            val valueTextColor = when (item.healthStatus) {
+                                                PidHealthStatus.OUT_OF_RANGE -> Color(0xFFFF5252)
+                                                PidHealthStatus.MARGINAL -> Color(0xFFFFCA28)
+                                                PidHealthStatus.NORMAL -> MaterialTheme.colorScheme.primary
+                                            }
+                                            Column(horizontalAlignment = Alignment.End) {
+                                                Text(
+                                                    text = item.formattedValue,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Black,
+                                                    color = valueTextColor
+                                                )
+                                                if (item.unit.isNotBlank()) {
+                                                    Text(
+                                                        text = item.unit,
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        if (onInspectItem != null) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Surface(
+                                                onClick = { onInspectItem(item) },
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                                            ) {
+                                                Text(
+                                                    text = "Info",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(10.dp))
+
+                                        DashboardStarIcon(
+                                            isSelected = isFav,
+                                            tint = if (isFav) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1580,6 +3989,8 @@ fun FullScreenStreamDetailView(
     unitSystem: UnitSystem,
     onBack: () -> Unit
 ) {
+    BackHandler(onBack = onBack)
+
     val (formattedVal, formattedUnit) = formatValueWithUnit(stream.rawValue, stream.pid, unitSystem)
 
     Surface(
@@ -1721,6 +4132,337 @@ fun FullScreenStreamDetailView(
     }
 }
 
+data class TelemetryTileDetailInfo(
+    val sourceBadge: String,
+    val statusBadge: String,
+    val statusBgColor: Color,
+    val statusTextColor: Color,
+    val title: String,
+    val subtitle: String,
+    val formattedValue: String,
+    val unit: String,
+    val specOrLimitsLabel: String? = null,
+    val explanation: String,
+    val categoryOrPidInfo: String = ""
+)
+
+fun getTelemetryParameterExplanation(
+    name: String,
+    category: String,
+    unit: String,
+    sourceBadge: String,
+    rawDescription: String = ""
+): String {
+    val n = "$name $rawDescription".lowercase()
+    val u = unit.lowercase()
+    return when {
+        // Advanced Dynamics / Chassis CAN
+        n.contains("steering angle") ->
+            "Measures steering wheel rotation angle in degrees directly from the Steering Angle Sensor (SAS) on the high-speed chassis CAN bus.\n\n" +
+            "• Normal Reading: 0.0° when driving straight ahead on a level crown road. Turning left/right sweeps smoothly up to ±450–540° at full lock.\n" +
+            "• Diagnostic Meaning: If the car drives straight with the wheel off-center (e.g., > ±5°), mechanical toe alignment or SAS zero-point calibration is off, which can trigger Electronic Stability Control (ESC) or VSC warning lights."
+        n.contains("brake pressure") || (n.contains("brake") && (u == "psi" || u == "bar" || u == "kpa")) ->
+            "Measures hydraulic brake fluid line pressure inside the ABS/ESC modulator or brake booster.\n\n" +
+            "• Normal Reading: 0 psi (0 bar) with your foot off the brake pedal. Normal gentle stops produce 150–400 psi; emergency panic braking exceeds 1,200+ psi.\n" +
+            "• Diagnostic Meaning: If pressure stays above 15–25 psi with your foot off the pedal, suspect a sticking master cylinder, misadjusted brake pedal pushrod, or restricted brake hose causing dragging brakes."
+        n.contains("yaw rate") || n.contains("lateral") ->
+            "Measures vehicle rotational rate around its vertical axis (deg/s) or cornering G-force from the Inertial Measurement Unit (IMU).\n\n" +
+            "• Normal Reading: 0.0 deg/s while stationary or driving straight.\n" +
+            "• Diagnostic Meaning: The ABS/ESC module compares Yaw Rate against Steering Angle and Wheel Speeds to detect oversteer (fishtailing) or understeer (plowing) on slippery roads."
+        n.contains("wheel") && (n.contains("fl") || n.contains("fr") || n.contains("rl") || n.contains("rr") || n.contains("speed")) ->
+            "Measures individual rotational speed at a single corner wheel via the ABS tone ring and wheel speed sensor.\n\n" +
+            "• Normal Reading: All 4 wheels (FL, FR, RL, RR) should match within 0.5 mph while driving straight.\n" +
+            "• Diagnostic Meaning: A single wheel dropping to 0 mph or spiking erratically triggers ABS/Traction lights (often a cracked tone ring, rust buildup, failing wheel bearing hub, or damaged sensor harness). A steady 1–2 mph mismatch on one corner can indicate an under-inflated tire or mismatched tire size."
+        n.contains("accelerator") || n.contains("pedal") ->
+            "Measures driver accelerator pedal position (0% = foot off pedal, 100% = wide-open throttle floor) from dual redundant Hall-effect sensors.\n\n" +
+            "• Diagnostic Meaning: Smooth, linear progression from 0% to 100% confirms healthy pedal position sensors. Dead spots or sudden drops cause limp-home mode and throttle actuator codes."
+
+        // Mode 06 Monitors
+        sourceBadge.contains("MODE 06") && n.contains("misfire") ->
+            "Mode 06 Cylinder Misfire Monitor tracks crankshaft speed slowdowns on each power stroke (both Exponentially Weighted Moving Average and current drive-cycle counts).\n\n" +
+            "• Normal Reading: 0 misfires (or well below the manufacturer threshold).\n" +
+            "• Diagnostic Meaning: Mode 06 catches intermittent misfires under load (such as a weak ignition coil, worn spark plug, carbon-fouled injector, or failing AFM/MDS lifter) long before enough misfires accumulate to set a Check Engine Light (P0300–P0308)."
+        sourceBadge.contains("MODE 06") && n.contains("catalyst") ->
+            "Mode 06 Catalytic Converter Monitor compares upstream air/fuel ratio fluctuations against downstream oxygen sensor switching to calculate oxygen storage capacity.\n\n" +
+            "• Diagnostic Meaning: A test value creeping close to the failure limit warns that the catalytic converter substrate is losing efficiency (often due to oil burning, rich fuel trims, or exhaust leaks) before P0420/P0430 triggers."
+        sourceBadge.contains("MODE 06") && (n.contains("o2") || n.contains("oxygen") || n.contains("lambda")) ->
+            "Mode 06 Oxygen / Air-Fuel Ratio Sensor Monitor evaluates sensor voltage thresholds, rich-to-lean transition response time, and internal heater resistance.\n\n" +
+            "• Diagnostic Meaning: Sluggish O2 response times cause poor fuel economy, surging, and elevated tailpipe emissions."
+        sourceBadge.contains("MODE 06") && n.contains("evap") ->
+            "Mode 06 Evaporative Emissions (EVAP) Monitor checks fuel tank vapor sealing integrity against reference leak orifices (typically 0.040\" and 0.020\").\n\n" +
+            "• Diagnostic Meaning: Values near the limit indicate a deteriorating gas cap seal, cracked vapor line, or sticking purge/vent solenoid."
+        sourceBadge.contains("MODE 06") ->
+            "Mode 06 On-Board Diagnostic Component Monitor raw test value evaluated by the vehicle's PCM during non-continuous driving cycle self-tests.\n\n" +
+            "• Diagnostic Meaning: Comparing the measured value against the factory Min/Max limits reveals components that are marginal or wearing out before a permanent fault code is stored."
+
+        // Custom PIDs (Mode 22 / OBDb)
+        n.contains("knock") && (u == "v" || u.contains("volt")) ->
+            "Measures raw piezoelectric acoustic vibration voltage from the engine block knock sensor (0.0–5.0 V).\n\n" +
+            "• Normal Reading: 0.2 V to 4.5 V depending on engine RPM and normal valvetrain/piston mechanical acoustics (especially on V6/V8 engines like the Chrysler 3.6L Pentastar).\n" +
+            "• Important Distinction: Raw knock sensor voltage is NOT timing retard! A healthy knock sensor generates voltage continuously as it listens to the engine block. Only when the PCM detects a sharp detonation frequency spike does it pull ignition timing (shown separately as 'Knock Retard' in degrees °)."
+        n.contains("knock") ->
+            "Measures degrees of spark timing pulled back (retarded) by the engine computer when acoustic detonation (pinging/spark knock) is detected.\n\n" +
+            "• Normal Reading: 0.0° at idle and steady cruise (brief 0.5–1.5° blips during sudden heavy throttle tip-in are normal).\n" +
+            "• Diagnostic Meaning: Sustained knock retard above 3.0–4.0° under load reduces power and indicates low-octane fuel, excessive combustion chamber carbon, lean air/fuel ratio, or elevated intake/coolant temperatures."
+        n.contains("trans") && (n.contains("temp") || n.contains("sump") || n.contains("fluid") || n.contains("atf") || n.contains("converter")) ->
+            "Measures automatic transmission fluid (ATF) temperature inside the transmission pan, valve body, or torque converter outlet.\n\n" +
+            "• Normal Reading: 150–205 °F (65–96 °C) when fully warmed up.\n" +
+            "• Diagnostic Meaning: Every 20 °F above 200 °F cuts ATF life in half. Readings over 225 °F (107 °C) indicate heavy towing load, torque converter slip, or a restricted transmission cooler. Over 240 °F (115 °C) risks immediate clutch & seal damage."
+        n.contains("slip") && n.contains("torque") ->
+            "Measures rotational speed difference (RPM) between the engine crankshaft and transmission input shaft when the torque converter lockup clutch is engaged.\n\n" +
+            "• Normal Reading: 0–30 RPM during steady highway lockup.\n" +
+            "• Diagnostic Meaning: Slip exceeding 60–100 RPM while lockup is commanded indicates torque converter clutch friction wear, a sticking TCC solenoid, or low transmission line pressure (often felt as highway 'shudder')."
+        n.contains("oil") && n.contains("pressure") ->
+            "Measures pressurized engine oil gallery pressure supplying the crankshaft bearings, camshafts, and VVT phasers.\n\n" +
+            "• Normal Reading: Typically 18–35 psi at hot idle, rising to 45–75 psi at 2,500+ RPM.\n" +
+            "• Diagnostic Meaning: Hot idle pressure below 12–15 psi can starve cam phasers (triggering VVT timing codes) and risks rod/main bearing wear."
+        (n.contains("oil") || n.contains("cylinder head")) && n.contains("temp") ->
+            "Measures engine lubricating oil or cylinder head metal temperature.\n\n" +
+            "• Normal Reading: 185–225 °F (85–107 °C) once warmed up (typically 10–15 °F warmer than coolant under highway load).\n" +
+            "• Diagnostic Meaning: Temperatures exceeding 245 °F (118 °C) accelerate oil viscosity breakdown."
+        n.contains("cam") || n.contains("phaser") || n.contains("vvt") || n.contains("vct") ->
+            "Measures Variable Valve Timing (VVT/VCT) camshaft phase angle or camshaft-to-crankshaft offset in degrees.\n\n" +
+            "• Normal Reading: Phaser error (Desired minus Actual) should stay near 0.0° (±1.5°).\n" +
+            "• Diagnostic Meaning: Large phaser errors or sluggish response point to low/dirty engine oil, a clogged VVT oil control solenoid screen, or timing chain stretch."
+        n.contains("tire") || n.contains("tpms") ->
+            "Measures individual tire inflation pressure or internal tire air temperature from the wheel-mounted TPMS radio transmitter.\n\n" +
+            "• Normal Reading: Typically 32–36 psi cold for passenger cars, minivans, and SUVs (check driver door jamb placard).\n" +
+            "• Diagnostic Meaning: Pressures below 26–28 psi illuminate the dashboard TPMS warning light, increase tire shoulder wear, reduce fuel economy, and build excess sidewall heat at highway speeds."
+        n.contains("soc") || (n.contains("hybrid") && n.contains("battery")) || n.contains("block") ->
+            "Measures High-Voltage (HV) hybrid/EV traction battery State of Charge (%) or individual module block voltages.\n\n" +
+            "• Normal Reading: Hybrid SOC normally cycles between 40% and 75%. All HV battery blocks should remain within 0.25–0.30 V of each other under acceleration and regen.\n" +
+            "• Diagnostic Meaning: A voltage delta > 0.5 V–0.8 V between the highest and lowest battery block under load indicates a weak/failing NiMH or Li-ion module pair."
+        n.contains("inverter") || n.contains("mg1") || n.contains("mg2") || n.contains("motor") ->
+            "Measures hybrid/EV electric traction motor-generator (MG1/MG2) or power inverter coolant temperature.\n\n" +
+            "• Normal Reading: 95–185 °F (35–85 °C).\n" +
+            "• Diagnostic Meaning: Temperatures above 195–210 °F (90–99 °C) often indicate a failing electric inverter water pump or air trapped in the inverter cooling loop."
+        n.contains("fuel rail") || n.contains("fuel pressure") ->
+            "Measures fuel pressure inside the injector rail.\n\n" +
+            "• Normal Reading: Port fuel injection typically runs 45–65 psi; gasoline direct injection (GDI) runs 450–2,900+ psi depending on load.\n" +
+            "• Diagnostic Meaning: Low rail pressure under acceleration causes lean fuel trims, hesitation, and high-RPM misfires."
+        n.contains("injector") && n.contains("width") ->
+            "Measures fuel injector open duration in milliseconds (ms) per combustion cycle.\n\n" +
+            "• Normal Reading: 1.8–3.5 ms at warm idle on port-injected engines, scaling up to 12–20 ms at wide-open throttle.\n" +
+            "• Diagnostic Meaning: Uneven pulse widths between banks indicate the ECU is compensating for a vacuum leak, exhaust leak, or imbalanced injector flow."
+        u == "v" && (n.contains("battery") || n.contains("12v") || n.contains("aux") || n.contains("bcm")) ->
+            "Measures 12V electrical system voltage at the battery or control module.\n\n" +
+            "• Normal Reading: 13.5–14.7 V with the engine running (alternator/DC-DC converter charging); 12.4–12.8 V resting with engine off.\n" +
+            "• Diagnostic Meaning: Running voltage below 13.0 V indicates an undercharging alternator; resting voltage below 12.0 V indicates a discharged or sulfated 12V battery."
+        else ->
+            if (rawDescription.isNotBlank() && !rawDescription.equals(name, ignoreCase = true)) {
+                "$rawDescription\n\nThis vehicle-specific parameter is queried directly from the electronic control module ($category). Use VERA AI below to analyze how this reading correlates with your engine load, RPM, and current driving conditions."
+            } else {
+                "Vehicle-specific diagnostic parameter ($name) reported by the $category control module. Tap 'Ask VERA AI About This Parameter' below for a tailored analysis of this reading on your vehicle."
+            }
+    }
+}
+
+@Composable
+fun FullScreenTelemetryTileDetailView(
+    info: TelemetryTileDetailInfo,
+    onAskVera: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Top Navigation Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    Text("← Back", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                if (info.categoryOrPidInfo.isNotBlank()) {
+                    Text(
+                        text = info.categoryOrPidInfo,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Hero Value Card
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = info.sourceBadge,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        Surface(
+                            color = info.statusBgColor,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = info.statusBadge,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = info.statusTextColor,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = info.title,
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    if (info.subtitle.isNotBlank()) {
+                        Text(
+                            text = info.subtitle,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 3.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "${info.formattedValue} ${info.unit}".trim(),
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (info.statusBadge.contains("FAIL") || info.statusBadge.contains("OUT OF SPEC")) {
+                            Color(0xFFFF5252)
+                        } else if (info.statusBadge.contains("WARN") || info.statusBadge.contains("MARGINAL")) {
+                            Color(0xFFFFCA28)
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        textAlign = TextAlign.Center
+                    )
+
+                    if (!info.specOrLimitsLabel.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                        ) {
+                            Text(
+                                text = info.specOrLimitsLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Mechanic Explanation Card
+            ElevatedCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "What This Data Means & Diagnostic Guidance",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = info.explanation,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Ask VERA AI Quick Action Button
+            Button(
+                onClick = {
+                    val valPart = "${info.formattedValue} ${info.unit}".trim()
+                    val specPart = if (!info.specOrLimitsLabel.isNullOrBlank()) " (${info.specOrLimitsLabel})" else ""
+                    onAskVera("Explain what my ${info.title} reading of $valPart$specPart means for my vehicle and whether it looks healthy.")
+                },
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+            ) {
+                ChatEventFlatIcon(
+                    eventType = "MODEL",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Ask VERA AI About This Reading",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Multi-Stream Real-Time Live Graph View
 // -----------------------------------------------------------------------------
@@ -1757,6 +4499,8 @@ fun MultiStreamLiveGraphView(
     onAttachToChat: ((RecordedCsvResult) -> Unit)? = null,
     onBack: () -> Unit
 ) {
+    BackHandler(onBack = onBack)
+
     val context = LocalContext.current
     val palette = remember {
         listOf(
@@ -2218,13 +4962,6 @@ fun VeraMainScreen(
     val recordingDurationSec by viewModel.recordingDurationSeconds.collectAsState()
     val recordingSampleCount by viewModel.recordingSampleCount.collectAsState()
 
-    val isReplaying by viewModel.isReplaying.collectAsState()
-    val isReplayPaused by viewModel.isReplayPaused.collectAsState()
-    val replayProgress by viewModel.replayProgress.collectAsState()
-    val replayCurrentMs by viewModel.replayCurrentMs.collectAsState()
-    val replayTotalDurationMs by viewModel.replayTotalDurationMs.collectAsState()
-    val replaySessionTitle by viewModel.replaySessionTitle.collectAsState()
-
     val odoFormatted = remember(vehicleOdometerKm, unitSystem) {
         vehicleOdometerKm?.let { km ->
             if (unitSystem == UnitSystem.SAE) {
@@ -2272,6 +5009,10 @@ fun VeraMainScreen(
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
+
+    BackHandler(enabled = drawerState.isOpen) {
+        coroutineScope.launch { drawerState.close() }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.initSessionManager(context)
@@ -2624,7 +5365,11 @@ fun VeraMainScreen(
     }
     var selectedStreamForDetail by remember { mutableStateOf<LiveStreamData?>(null) }
     var selectedMode06ForDetail by remember { mutableStateOf<Mode06TestResult?>(null) }
-    var showFullMode06Inspector by remember { mutableStateOf(false) }
+    var selectedTileDetail by remember { mutableStateOf<TelemetryTileDetailInfo?>(null) }
+    var showMode06Picker by remember { mutableStateOf(false) }
+    var showCustomPidPicker by remember { mutableStateOf(false) }
+    var showLiveStreamPicker by remember { mutableStateOf(false) }
+    var showAdvancedDynamicsPicker by remember { mutableStateOf(false) }
     var selectedDashboardCategory by remember { mutableStateOf("ALL") }
     var isDtcExpanded by remember { mutableStateOf(false) }
     var isLiveStreamsExpanded by remember { mutableStateOf(true) }
@@ -2638,6 +5383,85 @@ fun VeraMainScreen(
     var prevMessageCount by remember { mutableIntStateOf(0) }
     val lastMessageText = viewModel.messages.lastOrNull()?.text ?: ""
     val messagesCount = viewModel.messages.size
+
+    val loadedObdb = obdbLoadedResult as? ObdbRepository.LoadResult.Loaded
+    val isHybridOrEv = remember(vehicleDetails, loadedObdb?.repo) {
+        isHybridOrEvVehicle(vehicleDetails, loadedObdb?.repo)
+    }
+    val allCustomPidItems = remember(mode22Streams, obdbLoadedResult, obdbSignalResults, unitSystem, vehicleDetails, metrics.speed) {
+        buildUnifiedCustomPidList(
+            mode22Streams = mode22Streams,
+            obdbLoadedResult = obdbLoadedResult,
+            obdbSignalResults = obdbSignalResults,
+            unitSystem = unitSystem,
+            vehicleDetails = vehicleDetails,
+            isMoving = metrics.speed > 2
+        )
+    }
+
+    val favPrefs = remember(context) {
+        context.getSharedPreferences("vera_custom_pid_favorites", android.content.Context.MODE_PRIVATE)
+    }
+    val vehicleStorageKey = remember(vehicleVin, vehicleDetails) {
+        val rawKey = (vehicleVin?.takeIf { it.isNotBlank() } ?: vehicleDetails?.takeIf { it.isNotBlank() } ?: "default")
+            .replace(Regex("[^A-Za-z0-9_]"), "_")
+        "fav_pids_$rawKey"
+    }
+    var favoriteCustomPidKeys by remember(vehicleStorageKey) {
+        val saved = favPrefs.getStringSet(vehicleStorageKey, null)
+        mutableStateOf<Set<String>>(saved ?: emptySet())
+    }
+    var hasInitializedDefaultsForVehicle by remember(vehicleStorageKey) {
+        mutableStateOf(favPrefs.contains(vehicleStorageKey))
+    }
+
+    fun updateFavoriteCustomPidKeys(newSet: Set<String>) {
+        favoriteCustomPidKeys = newSet
+        hasInitializedDefaultsForVehicle = true
+        favPrefs.edit().putStringSet(vehicleStorageKey, newSet).apply()
+    }
+
+    val liveStreamStorageKey = remember(vehicleStorageKey) { "fav_streams_$vehicleStorageKey" }
+    var favoriteLiveStreamKeys by remember(liveStreamStorageKey) {
+        val saved = favPrefs.getStringSet(liveStreamStorageKey, null)
+        mutableStateOf<Set<String>>(saved ?: emptySet())
+    }
+    fun updateFavoriteLiveStreamKeys(newSet: Set<String>) {
+        favoriteLiveStreamKeys = newSet
+        favPrefs.edit().putStringSet(liveStreamStorageKey, newSet).apply()
+    }
+
+    val canSignalStorageKey = remember(vehicleStorageKey) { "fav_can_$vehicleStorageKey" }
+    var favoriteCanSignalKeys by remember(canSignalStorageKey) {
+        val saved = favPrefs.getStringSet(canSignalStorageKey, null)
+        mutableStateOf<Set<String>>(saved ?: emptySet())
+    }
+    fun updateFavoriteCanSignalKeys(newSet: Set<String>) {
+        favoriteCanSignalKeys = newSet
+        favPrefs.edit().putStringSet(canSignalStorageKey, newSet).apply()
+    }
+
+    val mode06StorageKey = remember(vehicleStorageKey) { "fav_m06_$vehicleStorageKey" }
+    var favoriteMode06Keys by remember(mode06StorageKey) {
+        val saved = favPrefs.getStringSet(mode06StorageKey, null)
+        mutableStateOf<Set<String>>(saved ?: emptySet())
+    }
+    fun updateFavoriteMode06Keys(newSet: Set<String>) {
+        favoriteMode06Keys = newSet
+        favPrefs.edit().putStringSet(mode06StorageKey, newSet).apply()
+    }
+
+    // Automatically select make/model smart defaults when Custom PIDs arrive if user hasn't customized this vehicle yet
+    LaunchedEffect(allCustomPidItems.size, vehicleStorageKey, isHybridOrEv) {
+        if (allCustomPidItems.isNotEmpty()) {
+            val validKeys = allCustomPidItems.map { it.key }.toSet()
+            val matchingSaved = favoriteCustomPidKeys.intersect(validKeys)
+            if (!hasInitializedDefaultsForVehicle || matchingSaved.isEmpty()) {
+                val smartDefaults = selectDefaultFavoriteCustomPids(allCustomPidItems, isHybridOrEv, maxCount = 8)
+                updateFavoriteCustomPidKeys(smartDefaults)
+            }
+        }
+    }
 
     LaunchedEffect(messagesCount, lastMessageText) {
         if (messagesCount > 0) {
@@ -2664,8 +5488,8 @@ fun VeraMainScreen(
         }
     }
 
-    LaunchedEffect(mode22Streams.size, obdbSignalResults.size) {
-        if (mode22Streams.isNotEmpty() || obdbSignalResults.isNotEmpty()) {
+    LaunchedEffect(allCustomPidItems.size) {
+        if (allCustomPidItems.isNotEmpty()) {
             isMode22Expanded = true
         } else {
             isMode22Expanded = false
@@ -2690,17 +5514,279 @@ fun VeraMainScreen(
 
     val isConnected = connectionStatus == "Connected"
 
-    if (showFullMode06Inspector) {
-        FullScreenMode06InspectorView(
-            results = mode06Results,
+    fun buildMode06DetailInfo(m06: Mode06TestResult): TelemetryTileDetailInfo {
+        val (formattedVal, displayUnit) = formatMode06ValueWithUnit(m06.testValue, m06.unit, unitSystem)
+        val statusBg = when (m06.status) {
+            Mode06Status.PASS -> Color(0xFF1B5E20)
+            Mode06Status.WARNING -> Color(0xFFE65100)
+            Mode06Status.FAIL -> Color(0xFFB71C1C)
+            Mode06Status.UNKNOWN -> Color(0xFF263238)
+        }
+        val statusFg = when (m06.status) {
+            Mode06Status.PASS -> Color(0xFF81C784)
+            Mode06Status.WARNING -> Color(0xFFFFB74D)
+            Mode06Status.FAIL -> Color(0xFFFF8A80)
+            Mode06Status.UNKNOWN -> Color(0xFFB0BEC5)
+        }
+        val limitsLabel = if (m06.maxLimit != null) {
+            val (minStr, _) = formatMode06ValueWithUnit(m06.minLimit ?: 0.0, m06.unit, unitSystem)
+            val (maxStr, _) = formatMode06ValueWithUnit(m06.maxLimit, m06.unit, unitSystem)
+            "Manufacturer Limit: Min $minStr | Max $maxStr $displayUnit"
+        } else null
+
+        return TelemetryTileDetailInfo(
+            sourceBadge = "MODE 06 • MID $${m06.midHex}",
+            statusBadge = m06.status.name,
+            statusBgColor = statusBg,
+            statusTextColor = statusFg,
+            title = m06.name,
+            subtitle = "${m06.category} Monitor • ${m06.description}",
+            formattedValue = formattedVal,
+            unit = displayUnit,
+            specOrLimitsLabel = limitsLabel,
+            explanation = getTelemetryParameterExplanation(
+                name = m06.name,
+                category = m06.category,
+                unit = displayUnit,
+                sourceBadge = "MODE 06",
+                rawDescription = m06.description
+            ),
+            categoryOrPidInfo = m06.category
+        )
+    }
+
+    fun buildCustomPidDetailInfo(item: CustomPidItem): TelemetryTileDetailInfo {
+        val statusBg = when (item.healthStatus) {
+            PidHealthStatus.OUT_OF_RANGE -> Color(0xFFB71C1C)
+            PidHealthStatus.MARGINAL -> Color(0xFFE65100)
+            PidHealthStatus.NORMAL -> Color(0xFF1B5E20)
+        }
+        val statusFg = when (item.healthStatus) {
+            PidHealthStatus.OUT_OF_RANGE -> Color(0xFFFF8A80)
+            PidHealthStatus.MARGINAL -> Color(0xFFFFE082)
+            PidHealthStatus.NORMAL -> Color(0xFF81C784)
+        }
+        val statusText = when (item.healthStatus) {
+            PidHealthStatus.OUT_OF_RANGE -> "OUT OF SPEC"
+            PidHealthStatus.MARGINAL -> "MARGINAL"
+            PidHealthStatus.NORMAL -> "IN SPEC / NORMAL"
+        }
+        return TelemetryTileDetailInfo(
+            sourceBadge = "CUSTOM PID • ${item.rawPidId}",
+            statusBadge = statusText,
+            statusBgColor = statusBg,
+            statusTextColor = statusFg,
+            title = item.name,
+            subtitle = "${item.category.displayName} • ${item.rawPidId}",
+            formattedValue = item.formattedValue,
+            unit = item.unit,
+            specOrLimitsLabel = item.normalRangeLabel,
+            explanation = getTelemetryParameterExplanation(
+                name = item.name,
+                category = item.category.displayName,
+                unit = item.unit,
+                sourceBadge = "CUSTOM PID",
+                rawDescription = item.rawPidId
+            ),
+            categoryOrPidInfo = item.category.displayName
+        )
+    }
+
+    fun buildAdvancedDynamicsDetailInfo(label: String, valueStr: String, unitStr: String, isLive: Boolean): TelemetryTileDetailInfo {
+        return TelemetryTileDetailInfo(
+            sourceBadge = "ADVANCED DYNAMICS • 100Hz CAN",
+            statusBadge = if (isLive) "LIVE 100Hz" else "STANDBY",
+            statusBgColor = if (isLive) Color(0xFF1B5E20) else Color(0xFF263238),
+            statusTextColor = if (isLive) Color(0xFF81C784) else Color(0xFFB0BEC5),
+            title = label,
+            subtitle = activeOpendbcProfile?.platformName ?: "High-Speed Chassis & Powertrain CAN Broadcast",
+            formattedValue = valueStr,
+            unit = unitStr,
+            specOrLimitsLabel = if (isLive) "Decoded in real time from raw CAN bus broadcast frames" else "Requires raw CAN broadcast frames on OBD-II pins 6 & 14",
+            explanation = getTelemetryParameterExplanation(
+                name = label,
+                category = "Advanced Dynamics",
+                unit = unitStr,
+                sourceBadge = "ADVANCED DYNAMICS"
+            ),
+            categoryOrPidInfo = "Chassis CAN"
+        )
+    }
+
+    if (selectedTileDetail != null) {
+        val detail = selectedTileDetail!!
+        FullScreenTelemetryTileDetailView(
+            info = detail,
+            onAskVera = { question ->
+                selectedTileDetail = null
+                showCustomPidPicker = false
+                showMode06Picker = false
+                showLiveStreamPicker = false
+                showAdvancedDynamicsPicker = false
+                isLiveStreamsExpanded = false
+                isDtcExpanded = false
+                isMode06Expanded = false
+                isMode22Expanded = false
+                isOpendbcExpanded = false
+                viewModel.sendMessageToAgent(userText = question)
+            },
+            onBack = { selectedTileDetail = null }
+        )
+        return
+    }
+
+    if (showCustomPidPicker) {
+        BackHandler { showCustomPidPicker = false }
+        FullScreenCustomPidPickerView(
+            allItems = allCustomPidItems,
+            favoriteKeys = favoriteCustomPidKeys,
+            isHybridOrEv = isHybridOrEv,
+            vehicleTitle = vehicleMakeTitle,
+            isConnected = isConnected,
+            isScanning = isScanningMode22,
+            onToggleFavorite = { key ->
+                val updated = if (favoriteCustomPidKeys.contains(key)) {
+                    favoriteCustomPidKeys - key
+                } else {
+                    favoriteCustomPidKeys + key
+                }
+                updateFavoriteCustomPidKeys(updated)
+            },
+            onApplySmartDefaults = {
+                updateFavoriteCustomPidKeys(selectDefaultFavoriteCustomPids(allCustomPidItems, isHybridOrEv, maxCount = 8))
+            },
+            onSelectQuestionable = {
+                val flaggedKeys = allCustomPidItems.filter { it.healthStatus != PidHealthStatus.NORMAL }.map { it.key }.toSet()
+                if (flaggedKeys.isNotEmpty()) {
+                    updateFavoriteCustomPidKeys(flaggedKeys)
+                }
+            },
+            onSelectAllGauges = {
+                updateFavoriteCustomPidKeys(allCustomPidItems.filter { !it.isBooleanStatus }.map { it.key }.toSet())
+            },
+            onClearFavorites = {
+                updateFavoriteCustomPidKeys(emptySet())
+            },
+            onInspectItem = { item ->
+                selectedTileDetail = buildCustomPidDetailInfo(item)
+            },
+            onScan = { viewModel.scanMode22Parameters() },
+            onBack = { showCustomPidPicker = false }
+        )
+        return
+    }
+
+    if (showLiveStreamPicker) {
+        BackHandler { showLiveStreamPicker = false }
+        FullScreenLiveStreamPickerView(
+            allStreams = supportedStreams,
+            favoriteKeys = favoriteLiveStreamKeys,
             unitSystem = unitSystem,
-            onBack = { showFullMode06Inspector = false },
+            isConnected = isConnected,
+            onToggleFavorite = { key ->
+                val updated = if (favoriteLiveStreamKeys.contains(key)) {
+                    favoriteLiveStreamKeys - key
+                } else {
+                    favoriteLiveStreamKeys + key
+                }
+                updateFavoriteLiveStreamKeys(updated)
+            },
+            onSelectAll = {
+                updateFavoriteLiveStreamKeys(supportedStreams.map { it.pid.pidHex }.toSet())
+            },
+            onClearFavorites = {
+                updateFavoriteLiveStreamKeys(emptySet())
+            },
+            onSelectSmartDefaults = {
+                updateFavoriteLiveStreamKeys(selectDefaultLiveStreams(supportedStreams))
+            },
+            onInspectStream = { stream ->
+                selectedStreamForDetail = stream
+            },
+            onBack = { showLiveStreamPicker = false }
+        )
+        return
+    }
+
+    if (showAdvancedDynamicsPicker) {
+        BackHandler { showAdvancedDynamicsPicker = false }
+        val standardKeys = setOf("Steering Angle", "Brake Pressure", "Accelerator", "Yaw Rate", "Wheel FL", "Wheel FR", "Wheel RL", "Wheel RR")
+        FullScreenAdvancedDynamicsPickerView(
+            opendbcSignals = opendbcSignals,
+            favoriteKeys = favoriteCanSignalKeys,
+            unitSystem = unitSystem,
+            isConnected = isConnected,
+            isScanning = isSniffingCan,
+            onToggleFavorite = { key ->
+                val updated = if (favoriteCanSignalKeys.contains(key)) {
+                    favoriteCanSignalKeys - key
+                } else {
+                    favoriteCanSignalKeys + key
+                }
+                updateFavoriteCanSignalKeys(updated)
+            },
+            onSelectAll = {
+                val allKeys = if (opendbcSignals.isNotEmpty()) opendbcSignals.keys.toSet() else standardKeys
+                updateFavoriteCanSignalKeys(allKeys)
+            },
+            onClearFavorites = {
+                updateFavoriteCanSignalKeys(emptySet())
+            },
+            onSelectSmartDefaults = {
+                val defs = if (opendbcSignals.isNotEmpty()) opendbcSignals.keys.take(8).toSet() else standardKeys
+                updateFavoriteCanSignalKeys(defs)
+            },
+            onInspectSignal = { name, value, unit ->
+                selectedTileDetail = buildAdvancedDynamicsDetailInfo(name, value, unit, opendbcSignals.isNotEmpty())
+            },
+            onScan = { viewModel.scanCanBus() },
+            onBack = { showAdvancedDynamicsPicker = false }
+        )
+        return
+    }
+
+    if (showMode06Picker) {
+        BackHandler { showMode06Picker = false }
+        FullScreenMode06PickerView(
+            results = mode06Results,
+            favoriteKeys = favoriteMode06Keys,
+            unitSystem = unitSystem,
+            isConnected = isConnected,
+            isScanning = isScanningMode06,
+            onToggleFavorite = { key ->
+                val updated = if (favoriteMode06Keys.contains(key)) {
+                    favoriteMode06Keys - key
+                } else {
+                    favoriteMode06Keys + key
+                }
+                updateFavoriteMode06Keys(updated)
+            },
+            onSelectAll = {
+                updateFavoriteMode06Keys(mode06Results.map { it.name }.toSet())
+            },
+            onClearFavorites = {
+                updateFavoriteMode06Keys(emptySet())
+            },
+            onSelectFlagged = {
+                val flagged = mode06Results.filter { it.status != Mode06Status.PASS }.map { it.name }.toSet()
+                if (flagged.isNotEmpty()) {
+                    updateFavoriteMode06Keys(flagged)
+                }
+            },
+            onSelectSmartDefaults = {
+                updateFavoriteMode06Keys(selectDefaultMode06(mode06Results))
+            },
+            onSelectMonitor = { m06 ->
+                selectedTileDetail = buildMode06DetailInfo(m06)
+            },
+            onBack = { showMode06Picker = false },
             onScan = { viewModel.scanMode06Monitors() }
         )
         return
     }
 
     if (selectedStreamForDetail != null) {
+        BackHandler { selectedStreamForDetail = null }
         val activeStream = supportedStreams.find { it.pid.pidHex == selectedStreamForDetail?.pid?.pidHex } ?: selectedStreamForDetail!!
         FullScreenStreamDetailView(
             stream = activeStream,
@@ -2711,6 +5797,7 @@ fun VeraMainScreen(
     }
 
     if (showMultiStreamGraphView) {
+        BackHandler { showMultiStreamGraphView = false }
         MultiStreamLiveGraphView(
             selectedStreamPids = selectedStreamPids.toList(),
             supportedStreams = supportedStreams,
@@ -2889,14 +5976,11 @@ fun VeraMainScreen(
                                             modifier = Modifier.padding(start = 8.dp)
                                         ) {
                                             if (session.hasReplayData) {
-                                                val isThisReplaying = isReplaying && currentSessionId == session.id
+                                                // Graph Telemetry Flight Data Button
                                                 Surface(
                                                     onClick = {
-                                                        if (isThisReplaying) {
-                                                            viewModel.toggleReplayPause()
-                                                        } else {
-                                                            viewModel.startReplay(session.id)
-                                                        }
+                                                        viewModel.loadChatSession(session.id)
+                                                        showMultiStreamGraphView = true
                                                         coroutineScope.launch { drawerState.close() }
                                                     },
                                                     shape = CircleShape,
@@ -2905,11 +5989,9 @@ fun VeraMainScreen(
                                                     modifier = Modifier.size(42.dp)
                                                 ) {
                                                     Box(contentAlignment = Alignment.Center) {
-                                                        Icon(
-                                                            imageVector = if (isThisReplaying && !isReplayPaused) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                                            contentDescription = "Replay Drive Telemetry",
+                                                        TelemetryGraphIcon(
                                                             tint = Color(0xFF00E5FF),
-                                                            modifier = Modifier.size(24.dp)
+                                                            modifier = Modifier.size(20.dp)
                                                         )
                                                     }
                                                 }
@@ -3337,19 +6419,21 @@ fun VeraMainScreen(
                     FilledTonalButton(
                         onClick = {
                             coroutineScope.launch { drawerState.close() }
+                            val body = buildString {
+                                appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (Android ${android.os.Build.VERSION.RELEASE})")
+                                appendLine("App Version: ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})")
+                                if (vehicleDetails != null) appendLine("Vehicle: $vehicleDetails")
+                                if (vehicleVin != null) appendLine("VIN: $vehicleVin")
+                                appendLine("Status: ${if (isConnected) "Connected to OBD-II" else "Disconnected"}")
+                                appendLine()
+                                appendLine("Hey Kenan, I have some feedback about Vera:")
+                                appendLine()
+                            }
+
                             val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
                                 data = Uri.parse("mailto:")
                                 putExtra(Intent.EXTRA_EMAIL, arrayOf("kpekoz@gmail.com"))
                                 putExtra(Intent.EXTRA_SUBJECT, "VERA Diagnostic App - Beta Feedback")
-                                val body = buildString {
-                                    appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (Android ${android.os.Build.VERSION.RELEASE})")
-                                    appendLine("App Version: ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})")
-                                    if (vehicleDetails != null) appendLine("Vehicle: $vehicleDetails")
-                                    if (vehicleVin != null) appendLine("VIN: $vehicleVin")
-                                    appendLine()
-                                    appendLine("Hey Kenan, I have some feedback about Vera...")
-                                    appendLine()
-                                }
                                 putExtra(Intent.EXTRA_TEXT, body)
                             }
                             try {
@@ -3386,77 +6470,6 @@ fun VeraMainScreen(
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
             // 1. PINNED TOP HEADER (Always Fixed at Top of Screen)
-            if (isReplaying) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f).padding(end = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { coroutineScope.launch { drawerState.open() } },
-                            modifier = Modifier.size(36.dp).padding(end = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Menu,
-                                contentDescription = "Open Chat History Sidebar",
-                                tint = MaterialTheme.colorScheme.onBackground
-                            )
-                        }
-
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "VERA",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = 1.sp,
-                                    color = Color(0xFF00E5FF)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = Color(0xFF003847),
-                                    contentColor = Color(0xFF00E5FF),
-                                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f))
-                                ) {
-                                    Text(
-                                        text = if (isReplayPaused) "PAUSED" else "FLIGHT REPLAY",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                            Text(
-                                text = replaySessionTitle.ifBlank { "Virtual Co-Pilot Telemetry Replay" },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    FilledTonalButton(
-                        onClick = { viewModel.stopReplay() },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = Color(0xFF003847),
-                            contentColor = Color(0xFF00E5FF)
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text("✕ Exit", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            } else {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3510,13 +6523,6 @@ fun VeraMainScreen(
                                 )
                                 Text(
                                     text = if (vinText.isNotBlank()) vinText else "VIN: Detecting...",
-                                    fontSize = 10.sp,
-                                    lineHeight = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "ODO: ${odoFormatted ?: "--"}",
                                     fontSize = 10.sp,
                                     lineHeight = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
@@ -3579,7 +6585,6 @@ fun VeraMainScreen(
                     }
                 }
             }
-        }
         }
 
         // Deactivation / Kill Switch Banner
@@ -3647,7 +6652,7 @@ fun VeraMainScreen(
 
         // Road Topography & Incline Banner
         val roadContext by viewModel.effectiveRoadContext.collectAsState()
-        if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating...") {
+        if (roadContext.streetName.isNotBlank() && roadContext.streetName != "Locating road..." && roadContext.streetName != "Locating..." && (!roadContext.isDemoSimulated || viewModel.obdManager.isDemoMode)) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -3958,7 +6963,7 @@ fun VeraMainScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton(
                     onClick = { viewModel.scanTroubleCodes() },
-                    enabled = !isScanningDtcs,
+                    enabled = isConnected && !isScanningDtcs,
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
                 ) {
@@ -4086,77 +7091,94 @@ fun VeraMainScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Column {
                 Row(
-                    modifier = Modifier.clickable { isLiveStreamsExpanded = !isLiveStreamsExpanded },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (isConnected && supportedStreams.isNotEmpty()) "Live Streams (${supportedStreams.size})" else "Live Data Streams",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = if (isLiveStreamsExpanded) " ▲" else " ▼",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                    Row(
+                        modifier = Modifier.clickable { isLiveStreamsExpanded = !isLiveStreamsExpanded },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isConnected && supportedStreams.isNotEmpty()) "Live Streams (${supportedStreams.size})" else "Live Data Streams",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (isLiveStreamsExpanded) " ▲" else " ▼",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    // Tape Deck Record Button / RECORDING Indicator
+                    TapeDeckRecordButton(
+                        isRecording = isRecording,
+                        durationSeconds = recordingDurationSec,
+                        sampleCount = recordingSampleCount,
+                        onStartRecording = {
+                            viewModel.startRecording()
+                            if (selectedStreamPids.isNotEmpty()) {
+                                showMultiStreamGraphView = true
+                            }
+                        },
+                        onStopRecording = {
+                            val csvResult = viewModel.stopRecording()
+                            if (csvResult.sampleCount > 0) {
+                                stoppedCsvResult = csvResult
+                                showSaveDiscardDialog = true
+                            } else {
+                                Toast.makeText(context, "No telemetry data recorded.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     )
                 }
 
-                Spacer(modifier = Modifier.width(6.dp))
-
-                // Tape Deck Record Button / RECORDING Indicator
-                TapeDeckRecordButton(
-                    isRecording = isRecording,
-                    durationSeconds = recordingDurationSec,
-                    sampleCount = recordingSampleCount,
-                    onStartRecording = {
-                        viewModel.startRecording()
-                        if (selectedStreamPids.isNotEmpty()) {
-                            showMultiStreamGraphView = true
-                        }
-                    },
-                    onStopRecording = {
-                        val csvResult = viewModel.stopRecording()
-                        if (csvResult.sampleCount > 0) {
-                            stoppedCsvResult = csvResult
-                            showSaveDiscardDialog = true
-                        } else {
-                            Toast.makeText(context, "No telemetry data recorded.", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                )
+                if (isConnected) {
+                    Text(
+                        text = "Tap: Detail & plot • Tap+hold: Detail & plot many",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF4CAF50),
+                        lineHeight = 11.sp
+                    )
+                } else {
+                    Text(
+                        text = "Disconnected",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            if (isConnected) {
-                Column(
-                    horizontalAlignment = Alignment.End
+            Surface(
+                onClick = { showLiveStreamPicker = true },
+                shape = RoundedCornerShape(8.dp),
+                color = if (isConnected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Tap: Detail & plot",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF4CAF50),
-                        lineHeight = 10.sp
+                    DashboardClusterTuneIcon(
+                        tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(12.dp)
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    val displayedCount = if (favoriteLiveStreamKeys.isNotEmpty()) {
+                        supportedStreams.count { favoriteLiveStreamKeys.contains(it.pid.pidHex) }
+                    } else supportedStreams.size
                     Text(
-                        text = "Tap+hold: Detail & plot many",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF4CAF50),
-                        lineHeight = 10.sp
+                        text = if (supportedStreams.isEmpty()) "Select Streams" else "Select ($displayedCount/${supportedStreams.size})",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
                 }
-            } else {
-                Text(
-                    text = "Disconnected",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
 
@@ -4218,10 +7240,19 @@ fun VeraMainScreen(
             Column {
                 Spacer(modifier = Modifier.height(4.dp))
 
+                val displayedStreams = remember(supportedStreams, favoriteLiveStreamKeys) {
+                    if (favoriteLiveStreamKeys.isNotEmpty()) {
+                        val favs = supportedStreams.filter { favoriteLiveStreamKeys.contains(it.pid.pidHex) }
+                        if (favs.isNotEmpty()) favs else supportedStreams
+                    } else {
+                        supportedStreams
+                    }
+                }
+
                 // Chunk live streams into pairs for 2 rows in horizontal carousel
-                val streamTileChunks = remember(supportedStreams, metrics, isConnected, unitSystem) {
-                    if (isConnected && supportedStreams.isNotEmpty()) {
-                        supportedStreams.chunked(2)
+                val streamTileChunks = remember(displayedStreams, metrics, isConnected, unitSystem) {
+                    if (isConnected && displayedStreams.isNotEmpty()) {
+                        displayedStreams.chunked(2)
                     } else {
                         emptyList()
                     }
@@ -4352,7 +7383,7 @@ fun VeraMainScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Advanced Dynamics",
@@ -4398,9 +7429,66 @@ fun VeraMainScreen(
                         }
                     }
                 }
-            }
 
-            AnimatedVisibility(
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    onClick = { showAdvancedDynamicsPicker = true },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isConnected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(end = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DashboardClusterTuneIcon(
+                            tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        val totalCanCount = if (opendbcSignals.isNotEmpty()) opendbcSignals.size else 8
+                        val favCanCount = if (favoriteCanSignalKeys.isNotEmpty()) {
+                            if (opendbcSignals.isNotEmpty()) {
+                                opendbcSignals.keys.count { favoriteCanSignalKeys.contains(it) }
+                            } else {
+                                val standardKeys = setOf("Steering Angle", "Brake Pressure", "Accelerator", "Yaw Rate", "Wheel FL", "Wheel FR", "Wheel RL", "Wheel RR")
+                                favoriteCanSignalKeys.count { standardKeys.contains(it) }
+                            }
+                        } else totalCanCount
+                        Text(
+                            text = if (!isConnected && opendbcSignals.isEmpty()) "Select Signals" else "Select ($favCanCount/$totalCanCount)",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+
+                FilledTonalButton(
+                    onClick = {
+                        isOpendbcExpanded = true
+                        viewModel.scanCanBus()
+                    },
+                    enabled = isConnected && !isSniffingCan,
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    if (isSniffingCan) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Scanning...", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("Scan CAN Bus", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        AnimatedVisibility(
                 visible = isOpendbcExpanded,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
@@ -4408,7 +7496,14 @@ fun VeraMainScreen(
                 Column {
                     Spacer(modifier = Modifier.height(4.dp))
                     if (opendbcSignals.isNotEmpty()) {
-                        val signalList = opendbcSignals.values.toList()
+                        val signalList = remember(opendbcSignals, favoriteCanSignalKeys) {
+                            if (favoriteCanSignalKeys.isNotEmpty()) {
+                                val favs = opendbcSignals.values.filter { favoriteCanSignalKeys.contains(it.name) }
+                                if (favs.isNotEmpty()) favs else opendbcSignals.values.toList()
+                            } else {
+                                opendbcSignals.values.toList()
+                            }
+                        }
                         val chunks = signalList.chunked(4)
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             chunks.forEach { rowSignals ->
@@ -4417,11 +7512,20 @@ fun VeraMainScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     rowSignals.forEach { sig ->
+                                        val cleanVal = sig.formattedValue.replace(sig.unit, "").trim()
                                         SleekMetricTile(
                                             label = sig.name,
-                                            value = sig.formattedValue.replace(sig.unit, "").trim(),
+                                            value = cleanVal,
                                             unit = sig.unit,
                                             isSelected = false,
+                                            onClick = {
+                                                selectedTileDetail = buildAdvancedDynamicsDetailInfo(
+                                                    label = sig.name,
+                                                    valueStr = cleanVal,
+                                                    unitStr = sig.unit,
+                                                    isLive = true
+                                                )
+                                            },
                                             modifier = Modifier.weight(1f)
                                         )
                                     }
@@ -4434,45 +7538,54 @@ fun VeraMainScreen(
                             }
                         }
                     } else {
-                        // Default placeholder tiles when disconnected or waiting for raw broadcast frames
+                        // Clean 8-tile (2 rows of 4) placeholder layout when disconnected or waiting for CAN frames
                         val spdUnit = if (unitSystem == UnitSystem.SAE) "mph" else "km/h"
                         val pressUnit = if (unitSystem == UnitSystem.SAE) "psi" else "bar"
+                        val standardTiles = remember(spdUnit, pressUnit) {
+                            listOf(
+                                Triple("Steering Angle", "--", "deg"),
+                                Triple("Brake Pressure", "--", pressUnit),
+                                Triple("Accelerator", "--", "%"),
+                                Triple("Yaw Rate", "--", "deg/s"),
+                                Triple("Wheel FL", "--", spdUnit),
+                                Triple("Wheel FR", "--", spdUnit),
+                                Triple("Wheel RL", "--", spdUnit),
+                                Triple("Wheel RR", "--", spdUnit)
+                            )
+                        }
+                        val displayedStandardTiles = remember(standardTiles, favoriteCanSignalKeys) {
+                            if (favoriteCanSignalKeys.isNotEmpty()) {
+                                val favs = standardTiles.filter { favoriteCanSignalKeys.contains(it.first) }
+                                if (favs.isNotEmpty()) favs else standardTiles
+                            } else {
+                                standardTiles
+                            }
+                        }
+                        val standardChunks = displayedStandardTiles.chunked(4)
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                SleekMetricTile("Steering Angle", "--", "deg", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Steering Rate", "--", "deg/s", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Driver Torque", "--", "Nm", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("EPS Torque", "--", "Nm", isSelected = false, modifier = Modifier.weight(1f))
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                SleekMetricTile("Yaw Rate", "--", "deg/s", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Lateral G", "--", "g", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Longitudinal G", "--", "g", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Engine Torque", "--", "Nm", isSelected = false, modifier = Modifier.weight(1f))
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                SleekMetricTile("Wheel FL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Wheel FR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Wheel RL", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Wheel RR", "--", spdUnit, isSelected = false, modifier = Modifier.weight(1f))
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                SleekMetricTile("Brake Pressure", "--", pressUnit, isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Accelerator", "--", "%", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Lead Distance", "--", "m", isSelected = false, modifier = Modifier.weight(1f))
-                                SleekMetricTile("Gear", "--", "Gear", isSelected = false, modifier = Modifier.weight(1f))
+                            standardChunks.forEach { rowTiles ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    rowTiles.forEach { tile ->
+                                        SleekMetricTile(
+                                            label = tile.first,
+                                            value = tile.second,
+                                            unit = tile.third,
+                                            isSelected = false,
+                                            onClick = {
+                                                selectedTileDetail = buildAdvancedDynamicsDetailInfo(tile.first, tile.second, tile.third, false)
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (rowTiles.size < 4) {
+                                        repeat(4 - rowTiles.size) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -4484,7 +7597,7 @@ fun VeraMainScreen(
                         ) {
                             Text(
                                 text = if (isConnected && isHighSpeedCanCapable) {
-                                    "Adapter supports high-speed CAN (${adapterHardwareName}), but no broadcast signals have been decoded yet. Tap \"Scan CAN bus\" (engine on / READY) to see which messages this vehicle actually sends to the OBD-II port."
+                                    "Adapter supports high-speed CAN (${adapterHardwareName}), but no broadcast signals have been decoded yet. Tap \"Scan CAN Bus\" (engine on / READY) to see which messages this vehicle sends to the OBD-II port."
                                 } else if (isConnected) {
                                     "Connected via standard OBD-II (${adapterHardwareName}). High-speed 100Hz broadcast signals (Steering, Wheel Speeds, Brake Pressure) require a vLinker FS / MC+ or OBDLink adapter (or an SGW bypass cable on 2018+ vehicles)."
                                 } else {
@@ -4496,38 +7609,26 @@ fun VeraMainScreen(
                                 modifier = Modifier.padding(8.dp)
                             )
                         }
-                    }
-                    if (isConnected) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        OutlinedButton(
-                            onClick = { viewModel.scanCanBus() },
-                            enabled = !isSniffingCan,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                        ) {
-                            if (isSniffingCan) {
-                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Listening to CAN bus…", fontSize = 11.sp)
-                            } else {
-                                Text("Scan CAN bus", fontSize = 11.sp)
-                            }
-                        }
-                        canSniffReport?.let { rpt ->
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                SelectionContainer {
-                                    Text(
-                                        text = rpt.toDisplayText(),
-                                        fontSize = 9.sp,
-                                        lineHeight = 12.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(8.dp)
-                                    )
+
+                        // Only show raw CAN diagnostic report when connected AND no live decoded signals were found
+                        if (isConnected) {
+                            canSniffReport?.let { rpt ->
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    SelectionContainer {
+                                        Text(
+                                            text = rpt.toDisplayText(),
+                                            fontSize = 9.sp,
+                                            lineHeight = 12.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -4570,18 +7671,30 @@ fun VeraMainScreen(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
-                    onClick = { showFullMode06Inspector = true },
+                    onClick = { showMode06Picker = true },
                     shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
+                    color = if (isConnected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     modifier = Modifier.padding(end = 6.dp)
                 ) {
-                    Text(
-                        text = "Inspector 🔍",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DashboardClusterTuneIcon(
+                            tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        val displayedCount = if (favoriteMode06Keys.isNotEmpty()) {
+                            mode06Results.count { favoriteMode06Keys.contains(it.name) }
+                        } else mode06Results.size
+                        Text(
+                            text = if (mode06Results.isEmpty()) "Select Monitors" else "Select ($displayedCount/${mode06Results.size})",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
                 }
 
                 FilledTonalButton(
@@ -4589,7 +7702,7 @@ fun VeraMainScreen(
                         isMode06Expanded = true
                         viewModel.scanMode06Monitors()
                     },
-                    enabled = !isScanningMode06,
+                    enabled = isConnected && !isScanningMode06,
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
@@ -4650,8 +7763,12 @@ fun VeraMainScreen(
 
                             Spacer(modifier = Modifier.height(6.dp))
 
-                            val filteredTiles = remember(mode06Results, selectedDashboardCategory) {
-                                if (selectedDashboardCategory == "ALL") mode06Results else mode06Results.filter { it.category == selectedDashboardCategory }
+                            val filteredTiles = remember(mode06Results, selectedDashboardCategory, favoriteMode06Keys) {
+                                val base = if (favoriteMode06Keys.isNotEmpty()) {
+                                    val favs = mode06Results.filter { favoriteMode06Keys.contains(it.name) }
+                                    if (favs.isNotEmpty()) favs else mode06Results
+                                } else mode06Results
+                                if (selectedDashboardCategory == "ALL") base else base.filter { it.category == selectedDashboardCategory }
                             }
 
                             LazyRow(
@@ -4673,7 +7790,7 @@ fun VeraMainScreen(
                                     }
 
                                     Surface(
-                                        onClick = { selectedMode06ForDetail = m06 },
+                                        onClick = { selectedTileDetail = buildMode06DetailInfo(m06) },
                                         shape = RoundedCornerShape(10.dp),
                                         color = MaterialTheme.colorScheme.surface,
                                         border = androidx.compose.foundation.BorderStroke(0.5.dp, statusTextColor.copy(alpha = 0.5f)),
@@ -4717,7 +7834,7 @@ fun VeraMainScreen(
                             }
                         } else {
                             Text(
-                                text = "Mode 06 evaluates on-board ECU component monitors (misfires, catalyst, O2 sensors, EVAP). Tap 'Scan Mode 06' or 'Inspector 🔍' to view test results.",
+                                text = "Mode 06 evaluates on-board ECU component monitors (misfires, catalyst, O2 sensors, EVAP). Tap 'Scan Mode 06' or 'Inspector' to view test results.",
                                 fontSize = 10.sp,
                                 lineHeight = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -4731,6 +7848,16 @@ fun VeraMainScreen(
         Spacer(modifier = Modifier.height(6.dp))
 
         // 3.8 [Make/Model] Custom PIDs Panel Header (Flush Left)
+        val displayedCustomPids = remember(allCustomPidItems, favoriteCustomPidKeys, isHybridOrEv) {
+            val favs = allCustomPidItems.filter { favoriteCustomPidKeys.contains(it.key) }
+            if (favs.isNotEmpty()) {
+                favs
+            } else {
+                val defaultKeys = selectDefaultFavoriteCustomPids(allCustomPidItems, isHybridOrEv, maxCount = 8)
+                allCustomPidItems.filter { defaultKeys.contains(it.key) }
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -4739,7 +7866,7 @@ fun VeraMainScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = mode22SectionTitle,
@@ -4755,19 +7882,48 @@ fun VeraMainScreen(
                     )
                 }
                 Text(
-                    text = if (mode22Streams.isEmpty()) "Mode 22 Enhanced PIDs (TFT, Oil Temp, Pressure)" else "${mode22Streams.size} Parameters Active",
+                    text = if (allCustomPidItems.isEmpty()) {
+                        if (isHybridOrEv) "Hybrid Battery, MG1/MG2 Temps & Enhanced PIDs"
+                        else "Enhanced PIDs (Trans Temp, Oil Pressure, Voltages)"
+                    } else {
+                        "Showing ${displayedCustomPids.size} Favorites • ${allCustomPidItems.size} Total Available"
+                    },
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    onClick = { showCustomPidPicker = true },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isConnected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(end = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DashboardClusterTuneIcon(
+                            tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (allCustomPidItems.isEmpty()) "Select PIDs" else "Select (${displayedCustomPids.size}/${allCustomPidItems.size})",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+
                 FilledTonalButton(
                     onClick = {
                         isMode22Expanded = true
                         viewModel.scanMode22Parameters()
                     },
-                    enabled = !isScanningMode22,
+                    enabled = isConnected && !isScanningMode22,
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
@@ -4780,7 +7936,7 @@ fun VeraMainScreen(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Scanning...", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     } else {
-                        Text("Scan Mode 22", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Scan PIDs", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -4801,54 +7957,108 @@ fun VeraMainScreen(
                     )
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
-                        val loadedCmds = (obdbLoadedResult as? ObdbRepository.LoadResult.Loaded)?.commands ?: emptyList()
-                        val allObdbSignals = loadedCmds.flatMap { it.signals }.associateBy { it.id }
-                        val hasCustomPids = mode22Streams.isNotEmpty() || obdbSignalResults.isNotEmpty()
-
-                        if (hasCustomPids) {
+                        if (displayedCustomPids.isNotEmpty()) {
                             LazyRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                items(mode22Streams) { stream ->
-                                    val isMoving = metrics.speed > 2
-                                    val (valStr, unitStr) = formatMode22ValueWithUnit(stream.rawValue, stream.pid, unitSystem, isMoving)
-                                    val pidKey = "22_${stream.pid.pidHex}"
-                                    val isSelected = selectedStreamPids.contains(pidKey)
-                                    SleekMetricTile(
-                                        label = stream.pid.name,
-                                        value = valStr,
-                                        unit = unitStr,
-                                        isSelected = isSelected,
-                                        onLongClick = {
-                                            if (isSelected) {
-                                                selectedStreamPids.remove(pidKey)
-                                            } else {
-                                                selectedStreamPids.add(pidKey)
+                                items(displayedCustomPids, key = { it.key }) { item ->
+                                    val baseAccentColor = when (item.category) {
+                                        CustomPidCategory.HYBRID_EV -> Color(0xFF00E676)
+                                        CustomPidCategory.POWERTRAIN -> Color(0xFF00E5FF)
+                                        CustomPidCategory.TRANSMISSION -> Color(0xFFFFB74D)
+                                        CustomPidCategory.ELECTRICAL -> Color(0xFF64B5F6)
+                                        CustomPidCategory.CHASSIS_TPMS -> Color(0xFFFF8A65)
+                                        CustomPidCategory.CLIMATE_BODY -> Color(0xFF81D4FA)
+                                        CustomPidCategory.STATUS_SWITCHES -> Color(0xFFB0BEC5)
+                                    }
+                                    val accentColor = when (item.healthStatus) {
+                                        PidHealthStatus.OUT_OF_RANGE -> Color(0xFFFF5252)
+                                        PidHealthStatus.MARGINAL -> Color(0xFFFFCA28)
+                                        PidHealthStatus.NORMAL -> baseAccentColor
+                                    }
+                                    val cardSurfaceColor = when (item.healthStatus) {
+                                        PidHealthStatus.OUT_OF_RANGE -> Color(0xFFB71C1C).copy(alpha = 0.16f)
+                                        PidHealthStatus.MARGINAL -> Color(0xFFE65100).copy(alpha = 0.14f)
+                                        PidHealthStatus.NORMAL -> MaterialTheme.colorScheme.surface
+                                    }
+                                    val valueTextColor = when (item.healthStatus) {
+                                        PidHealthStatus.OUT_OF_RANGE -> Color(0xFFFF5252)
+                                        PidHealthStatus.MARGINAL -> Color(0xFFFFCA28)
+                                        PidHealthStatus.NORMAL -> MaterialTheme.colorScheme.onSurface
+                                    }
+
+                                    Surface(
+                                        onClick = { selectedTileDetail = buildCustomPidDetailInfo(item) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = cardSurfaceColor,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            width = if (item.healthStatus != PidHealthStatus.NORMAL) 1.1.dp else 0.6.dp,
+                                            color = if (item.healthStatus != PidHealthStatus.NORMAL) accentColor.copy(alpha = 0.85f) else accentColor.copy(alpha = 0.4f)
+                                        ),
+                                        modifier = Modifier
+                                            .width(108.dp)
+                                            .height(70.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(horizontal = 6.dp, vertical = 5.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                if (item.healthStatus != PidHealthStatus.NORMAL) {
+                                                    DashboardAlertTriangleIcon(
+                                                        tint = accentColor,
+                                                        modifier = Modifier.size(11.dp)
+                                                    )
+                                                } else {
+                                                    DashboardPidIcon(
+                                                        item = item,
+                                                        tint = accentColor,
+                                                        modifier = Modifier.size(11.dp)
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = item.name,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    color = if (item.healthStatus != PidHealthStatus.NORMAL) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
                                             }
-                                        },
-                                        modifier = Modifier
-                                            .width(102.dp)
-                                            .height(66.dp)
-                                    )
-                                }
-                                items(obdbSignalResults.entries.toList()) { (sigId, valObj) ->
-                                    val sig = allObdbSignals[sigId]
-                                    val sigName = sig?.name ?: sigId
-                                    val (formattedVal, formattedUnit) = formatObdbValueWithUnit(valObj, sig, sigId, unitSystem)
-                                    SleekMetricTile(
-                                        label = sigName,
-                                        value = formattedVal,
-                                        unit = formattedUnit,
-                                        modifier = Modifier
-                                            .width(102.dp)
-                                            .height(66.dp)
-                                    )
+                                            Text(
+                                                text = item.formattedValue,
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Black,
+                                                maxLines = 1,
+                                                color = valueTextColor
+                                            )
+                                            Text(
+                                                text = when (item.healthStatus) {
+                                                    PidHealthStatus.OUT_OF_RANGE -> "${item.unit} • ALERT".trim(' ', '•')
+                                                    PidHealthStatus.MARGINAL -> "${item.unit} • WARN".trim(' ', '•')
+                                                    PidHealthStatus.NORMAL -> item.unit.ifBlank { item.category.displayName.substringBefore(" ") }
+                                                },
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                maxLines = 1,
+                                                color = accentColor
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         } else {
                             Text(
-                                text = "Enhanced Custom PIDs read manufacturer-specific parameters (Transmission Temp, Oil Pressure, Odometer, Fuel Level %, Tire Pressures). Tap 'Scan Mode 22' to query ECU.",
+                                text = "Enhanced Custom PIDs read manufacturer-specific parameters (${if (isHybridOrEv) "HV Battery SOC, MG1/MG2 Inverter Temps, Aux 12V, Tire Pressures" else "Transmission Temp, Oil Pressure, Cylinder Head Temp, Odometer"}). Tap 'Scan PIDs' to query ECU, or 'Select PIDs' to customize your favorites.",
                                 fontSize = 10.sp,
                                 lineHeight = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -5250,21 +8460,72 @@ fun VeraMainScreen(
                                             )
                                         }
                                     } else {
+                                        val cleanMsgText = msg.text
+                                            .replace("🚗", "")
+                                            .replace("🌐", "")
+                                            .replace("🔴", "")
+                                            .replace("💾", "")
+                                            .replace("🗑️", "")
+                                            .replace("📸", "")
+                                            .replace("🧠", "")
+                                            .replace("ℹ️", "")
+                                            .replace("⚠️", "")
+                                            .replace("⛔", "")
+                                            .replace("📷", "")
+                                            .replace("📄", "")
+                                            .trimStart()
+
+                                        val lowerClean = cleanMsgText.lowercase()
+                                        val eventIconType: String? = when {
+                                            isError || lowerClean.startsWith("cannot ") || lowerClean.startsWith("failed ") || lowerClean.contains("unavailable") -> "WARN"
+                                            lowerClean.startsWith("vehicle connected") || lowerClean.startsWith("vin decoded") ||
+                                                lowerClean.startsWith("connecting to") || lowerClean.startsWith("successfully connected") ||
+                                                lowerClean.startsWith("disconnected from") -> "CAR"
+                                            lowerClean.startsWith("obdb") || lowerClean.startsWith("scanning ") ||
+                                                lowerClean.startsWith("dtc scan") || lowerClean.startsWith("mode 06 scan") ||
+                                                lowerClean.startsWith("custom pids") || lowerClean.startsWith("re-querying mode 09") -> "SIGNAL"
+                                            lowerClean.startsWith("live data recording started") -> "REC"
+                                            lowerClean.startsWith("recorded live data log") || lowerClean.startsWith("captured 5-minute") -> "SAVE"
+                                            lowerClean.startsWith("live data recording discarded") -> "TRASH"
+                                            lowerClean.startsWith("diagnostic model changed") -> "MODEL"
+                                            isSystem -> "INFO"
+                                            else -> null
+                                        }
+
+                                        val eventIconTint = when (eventIconType) {
+                                            "WARN" -> Color(0xFFFF5252)
+                                            "REC" -> Color(0xFFFF5252)
+                                            "CAR", "SIGNAL", "SAVE", "MODEL" -> MaterialTheme.colorScheme.primary
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+
                                         Column(modifier = Modifier.padding(10.dp)) {
-                                            Text(
-                                                text = when (msg.sender) {
-                                                    "User" -> "You"
-                                                    "VERA", "OttoAI" -> "VERA Mechanic"
-                                                    "VERA (Live)", "OttoAI (Live)" -> "VERA (Live)"
-                                                    else -> msg.sender
-                                                },
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 11.sp,
-                                                color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary
-                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                if (eventIconType != null) {
+                                                    ChatEventFlatIcon(
+                                                        eventType = eventIconType,
+                                                        tint = eventIconTint,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(5.dp))
+                                                }
+                                                Text(
+                                                    text = when (msg.sender) {
+                                                        "User" -> "You"
+                                                        "VERA", "OttoAI" -> "VERA AI"
+                                                        "VERA (Live)", "OttoAI (Live)" -> "VERA (Live)"
+                                                        else -> msg.sender
+                                                    },
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 11.sp,
+                                                    color = if (isError) Color(0xFFFF5252) else MaterialTheme.colorScheme.primary
+                                                )
+                                            }
                                             Spacer(modifier = Modifier.height(2.dp))
                                             DtcAwareMessageText(
-                                                text = msg.text,
+                                                text = cleanMsgText,
                                                 textColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                                                 onDtcClick = onDtcClick
                                             )
@@ -5277,11 +8538,11 @@ fun VeraMainScreen(
                             Spacer(modifier = Modifier.height(28.dp))
                         }
                     }
-                    }
                 }
             }
         }
     }
+}
 
     // 5. PINNED INPUT CONTAINER + BOTTOM CHAT OUTLINE FRAME
     Surface(
@@ -5366,182 +8627,6 @@ fun VeraMainScreen(
             modifier = Modifier.padding(bottom = 4.dp)
         )
 
-        if (isReplaying) {
-            // --- FLIGHT RECORDER REPLAY CONTROLS (Bottom Bar) ---
-            var timeBoxWidthDp by remember { mutableStateOf<androidx.compose.ui.unit.Dp?>(null) }
-            val density = LocalDensity.current
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 2.dp, bottom = 4.dp)
-            ) {
-                // Scrubber with Elapsed / Total Time
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val curSec = replayCurrentMs / 1000
-                    val totSec = replayTotalDurationMs / 1000
-                    val timeStr = String.format(
-                        java.util.Locale.US,
-                        "%02d:%02d / %02d:%02d",
-                        curSec / 60, curSec % 60,
-                        totSec / 60, totSec % 60
-                    )
-
-                    Slider(
-                        value = replayProgress,
-                        onValueChange = { viewModel.seekReplay(it) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(28.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFF00E5FF),
-                            activeTrackColor = Color(0xFF00E5FF),
-                            inactiveTrackColor = Color(0xFF003847)
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF002833),
-                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
-                        modifier = Modifier.onGloballyPositioned { coords ->
-                            val w = with(density) { coords.size.width.toDp() }
-                            if (timeBoxWidthDp != w) {
-                                timeBoxWidthDp = w
-                            }
-                        }
-                    ) {
-                        Text(
-                            text = timeStr,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF00E5FF),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Transport Controls Row (Aligned with Slider and Time Box)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Left 3 buttons container: matches the progress bar (Slider) length
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 1. Skip Back 15s Button
-                        Surface(
-                            onClick = { viewModel.seekReplayBy(-15000L) },
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
-                            modifier = Modifier.height(46.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.FastRewind,
-                                    contentDescription = "Skip Back 15 Seconds",
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("-15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        // 2. Play / Pause Button (Large Prominent Action)
-                        Surface(
-                            onClick = { viewModel.toggleReplayPause() },
-                            shape = CircleShape,
-                            color = Color(0xFF00E5FF),
-                            modifier = Modifier.size(52.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isReplayPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                    contentDescription = if (isReplayPaused) "Play" else "Pause",
-                                    tint = Color(0xFF00222B),
-                                    modifier = Modifier.size(30.dp)
-                                )
-                            }
-                        }
-
-                        // 3. Skip Ahead 15s Button
-                        Surface(
-                            onClick = { viewModel.seekReplayBy(15000L) },
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
-                            modifier = Modifier.height(46.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("+15s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = Icons.Default.FastForward,
-                                    contentDescription = "Skip Ahead 15 Seconds",
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // 4. Stop Button (Matches width of the elapsed time box directly above it)
-                    Surface(
-                        onClick = { viewModel.stopReplay() },
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                        modifier = Modifier
-                            .then(
-                                if (timeBoxWidthDp != null) Modifier.width(timeBoxWidthDp!!)
-                                else Modifier.defaultMinSize(minWidth = 100.dp)
-                            )
-                            .height(46.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Stop,
-                                contentDescription = "Stop Replay",
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                "Stop",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
-                }
-            }
-        } else {
         // Input Row with '+' attachment button, borderless text input, and send button
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -5606,7 +8691,7 @@ fun VeraMainScreen(
             TextField(
                 value = userPrompt,
                 onValueChange = { userPrompt = it },
-                placeholder = { Text("Ask Vera", fontSize = 13.sp) },
+                placeholder = { Text("Text Vera", fontSize = 13.sp) },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
                 colors = TextFieldDefaults.colors(
@@ -5623,7 +8708,7 @@ fun VeraMainScreen(
 
             Spacer(modifier = Modifier.width(4.dp))
 
-            // 1. Send Button (swapped to come before voice button)
+            // 1. Send Button (flat, modern paper airplane icon before voice button)
             Button(
                 onClick = {
                     if (userPrompt.isNotBlank() || attachedFiles.isNotEmpty()) {
@@ -5653,8 +8738,9 @@ fun VeraMainScreen(
                     }
                 },
                 enabled = !isSendingMessage,
-                shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.height(36.dp)
             ) {
                 if (isSendingMessage) {
                     CircularProgressIndicator(
@@ -5663,7 +8749,10 @@ fun VeraMainScreen(
                         color = MaterialTheme.colorScheme.onPrimary
                     )
                 } else {
-                    Text("Send", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    SendPaperPlaneIcon(
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(17.dp)
+                    )
                 }
             }
 
@@ -5713,13 +8802,12 @@ fun VeraMainScreen(
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                         Toast.makeText(context, "Microphone permission required for voice mode.", Toast.LENGTH_SHORT).show()
                         micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else if (isGeminiSpeaking) {
-                        viewModel.interruptLivePlayback()
-                    } else if (isStandby) {
-                        // Tapping in HEY VERA standby toggles hands-free mode off back to Voice status
+                    } else if (isHandsFreeVoiceActive) {
+                        // Clean toggle OFF: Single tap turns voice interaction completely OFF from any state
                         viewModel.stopGeminiLiveSession()
                     } else {
-                        viewModel.toggleHandsFreeVoiceMode()
+                        // Clean toggle ON: Single tap turns voice interaction ON
+                        viewModel.startGeminiLiveSession()
                     }
                 },
                 shape = RoundedCornerShape(18.dp),
@@ -5755,7 +8843,6 @@ fun VeraMainScreen(
         }
         }
     }
-}
 }
 
     if (selectedDtcForDetail != null) {

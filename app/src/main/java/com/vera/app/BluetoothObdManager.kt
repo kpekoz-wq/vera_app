@@ -322,11 +322,40 @@ object Mode22Registry {
         Mode22PidDefinition("115C", "Vehicle Odometer", "Maintenance", "km", "GM Total Distance Odometer", "GM") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 64.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
 
         // Toyota / Lexus / Scion (Verified Mode 21 1-byte PIDs; full hybrid/chassis set loaded via OBDb)
-        Mode22PidDefinition("28", "Vehicle Odometer", "Maintenance", "km", "Toyota Vehicle Total Odometer (Mode 21 PID 28)", "Toyota", servicePrefix = "21") { a -> if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
         Mode22PidDefinition("82", "Transmission Pan Temp", "Transmission", "°C", "Toyota ATF Pan Temperature (Mode 21 PID 82)", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 256.0) - 40.0 else -40.0 },
 
         // Chrysler / Dodge / Jeep / Ram
         Mode22PidDefinition("01B4", "Vehicle Odometer", "Maintenance", "km", "Chrysler Total Vehicle Mileage", "Chrysler") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 }
+    )
+
+    val DEMO_CUSTOM_PID_DEFS = listOf(
+        Mode22PidDefinition("1E1C", "Transmission Fluid Temp", "Transmission", "°C", "Transmission Fluid Temperature (TFT)", "Ford"),
+        Mode22PidDefinition("1310", "Engine Oil Temp", "Engine Oil", "°C", "Engine Oil Temperature (EOT)", "Ford"),
+        Mode22PidDefinition("1304", "Engine Oil Pressure", "Engine Oil", "psi", "Engine Oil Gallery Pressure", "Ford"),
+        Mode22PidDefinition("1674", "Cylinder Head Temp", "Engine", "°C", "Cylinder Head Temperature (CHT)", "Ford"),
+        Mode22PidDefinition("162B", "Torque Converter Slip", "Transmission", "RPM", "Torque Converter Lockup Slip Speed", "Ford"),
+        Mode22PidDefinition("162C", "Transmission Gear Ratio", "Transmission", "Ratio", "Actual Transmission Gear Ratio", "Ford"),
+        Mode22PidDefinition("11B3", "Transmission Commanded Gear", "Transmission", "Gear", "Commanded Gear Position", "Ford"),
+        Mode22PidDefinition("1E24", "Trans Line Pressure Duty", "Transmission", "%", "Transmission EPC Solenoid Duty Cycle", "Ford"),
+        Mode22PidDefinition("042C", "Battery Voltage (BCM)", "Electrical", "V", "12V Battery Terminal Voltage", "Ford"),
+        Mode22PidDefinition("042F", "12V Battery SOC", "Electrical", "%", "12V Battery State of Charge (BMS)", "Ford"),
+        Mode22PidDefinition("0430", "Alternator Field Duty", "Electrical", "%", "Generator Field Control Duty Cycle", "Ford"),
+        Mode22PidDefinition("0432", "Alternator Charging Current", "Electrical", "A", "12V Charging System Current", "Ford"),
+        Mode22PidDefinition("116B", "Ignition Knock Retard", "Engine", "°", "Spark Knock Retard Timing Offset", "Ford"),
+        Mode22PidDefinition("16CF", "VCT Cam Phaser Error B1", "Engine", "°", "Variable Cam Timing Error Bank 1", "Ford"),
+        Mode22PidDefinition("16D0", "VCT Cam Phaser Error B2", "Engine", "°", "Variable Cam Timing Error Bank 2", "Ford"),
+        Mode22PidDefinition("163E", "Fuel Rail Pressure", "Fuel", "psi", "Electronic Fuel Rail Pressure", "Ford"),
+        Mode22PidDefinition("163F", "Fuel Pump Duty Cycle", "Fuel", "%", "Fuel Pump Driver Module Duty", "Ford"),
+        Mode22PidDefinition("1166", "EVAP Purge Valve Duty", "Emissions", "%", "Canister Purge Valve Duty Cycle", "Ford"),
+        Mode22PidDefinition("2813", "Tire Pressure FL", "Chassis", "psi", "Front Left Tire Pressure (TPMS)", "Ford"),
+        Mode22PidDefinition("2814", "Tire Pressure FR", "Chassis", "psi", "Front Right Tire Pressure (TPMS)", "Ford"),
+        Mode22PidDefinition("2815", "Tire Pressure RL", "Chassis", "psi", "Rear Left Tire Pressure (TPMS)", "Ford"),
+        Mode22PidDefinition("2816", "Tire Pressure RR", "Chassis", "psi", "Rear Right Tire Pressure (TPMS)", "Ford"),
+        Mode22PidDefinition("0994", "A/C Evaporator Temp", "Climate", "°C", "A/C Evaporator Core Temperature", "Ford"),
+        Mode22PidDefinition("0995", "Cabin Interior Temp", "Climate", "°C", "In-Car Cabin Temperature Sensor", "Ford"),
+        Mode22PidDefinition("0998", "A/C High Side Pressure", "Climate", "psi", "A/C Refrigerant Discharge Pressure", "Ford"),
+        Mode22PidDefinition("031A", "Cooling Fan Speed Duty", "Engine", "%", "Radiator Cooling Fan Commanded Duty", "Ford"),
+        Mode22PidDefinition("054B", "Engine Oil Life Remaining", "Maintenance", "%", "Intelligent Oil Life Monitor Index", "Ford")
     )
 
     fun getPidsForManufacturer(manufacturer: String): List<Mode22PidDefinition> {
@@ -550,6 +579,44 @@ class BluetoothObdManager {
         private set
     var demoPreset: DemoVehiclePreset = DemoVehiclePreset.CLEAN_ECU
 
+    private fun buildDemoMode22Streams(preset: DemoVehiclePreset): List<Mode22StreamData> {
+        val isDirty = preset == DemoVehiclePreset.DIRTY_ECU
+        val rawMap = mapOf(
+            "1E1C" to if (isDirty) 116.5 else 82.0,  // Trans Fluid Temp: 116.5°C (241.7°F) OUT OF RANGE vs 82.0°C (179.6°F) Normal
+            "1310" to if (isDirty) 119.5 else 91.0,  // Engine Oil Temp: 119.5°C (247.1°F) OUT OF RANGE vs 91.0°C (195.8°F) Normal
+            "1304" to if (isDirty) 16.5 else 44.0,   // Oil Pressure: 16.5 psi MARGINAL vs 44.0 psi Normal
+            "1674" to if (isDirty) 109.0 else 94.0,  // Cylinder Head Temp: 109.0°C (228.2°F) MARGINAL vs 94.0°C (201.2°F) Normal
+            "162B" to if (isDirty) 58.0 else 2.0,    // Torque Converter Slip: 58 RPM MARGINAL vs 2 RPM Normal
+            "162C" to 1.00,                          // Gear Ratio
+            "11B3" to 3.0,                           // Commanded Gear
+            "1E24" to if (isDirty) 78.0 else 36.0,   // Trans Line Pressure Duty
+            "042C" to if (isDirty) 11.9 else 14.1,   // 12V Battery Voltage: 11.9V MARGINAL vs 14.1V Normal
+            "042F" to if (isDirty) 54.0 else 94.0,   // 12V Battery SOC: 54% MARGINAL vs 94% Normal
+            "0430" to if (isDirty) 88.0 else 42.0,   // Alternator Field Duty
+            "0432" to if (isDirty) 68.5 else 24.0,   // Alternator Current
+            "116B" to if (isDirty) 4.8 else 0.0,     // Ignition Knock Retard: 4.8° OUT OF RANGE vs 0.0° Normal
+            "16CF" to if (isDirty) 5.2 else 0.2,     // VCT Cam Phaser Error B1: 5.2° OUT OF RANGE vs 0.2° Normal
+            "16D0" to if (isDirty) 1.8 else 0.1,     // VCT Cam Phaser Error B2: 1.8° MARGINAL vs 0.1° Normal
+            "163E" to if (isDirty) 26.5 else 39.5,   // Fuel Rail Pressure: 26.5 psi MARGINAL (causing P0171 lean) vs 39.5 psi Normal
+            "163F" to if (isDirty) 84.0 else 44.0,   // Fuel Pump Duty: 84% MARGINAL vs 44% Normal
+            "1166" to if (isDirty) 62.0 else 34.0,   // EVAP Purge Duty
+            "2813" to 34.5,                          // Tire Pressure FL
+            "2814" to 34.0,                          // Tire Pressure FR
+            "2815" to if (isDirty) 26.5 else 33.5,   // Tire Pressure RL: 26.5 psi MARGINAL vs 33.5 psi Normal
+            "2816" to if (isDirty) 21.0 else 33.5,   // Tire Pressure RR: 21.0 psi OUT OF RANGE vs 33.5 psi Normal
+            "0994" to 7.5,                           // A/C Evaporator Temp
+            "0995" to 21.5,                          // Cabin Temp
+            "0998" to 165.0,                         // A/C High Side Pressure
+            "031A" to if (isDirty) 95.0 else 25.0,   // Cooling Fan Duty
+            "054B" to if (isDirty) 11.0 else 86.0    // Engine Oil Life: 11% MARGINAL vs 86% Normal
+        )
+        return Mode22Registry.DEMO_CUSTOM_PID_DEFS.mapNotNull { def ->
+            val raw = rawMap[def.pidHex] ?: return@mapNotNull null
+            val formatted = String.format(java.util.Locale.US, "%.1f %s", raw, def.unit)
+            Mode22StreamData(pid = def, formattedValue = formatted, rawValue = raw)
+        }
+    }
+
     private fun startDemoSimulatorLoop() {
         isDemoMode = true
         pollingJob?.cancel()
@@ -586,7 +653,7 @@ class BluetoothObdManager {
                 Mode06TestResult("21", "Catalyst", "Catalyst Efficiency Bank 1", 1.85, 0.8, 2.0, "counts", Mode06Status.WARNING, "Catalyst Efficiency Bank 1: Measured 2 (Min: 0 | Max: 2) - Near Limit"),
                 Mode06TestResult("39", "EVAP System", "EVAP Leak Monitor (0.150\")", 12.0, 0.0, 500.0, "Pa", Mode06Status.PASS, "EVAP Leak Monitor: Measured 12 Pa (Min: 0 | Max: 500)")
             )
-            _mode22Streams.value = emptyList()
+            _mode22Streams.value = buildDemoMode22Streams(DemoVehiclePreset.DIRTY_ECU)
             _obdbSignalResults.value = emptyMap()
             cachedSupportedMode22Pids.clear()
         } else {
@@ -597,8 +664,22 @@ class BluetoothObdManager {
                 fuelTrim = 1,
                 engineLoad = 22
             )
-            _mode06Results.value = emptyList()
-            _mode22Streams.value = emptyList()
+            _mode06Results.value = listOf(
+                Mode06TestResult("A1", "Misfire", "General / Total Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "General / Total Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A2", "Misfire", "Cylinder 1 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 1 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A3", "Misfire", "Cylinder 2 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 2 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A4", "Misfire", "Cylinder 3 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 3 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A5", "Misfire", "Cylinder 4 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 4 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A6", "Misfire", "Cylinder 5 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 5 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A7", "Misfire", "Cylinder 6 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 6 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A8", "Misfire", "Cylinder 7 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 7 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("A9", "Misfire", "Cylinder 8 Misfires", 0.0, 0.0, 50.0, "misfires", Mode06Status.PASS, "Cylinder 8 Misfires: 0 misfires (Clean)"),
+                Mode06TestResult("21", "Catalyst", "Catalyst Efficiency Bank 1", 1.02, 0.8, 2.0, "counts", Mode06Status.PASS, "Catalyst Efficiency Bank 1: Measured 1 (Min: 0 | Max: 2)"),
+                Mode06TestResult("22", "Catalyst", "Catalyst Efficiency Bank 2", 1.05, 0.8, 2.0, "counts", Mode06Status.PASS, "Catalyst Efficiency Bank 2: Measured 1 (Min: 0 | Max: 2)"),
+                Mode06TestResult("01", "O2 Sensor", "O2 Sensor Bank 1 Sensor 1", 0.85, 0.2, 1.0, "V", Mode06Status.PASS, "O2 Sensor Bank 1 Sensor 1: Measured 0 (Min: 0 | Max: 1)"),
+                Mode06TestResult("39", "EVAP System", "EVAP Leak Monitor (0.150\")", 12.0, 0.0, 500.0, "Pa", Mode06Status.PASS, "EVAP Leak Monitor: Measured 12 Pa (Min: 0 | Max: 500)")
+            )
+            _mode22Streams.value = buildDemoMode22Streams(DemoVehiclePreset.CLEAN_ECU)
             _obdbSignalResults.value = emptyMap()
             cachedSupportedMode22Pids.clear()
         }
@@ -939,6 +1020,14 @@ class BluetoothObdManager {
 
         if (supportedList.isNotEmpty()) {
             _isStreamingLiveData.value = true
+            // Lock discovered CAN protocol so the adapter never enters a multi-second "SEARCHING..."
+            // state across legacy J1850/ISO9141 protocols if a single frame times out.
+            val dpn = sendAtCommand("AT DPN", 60).uppercase().replace(" ", "").trim()
+            val protoChar = dpn.lastOrNull { it in '1'..'9' || it in 'A'..'C' }
+            if (protoChar != null && dpn.startsWith("A")) {
+                Log.i(TAG, "Locking active OBD protocol $protoChar (from AT DPN=$dpn) to prevent mid-session SEARCHING...")
+                sendAtCommand("AT SP $protoChar", 60)
+            }
         }
 
         // Initialize StateFlow list of Supported Streams
@@ -1247,15 +1336,8 @@ class BluetoothObdManager {
 
     suspend fun readObdbSignals(): Map<String, Any?> {
         if (isDemoMode) {
-            val demoResults = mapOf(
-                "engine_rpm" to (if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 740.0 else 780.0),
-                "coolant_temp" to (if (demoPreset == DemoVehiclePreset.DIRTY_ECU) 98.0 else 90.0),
-                "fuel_level" to 65.5,
-                "intake_air_temp" to 28.0,
-                "ambient_air_temp" to 22.0
-            )
-            _obdbSignalResults.value = demoResults
-            return demoResults
+            _obdbSignalResults.value = emptyMap()
+            return emptyMap()
         }
         val loaded = (_obdbLoadedResult.value as? ObdbRepository.LoadResult.Loaded) ?: return emptyMap()
         // Wait if an active CAN broadcast sniff is running so we never collide on the serial stream
@@ -1272,7 +1354,7 @@ class BluetoothObdManager {
 
         return try {
             if (wasPolling) delay(200)
-            sendAtCommand("AT", 80)
+            restoreStandardObdMode()
 
             val runner = ObdbRunner { cmd -> sendAtCommand(cmd, 100) }
             val commandsByHeader = loaded.commands.groupBy { it.hdr }
@@ -1341,7 +1423,7 @@ class BluetoothObdManager {
             Log.e(TAG, "Error running OBDb signal scan", e)
             emptyMap()
         } finally {
-            sendAtCommand("AT SH 7DF", 80)
+            restoreStandardObdMode()
             isPollingPaused = false
             if (wasPolling && pollingJob?.isActive != true) startPollingLoop()
         }
@@ -1543,6 +1625,28 @@ class BluetoothObdManager {
         return addedCount > 0
     }
 
+    /**
+     * Restores standard OBD-II request/response filtering after STN `STM` or `ATMA` monitoring,
+     * or after non-standard ECU header queries.
+     *
+     * CRITICAL HARDWARE FIX: Adding pass filters with `STFPA` disables STN Automatic Filtering (`STFA`).
+     * Calling `STFAC` alone clears all pass filters while leaving `STFA` disabled, which causes the
+     * STN11xx / vLinker CAN controller to drop 100% of incoming ECU replies (`7E8`, `7B8`, `7C8`) and
+     * return `NO DATA` for all subsequent Mode 01, Mode 06, and Custom PID commands!
+     * Sending `STFA` + `AT CRA` + `AT AR` re-enables automatic OBD receive filtering immediately.
+     */
+    private suspend fun restoreStandardObdMode() {
+        if (isStnAdapter) {
+            sendAtCommand("STFAC", 40)
+            sendAtCommand("STFA", 40)
+        }
+        sendAtCommand("AT CRA", 40)
+        sendAtCommand("AT AR", 40)
+        sendAtCommand("AT H0", 40)
+        sendAtCommand("AT S1", 40)
+        sendAtCommand("AT SH 7DF", 40)
+    }
+
     private fun writeRaw(text: String) {
         val bytes = text.toByteArray(Charsets.US_ASCII)
         if (isUsbConnection && usbSerialPort != null) {
@@ -1680,95 +1784,53 @@ class BluetoothObdManager {
             if (wasPolling) delay(250)
             sendAtCommand("AT", 60)
             protocol = sendAtCommand("AT DP", 120).replace("\r", " ").replace("\n", " ").trim()
-            sendAtCommand("AT S1", 80)
-            sendAtCommand("AT H1", 80)
+            sendAtCommand("AT S1", 60)
+            sendAtCommand("AT H1", 60)
 
-            // Phase 1 (first ~2.5s): Unfiltered ATMA burst discovery to catalog all CAN IDs on the bus
-            val discoveryDurationMs = minOf(2500L, totalDurationMs / 2)
-            val discoveryDeadline = System.currentTimeMillis() + discoveryDurationMs
+            val prof = activeProfile
+            if (isStnAdapter && prof != null) {
+                usedStnFilter = configureStnFiltersForProfile(prof)
+            }
+
+            // When an STN hardware filter is armed for a known vehicle profile, stream purely via
+            // hardware-filtered STM for a fast 3.5s window so the UART buffer never overflows (0x bufferFull).
+            val effectiveDurationMs = if (usedStnFilter) minOf(3500L, totalDurationMs) else totalDurationMs
+            val monitorCmd = if (usedStnFilter) "STM\r" else "ATMA\r"
             canSniffActive = true
             responseMutex.withLock {
+                val deadline = System.currentTimeMillis() + effectiveDurationMs
                 clearResponseBuffer()
-                writeRaw("ATMA\r")
+                writeRaw(monitorCmd)
                 var lastProgressFrames = 0
                 var lastProgressTime = System.currentTimeMillis()
 
-                while (System.currentTimeMillis() < discoveryDeadline) {
+                while (System.currentTimeMillis() < deadline) {
                     delay(70)
                     drain(forceEmit = false)
 
                     val now = System.currentTimeMillis()
                     if (promptReceived) {
                         drain(forceEmit = false)
-                        if (now + 200L < discoveryDeadline) {
+                        if (now + 200L < deadline) {
                             delay(35)
                             clearResponseBuffer()
-                            writeRaw("ATMA\r")
+                            writeRaw(monitorCmd)
                             lastProgressTime = System.currentTimeMillis()
                         } else {
                             break
                         }
-                    } else if (now - lastProgressTime >= 450L) {
-                        if (total == lastProgressFrames && now + 250L < discoveryDeadline) {
+                    } else if (now - lastProgressTime >= 500L) {
+                        if (total == lastProgressFrames && now + 250L < deadline) {
                             writeRaw(" ")
                             delay(40)
                             clearResponseBuffer()
-                            writeRaw("ATMA\r")
+                            writeRaw(monitorCmd)
                         }
                         lastProgressFrames = total
                         lastProgressTime = System.currentTimeMillis()
                     }
                 }
                 drain(forceEmit = true)
-            }
-
-            // Cleanly stop Phase 1 ATMA before configuring Phase 2 hardware filter
-            stopAtmaAndFlushBuffer()
-
-            // Phase 2 (remaining ~5.5s): Hardware-filtered STM (or ATMA fallback) for zero-overflow real-time dynamics
-            val remainingMs = (started + totalDurationMs) - System.currentTimeMillis()
-            if (remainingMs > 400L) {
-                val prof = activeProfile
-                if (isStnAdapter && prof != null) {
-                    usedStnFilter = configureStnFiltersForProfile(prof)
-                }
-                val monitorCmd = if (usedStnFilter) "STM\r" else "ATMA\r"
-                canSniffActive = true
-                responseMutex.withLock {
-                    val deadline = started + totalDurationMs
-                    clearResponseBuffer()
-                    writeRaw(monitorCmd)
-                    var lastProgressFrames = total
-                    var lastProgressTime = System.currentTimeMillis()
-
-                    while (System.currentTimeMillis() < deadline) {
-                        delay(70)
-                        drain(forceEmit = false)
-
-                        val now = System.currentTimeMillis()
-                        if (promptReceived) {
-                            drain(forceEmit = false)
-                            if (now + 200L < deadline) {
-                                delay(35)
-                                clearResponseBuffer()
-                                writeRaw(monitorCmd)
-                                lastProgressTime = System.currentTimeMillis()
-                            } else {
-                                break
-                            }
-                        } else if (now - lastProgressTime >= 500L) {
-                            if (total == lastProgressFrames && now + 250L < deadline) {
-                                writeRaw(" ")
-                                delay(40)
-                                clearResponseBuffer()
-                                writeRaw(monitorCmd)
-                            }
-                            lastProgressFrames = total
-                            lastProgressTime = System.currentTimeMillis()
-                        }
-                    }
-                    drain(forceEmit = true)
-                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -1778,11 +1840,7 @@ class BluetoothObdManager {
             withContext(kotlinx.coroutines.NonCancellable) {
                 try {
                     stopAtmaAndFlushBuffer()
-                    if (usedStnFilter) {
-                        sendAtCommand("STFAC", 50)
-                    }
-                    sendAtCommand("AT H0", 80)
-                    sendAtCommand("AT SH 7DF", 80)
+                    restoreStandardObdMode()
                 } catch (e: Exception) {
                     Log.w(TAG, "CAN sniff cleanup issue", e)
                 } finally {
@@ -1902,11 +1960,7 @@ class BluetoothObdManager {
         } finally {
             try {
                 stopAtmaAndFlushBuffer()
-                if (usedStnFilter) {
-                    sendAtCommand("STFAC", 40)
-                }
-                sendAtCommand("AT H0", 40)
-                sendAtCommand("AT SH 7DF", 40)
+                restoreStandardObdMode()
             } catch (_: Exception) {
                 canSniffActive = false
             }
@@ -2160,11 +2214,12 @@ class BluetoothObdManager {
                         }
 
                         // 3. High-Speed CAN Broadcast Sample: populate Advanced Vehicle Dynamics
-                        // automatically via STN hardware filter (or ATMA) every 3 cycles (~1.2s).
+                        // automatically via STN hardware filter (or ATMA) every 6 cycles (~2.5s)
+                        // so Mode 01 gauges retain 85%+ of bus bandwidth.
                         cycleCount++
-                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % 3 == 0)) {
+                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % 6 == 0)) {
                             initialCanSampleDone = true
-                            sampleCanBroadcastInline(350L)
+                            sampleCanBroadcastInline(250L)
                         }
                     }
                     delay(30)
@@ -2447,8 +2502,7 @@ class BluetoothObdManager {
             if (wasPolling) {
                 delay(200)
             }
-            sendAtCommand("AT", 80)
-            sendAtCommand("AT SH 7DF", 100) // Ensure Functional Broadcast Header 7DF for Engine PCM!
+            restoreStandardObdMode()
 
             val allDtcList = mutableListOf<DtcDetails>()
 
@@ -2472,7 +2526,7 @@ class BluetoothObdManager {
             _metrics.value = _metrics.value.copy(dtcs = uniqueDtcs.map { it.code })
             uniqueDtcs
         } finally {
-            sendAtCommand("AT SH 7DF", 80)
+            restoreStandardObdMode()
             isPollingPaused = false
             if (wasPolling && pollingJob?.isActive != true) startPollingLoop()
         }
@@ -2605,12 +2659,7 @@ class BluetoothObdManager {
      */
     suspend fun scanMode22Pids(): List<Mode22StreamData> {
         if (isDemoMode) {
-            val demoPids = listOfNotNull(
-                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "1E1C" }?.let { Mode22StreamData(it, "85.0 °C", 85.0) },
-                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "1674" }?.let { Mode22StreamData(it, "92.0 °C", 92.0) },
-                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "1304" }?.let { Mode22StreamData(it, "42.5 psi", 42.5) },
-                Mode22Registry.KNOWN_PIDS.firstOrNull { it.pidHex == "162B" }?.let { Mode22StreamData(it, "0.0 RPM", 0.0) }
-            )
+            val demoPids = buildDemoMode22Streams(demoPreset)
             _mode22Streams.value = demoPids
             return demoPids
         }
@@ -2635,12 +2684,17 @@ class BluetoothObdManager {
             if (wasPolling) {
                 delay(200) // Flush in-flight serial polling frame
             }
-            sendAtCommand("AT", 80) // Sync handshake
+            restoreStandardObdMode()
 
             var currentHeader = ""
             suspend fun ensureHeader(hdr: String) {
                 if (currentHeader != hdr) {
                     sendAtCommand("AT SH $hdr", 60)
+                    val hdrInt = hdr.toIntOrNull(16)
+                    if (hdrInt != null && hdr.length == 3) {
+                        val rxAddr = String.format("%03X", hdrInt + 8)
+                        sendAtCommand("AT CRA $rxAddr", 50)
+                    }
                     currentHeader = hdr
                 }
             }
@@ -2768,7 +2822,7 @@ class BluetoothObdManager {
                 }
             }
         } finally {
-            sendAtCommand("AT SH 7DF", 100)
+            restoreStandardObdMode()
             isPollingPaused = false
             if (wasPolling && pollingJob?.isActive != true) startPollingLoop()
         }
@@ -2875,6 +2929,9 @@ class BluetoothObdManager {
             _vehicleOdometerKm.value = null
             _opendbcSignals.value = emptyMap()
             _activeOpendbcProfile.value = null
+            _canSniffReport.value = null
+            _isSniffingCan.value = false
+            canSniffActive = false
             _isHighSpeedCanCapable.value = false
             isStnAdapter = false
             _adapterHardwareName.value = "Generic ELM327"

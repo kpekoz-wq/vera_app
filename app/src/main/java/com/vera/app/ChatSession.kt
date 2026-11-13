@@ -21,7 +21,8 @@ data class ChatSession(
     val odometerFormatted: String? = null,
     val dtcs: List<String>? = emptyList(),
     val messages: List<ChatMessage>? = emptyList(),
-    val recordedSamples: List<RecordedDataSample>? = emptyList()
+    val recordedSamples: List<RecordedDataSample>? = emptyList(),
+    val mode06Results: List<Mode06TestResult>? = emptyList()
 ) {
     val formattedDate: String
         get() {

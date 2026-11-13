@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
+import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.pow
@@ -129,6 +130,7 @@ class VeraLocationManager(
 
     private var isTracking = false
     private var isDemoMode = false
+    val inDemoMode: Boolean get() = isDemoMode
 
     // Historical window for noise-resistant road grade calculation
     private data class AltitudeHistoryPoint(
@@ -204,39 +206,52 @@ class VeraLocationManager(
 
     @SuppressLint("MissingPermission")
     fun startTracking() {
-        if (isTracking) return
-        isTracking = true
+        if (!isTracking) {
+            isTracking = true
+            try {
+                // Update interval 2s, min distance 0m so stationary driveway/parking idling receives updates
+                val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
+                    .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS)
+                    .setMinUpdateDistanceMeters(0.0f)
+                    .build()
 
-        try {
-            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LOCATION_INTERVAL_MS)
-                .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS)
-                .setMinUpdateDistanceMeters(2.0f)
-                .build()
+                fusedLocationClient.requestLocationUpdates(
+                    request,
+                    locationCallback,
+                    Looper.getMainLooper()
+                )
 
-            fusedLocationClient.requestLocationUpdates(
-                request,
-                locationCallback,
-                Looper.getMainLooper()
-            )
+                if (linearAccelSensor != null) {
+                    sensorManager?.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
+                }
+                if (rawAccelSensor != null && rawAccelSensor != linearAccelSensor) {
+                    sensorManager?.registerListener(this, rawAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
+                }
+                if (pressureSensor != null) {
+                    sensorManager?.registerListener(this, pressureSensor, SensorManager.SENSOR_DELAY_NORMAL)
+                }
+                if (gravitySensor != null && gravitySensor != rawAccelSensor && gravitySensor != linearAccelSensor) {
+                    sensorManager?.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_NORMAL)
+                }
 
-            if (linearAccelSensor != null) {
-                sensorManager?.registerListener(this, linearAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
+                Log.i(TAG, "GPS, Barometer & Road Topography tracking started (hasBaro=$hasBarometer).")
+            } catch (e: SecurityException) {
+                Log.w(TAG, "Location permission not granted: ${e.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start location updates: ${e.message}", e)
             }
-            if (rawAccelSensor != null && rawAccelSensor != linearAccelSensor) {
-                sensorManager?.registerListener(this, rawAccelSensor, SensorManager.SENSOR_DELAY_NORMAL)
-            }
-            if (pressureSensor != null) {
-                sensorManager?.registerListener(this, pressureSensor, SensorManager.SENSOR_DELAY_NORMAL)
-            }
-            if (gravitySensor != null && gravitySensor != rawAccelSensor && gravitySensor != linearAccelSensor) {
-                sensorManager?.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_NORMAL)
-            }
+        }
 
-            Log.i(TAG, "GPS, Barometer & Road Topography tracking started (hasBaro=$hasBarometer).")
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Location permission not granted: ${e.message}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start location updates: ${e.message}", e)
+        // Immediately check cached last location and initiate an immediate one-shot high accuracy fix
+        if (!isDemoMode) {
+            try {
+                fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+                    if (loc != null && !isDemoMode) {
+                        processNewLocation(loc, forceGeocode = true)
+                    }
+                }
+            } catch (_: SecurityException) {}
+            forceRefreshLocation()
         }
     }
 
@@ -276,14 +291,102 @@ class VeraLocationManager(
             )
             Log.i(TAG, "Demo road topography enabled: Jones St (+${demoGrade}% grade)")
         } else {
-            // Restore actual GPS if available
+            // Restore actual GPS: IMMEDIATELY purge all simulated San Francisco data!
             altitudeHistory.clear()
             smoothedGrade = 0.0
+            currentGeocodedStreet = "Locating road..."
+            currentGeocodedCity = ""
+            lastGeocodedLocation = null
+            lastGeocodedTime = 0L
+            _roadContext.value = RoadContext()
+            Log.i(TAG, "Demo road topography purged. Immediately re-polling live GPS...")
+            forceRefreshLocation()
         }
     }
 
-    private fun processNewLocation(location: Location) {
-        if (isDemoMode) return // Demo overrides live GPS
+    /**
+     * Actively polls the device's Fused Location Provider for a fresh high-accuracy GPS fix
+     * and reverse-geocodes the address, updating [roadContext].
+     */
+    @SuppressLint("MissingPermission")
+    fun forceRefreshLocation(onComplete: ((RoadContext) -> Unit)? = null) {
+        if (isDemoMode) {
+            onComplete?.invoke(_roadContext.value)
+            return
+        }
+
+        try {
+            val tokenSource = com.google.android.gms.tasks.CancellationTokenSource()
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, tokenSource.token)
+                .addOnSuccessListener { loc ->
+                    if (loc != null && !isDemoMode) {
+                        processNewLocation(loc, forceGeocode = true) { updated ->
+                            onComplete?.invoke(updated)
+                        }
+                    } else {
+                        // Fallback to lastLocation if current location returned null
+                        try {
+                            fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
+                                if (lastLoc != null && !isDemoMode) {
+                                    processNewLocation(lastLoc, forceGeocode = true) { updated ->
+                                        onComplete?.invoke(updated)
+                                    }
+                                } else {
+                                    onComplete?.invoke(_roadContext.value)
+                                }
+                            }.addOnFailureListener {
+                                onComplete?.invoke(_roadContext.value)
+                            }
+                        } catch (e: SecurityException) {
+                            onComplete?.invoke(_roadContext.value)
+                        }
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "getCurrentLocation failed (${e.message}), trying lastLocation fallback")
+                    try {
+                        fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
+                            if (lastLoc != null && !isDemoMode) {
+                                processNewLocation(lastLoc, forceGeocode = true) { updated ->
+                                    onComplete?.invoke(updated)
+                                }
+                            } else {
+                                onComplete?.invoke(_roadContext.value)
+                            }
+                        }.addOnFailureListener {
+                            onComplete?.invoke(_roadContext.value)
+                        }
+                    } catch (sec: SecurityException) {
+                        onComplete?.invoke(_roadContext.value)
+                    }
+                }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Location permission not granted for forceRefreshLocation: ${e.message}")
+            onComplete?.invoke(_roadContext.value)
+        } catch (e: Exception) {
+            Log.e(TAG, "forceRefreshLocation error: ${e.message}", e)
+            onComplete?.invoke(_roadContext.value)
+        }
+    }
+
+    /**
+     * Suspending version of [forceRefreshLocation] for coroutine callers (e.g. Gemini tool execution).
+     */
+    suspend fun awaitFreshLocation(): RoadContext = suspendCancellableCoroutine { cont ->
+        forceRefreshLocation { fresh ->
+            if (cont.isActive) cont.resumeWith(Result.success(fresh))
+        }
+    }
+
+    private fun processNewLocation(
+        location: Location,
+        forceGeocode: Boolean = false,
+        onGeocoded: ((RoadContext) -> Unit)? = null
+    ) {
+        if (isDemoMode) {
+            onGeocoded?.invoke(_roadContext.value)
+            return // Demo overrides live GPS
+        }
 
         val obdConnected = isObdConnected()
         val obdSpeedKmh = if (obdConnected) getVehicleSpeedKmh() else 0
@@ -322,12 +425,12 @@ class VeraLocationManager(
             else -> InclineStatus.LEVEL
         }
 
-        // 2. Reverse Geocode (Throttled: every 50m or 10s)
-        triggerReverseGeocodeIfNeeded(location)
-
         _roadContext.value = RoadContext(
             streetName = currentGeocodedStreet,
             neighborhoodOrCity = currentGeocodedCity,
+            fullAddress = if (currentGeocodedStreet != "Locating road..." && currentGeocodedStreet != "Locating...") {
+                if (currentGeocodedCity.isNotBlank()) "$currentGeocodedStreet, $currentGeocodedCity" else currentGeocodedStreet
+            } else "",
             latitude = location.latitude,
             longitude = location.longitude,
             altitudeMeters = altMeters,
@@ -341,6 +444,9 @@ class VeraLocationManager(
             phoneAccelMps2 = currentPhoneAccelMps2,
             isDemoSimulated = false
         )
+
+        // 2. Reverse Geocode (Throttled: every 30m or on force)
+        triggerReverseGeocodeIfNeeded(location, force = forceGeocode, onComplete = onGeocoded)
     }
 
     /**
@@ -402,14 +508,25 @@ class VeraLocationManager(
         return (smoothedGrade * 10.0).roundToInt() / 10.0
     }
 
-    private fun triggerReverseGeocodeIfNeeded(location: Location) {
+    private fun triggerReverseGeocodeIfNeeded(
+        location: Location,
+        force: Boolean = false,
+        onComplete: ((RoadContext) -> Unit)? = null
+    ) {
         val now = System.currentTimeMillis()
         val last = lastGeocodedLocation
 
-        val shouldGeocode = last == null ||
-                (now - lastGeocodedTime >= 10_000L && location.distanceTo(last) >= 40.0f)
+        val shouldGeocode = force ||
+                last == null ||
+                currentGeocodedStreet == "Locating road..." ||
+                currentGeocodedStreet == "Locating..." ||
+                currentGeocodedStreet.isBlank() ||
+                (now - lastGeocodedTime >= 10_000L && location.distanceTo(last) >= 30.0f)
 
-        if (!shouldGeocode) return
+        if (!shouldGeocode) {
+            onComplete?.invoke(_roadContext.value)
+            return
+        }
 
         lastGeocodedLocation = location
         lastGeocodedTime = now
@@ -425,6 +542,7 @@ class VeraLocationManager(
                         if (addresses.isNotEmpty()) {
                             parseAddress(addresses[0])
                         }
+                        onComplete?.invoke(_roadContext.value)
                     }
                 } else {
                     @Suppress("DEPRECATION")
@@ -432,28 +550,38 @@ class VeraLocationManager(
                     if (!addresses.isNullOrEmpty()) {
                         parseAddress(addresses[0])
                     }
+                    onComplete?.invoke(_roadContext.value)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Geocoding error: ${e.message}")
+                onComplete?.invoke(_roadContext.value)
             }
         }
     }
 
     private fun parseAddress(address: Address) {
         val street = address.thoroughfare ?: address.featureName ?: "Main St"
-        val locality = address.locality ?: address.subAdminArea ?: ""
+        val locality = address.locality ?: address.subLocality ?: address.subAdminArea ?: ""
         val state = address.adminArea ?: ""
 
         currentGeocodedStreet = street
-        currentGeocodedCity = if (locality.isNotBlank() && state.isNotBlank()) "$locality, $state" else locality
+        currentGeocodedCity = if (locality.isNotBlank() && state.isNotBlank()) {
+            "$locality, $state"
+        } else {
+            locality.ifBlank { state }
+        }
+
+        val full = address.getAddressLine(0) ?: "$street, $locality"
 
         // Update active context with resolved road
         val curr = _roadContext.value
         _roadContext.value = curr.copy(
             streetName = currentGeocodedStreet,
             neighborhoodOrCity = currentGeocodedCity,
-            fullAddress = address.getAddressLine(0) ?: "$street, $locality"
+            fullAddress = full,
+            isDemoSimulated = false
         )
+        Log.i(TAG, "Live reverse geocode resolved: $currentGeocodedStreet, $currentGeocodedCity ($full)")
     }
 
     private fun degreesToCompass(degrees: Float): String {

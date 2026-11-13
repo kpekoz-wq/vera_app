@@ -70,10 +70,13 @@ object Obdb {
 
     data class Command(
         val hdr: String,            // 11-bit CAN request header, e.g. "726"
+        val rax: String? = null,    // Optional 11-bit CAN receive filter address, e.g. "72E" or "4C0"
+        val fcm1: Boolean = false,  // True if ISO-TP Flow Control Mode 1 (custom FC header) is required
         val service: Int,           // 0x01, 0x21 or 0x22 only
         val param: Int,             // PID (1 byte) or DID (2 bytes for service 22)
         val filter: YearFilter?,
         val dbgFilter: YearFilter?, // Years where this command is unverified / debug-only
+        val isDbg: Boolean = false, // True if marked community/debug in OBDb
         val freqSeconds: Double,
         val signals: List<Signal>
     ) {
@@ -89,13 +92,17 @@ object Obdb {
 
     data class ParseResult(val commands: List<Command>, val unsupported: Int)
 
-    // Fields we cannot honour yet (29-bit, extended addressing, K-line, custom flow control...).
-    private val UNSUPPORTED_KEYS = listOf("eax", "tst", "fcm1", "proto", "pri", "din", "dout", "baud", "init")
+    // Fields we cannot honour yet (29-bit, extended addressing, K-line...).
+    private val UNSUPPORTED_KEYS = listOf("eax", "tst", "proto", "pri", "din", "dout", "baud", "init")
 
-    /** Parse a signalset file and keep only verified commands that apply to [modelYear]. */
+    /**
+     * Parse a signalset file and keep verified commands first, followed by community/unverified
+     * commands that apply to [modelYear] (so vehicles with crowd-sourced definitions unlock all signals).
+     */
     fun parseSignalset(json: String, modelYear: Int?): ParseResult {
         val arr = JSONObject(json).optJSONArray("commands") ?: return ParseResult(emptyList(), 0)
-        val out = ArrayList<Command>()
+        val verifiedOut = ArrayList<Command>()
+        val communityFallbackOut = ArrayList<Command>()
         var unsupported = 0
         for (i in 0 until arr.length()) {
             val c = arr.optJSONObject(i) ?: continue
@@ -103,12 +110,30 @@ object Obdb {
             if (cmd == null) { unsupported++; continue }
             val f = cmd.filter
             if (modelYear != null && f != null && !f.matches(modelYear)) continue
-            // Skip commands flagged as debug/unverified for this model year in OBDb
+
             val dbgF = cmd.dbgFilter
-            if (modelYear != null && dbgF != null && dbgF.matches(modelYear)) continue
-            out.add(cmd)
+            val isYearDbg = modelYear != null && dbgF != null && dbgF.matches(modelYear)
+            val isBridgedYearVerified = if (isYearDbg && modelYear != null && dbgF != null) {
+                val prevVerified = (f == null || f.matches(modelYear - 1)) && !dbgF.matches(modelYear - 1)
+                val nextVerified = (f == null || f.matches(modelYear + 1)) && !dbgF.matches(modelYear + 1)
+                prevVerified && nextVerified
+            } else false
+
+            if (!cmd.isDbg && (!isYearDbg || isBridgedYearVerified)) {
+                verifiedOut.add(cmd)
+            } else {
+                communityFallbackOut.add(cmd)
+            }
         }
-        return ParseResult(out, unsupported)
+        val verifiedReqKeys = verifiedOut.map { "${it.hdr}_${it.request}" }.toSet()
+        val combined = ArrayList<Command>(verifiedOut.size + communityFallbackOut.size)
+        combined.addAll(verifiedOut)
+        for (fb in communityFallbackOut) {
+            if ("${fb.hdr}_${fb.request}" !in verifiedReqKeys) {
+                combined.add(fb)
+            }
+        }
+        return ParseResult(combined, unsupported)
     }
 
     private fun parseYearFilter(f: JSONObject?): YearFilter? {
@@ -121,13 +146,19 @@ object Obdb {
     }
 
     private fun parseCommand(c: JSONObject): Command? {
-        if (c.optBoolean("dbg", false)) return null                    // debug-only commands
         if (UNSUPPORTED_KEYS.any { c.has(it) }) return null
+        val isDbg = c.optBoolean("dbg", false)
 
         val hdr = c.optString("hdr").uppercase()
         if (hdr.length != 3 || !hdr.all { it in '0'..'9' || it in 'A'..'F' }) return null
-        val hdrInt = hdr.toInt(16)
-        if (c.has("rax") && c.getString("rax").toInt(16) != hdrInt + 8) return null  // ELM auto-filter only covers hdr+8
+        val raxRaw = if (c.has("rax")) c.optString("rax").uppercase() else ""
+        val rax = if (raxRaw.isEmpty()) {
+            null
+        } else if (raxRaw.length == 3 && raxRaw.all { it in '0'..'9' || it in 'A'..'F' }) {
+            raxRaw
+        } else {
+            return null // Non-11-bit receive address
+        }
 
         // READ-ONLY WHITELIST: only these three services are ever recognised.
         val cmdObj = c.optJSONObject("cmd") ?: return null
@@ -148,7 +179,19 @@ object Obdb {
 
         val filter = parseYearFilter(c.optJSONObject("filter"))
         val dbgFilter = parseYearFilter(c.optJSONObject("dbgfilter"))
-        return Command(hdr, service, param, filter, dbgFilter, c.optDouble("freq", 1.0), signals)
+        val fcm1 = c.optBoolean("fcm1", false)
+        return Command(
+            hdr = hdr,
+            rax = rax,
+            fcm1 = fcm1,
+            service = service,
+            param = param,
+            filter = filter,
+            dbgFilter = dbgFilter,
+            isDbg = isDbg,
+            freqSeconds = c.optDouble("freq", 1.0),
+            signals = signals
+        )
     }
 
     private fun paramOf(v: Any): Int = when (v) {
@@ -234,12 +277,28 @@ object Obdb {
  */
 class ObdbRunner(private val send: suspend (String) -> String) {
     private var currentHeader: String? = null
+    private var currentRax: String? = null
+    private var currentFcm1: Boolean = false
 
     /** Returns signalId -> value (Double / String / null), or null if the ECU gave no valid reply. */
     suspend fun read(cmd: Obdb.Command): Map<String, Any?>? {
-        if (currentHeader != cmd.hdr) {
+        val hdrInt = cmd.hdr.toIntOrNull(16)
+        val rxAddr = cmd.rax ?: if (hdrInt != null && cmd.hdr.length == 3) String.format("%03X", hdrInt + 8) else null
+        if (currentHeader != cmd.hdr || currentRax != rxAddr || currentFcm1 != cmd.fcm1) {
             send("AT SH ${cmd.hdr}")
+            if (rxAddr != null) {
+                send("AT CRA $rxAddr")
+            }
+            if (cmd.fcm1) {
+                send("AT FC SH ${cmd.hdr}")
+                send("AT FC SD 30 00 00")
+                send("AT FC SM 1")
+            } else if (currentFcm1) {
+                send("AT FC SM 0")
+            }
             currentHeader = cmd.hdr
+            currentRax = rxAddr
+            currentFcm1 = cmd.fcm1
         }
         val resp = send(cmd.request)
         val payloads = ObdParser.extractPayloads(resp, echo = cmd.request)
@@ -249,8 +308,15 @@ class ObdbRunner(private val send: suspend (String) -> String) {
 
     /** Call when you're done so the next ordinary request goes out on the functional header again. */
     suspend fun restoreHeader() {
+        if (currentFcm1) {
+            send("AT FC SM 0")
+        }
+        send("AT CRA")
+        send("AT AR")
         send("AT SH 7DF")
         currentHeader = null
+        currentRax = null
+        currentFcm1 = false
     }
 }
 
@@ -411,6 +477,77 @@ class ObdbRepository(private val context: Context) {
             val m = words.take(n).joinToString("-")
             out.add("$mk-$m")
             out.add("$mk-" + m.replace(Regex("([A-Za-z])(\\d)"), "$1-$2"))
+        }
+        // Manufacturer platform fallbacks so unlisted models/trims still inherit shared ECU PIDs
+        val mUpper = make.uppercase()
+        val mModelUpper = model.uppercase()
+        when {
+            mUpper.contains("TOYOTA") || mUpper.contains("LEXUS") || mUpper.contains("SCION") -> {
+                if (mModelUpper.contains("PRIUS") || mModelUpper.contains("HYBRID") || mModelUpper.contains("CT")) {
+                    out.add("Toyota-Prius")
+                }
+                out.add("Toyota-Camry")
+                out.add("Toyota-RAV4")
+                out.add("Toyota-Tacoma")
+            }
+            mUpper.contains("FORD") || mUpper.contains("LINCOLN") || mUpper.contains("MERCURY") -> {
+                out.add("Ford-F-150")
+                out.add("Ford-Explorer")
+                out.add("Ford-Mustang")
+            }
+            mUpper.contains("CHEV") || mUpper.contains("GMC") || mUpper.contains("BUICK") || mUpper.contains("CADILLAC") || mUpper == "GM" -> {
+                out.add("Chevrolet-Silverado")
+                out.add("Chevrolet-Equinox")
+                out.add("Chevrolet-Tahoe")
+            }
+            mUpper.contains("HONDA") || mUpper.contains("ACURA") -> {
+                out.add("Honda-Civic")
+                out.add("Honda-Accord")
+                out.add("Honda-CR-V")
+            }
+            mUpper.contains("SUBARU") -> {
+                out.add("Subaru-Outback")
+                out.add("Subaru-Forester")
+                out.add("Subaru-WRX")
+            }
+            mUpper.contains("HYUNDAI") || mUpper.contains("KIA") || mUpper.contains("GENESIS") -> {
+                out.add("Hyundai-Sonata")
+                out.add("Hyundai-Elantra")
+                out.add("Kia-Sorento")
+            }
+            mUpper.contains("JEEP") || mUpper.contains("DODGE") || mUpper.contains("RAM") || mUpper.contains("CHRYSLER") -> {
+                out.add("Jeep-Grand-Cherokee")
+                out.add("Chrysler-Pacifica")
+                out.add("Dodge-Grand-Caravan")
+                out.add("Jeep-Wrangler")
+                out.add("Ram-1500")
+            }
+            mUpper.contains("VOLKSWAGEN") || mUpper.contains("VW") || mUpper.contains("AUDI") || mUpper.contains("PORSCHE") -> {
+                out.add("Volkswagen-Golf")
+                out.add("Volkswagen-Jetta")
+                out.add("Audi-A4")
+            }
+            mUpper.contains("BMW") || mUpper.contains("MINI") -> {
+                out.add("BMW-3-Series")
+                out.add("BMW-X5")
+            }
+            mUpper.contains("NISSAN") || mUpper.contains("INFINITI") -> {
+                out.add("Nissan-Altima")
+                out.add("Nissan-Rogue")
+                out.add("Nissan-Leaf")
+            }
+            mUpper.contains("MAZDA") -> {
+                out.add("Mazda-CX-5")
+                out.add("Mazda-3")
+            }
+            mUpper.contains("MERCEDES") -> {
+                out.add("Mercedes-Benz-C-Class")
+                out.add("Mercedes-Benz-E-Class")
+            }
+            mUpper.contains("VOLVO") -> {
+                out.add("Volvo-XC60")
+                out.add("Volvo-XC90")
+            }
         }
         return out.toList()
     }

@@ -50,7 +50,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         private const val SAMPLE_RATE_OUT = 24000
         private const val LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest"
         /** If Gemini is flagged "speaking" but nothing has happened for this long, release the mic so she can't go deaf. */
-        private const val MODEL_ACTIVITY_WATCHDOG_MS = 30_000L
+        private const val MODEL_ACTIVITY_WATCHDOG_MS = 5_000L
         /** Give up (and tell the user) after this many failed reconnect attempts (~2 minutes). */
         private const val MAX_RECONNECT_ATTEMPTS = 15
         val SUPPORTED_LIVE_VOICES = setOf(
@@ -226,7 +226,7 @@ class GeminiLiveStreamManager(private val context: Context) {
         }
 
         _isLiveSessionActive.value = true
-        _isGeminiSpeaking.value = true // Initial state: suppress mic while connecting and greeting
+        _isGeminiSpeaking.value = false // Microphone is unsuppressed and ready for driver input
         lastModelActivityMs = System.currentTimeMillis()
 
         registerNetworkCallbackIfNeeded()
@@ -552,7 +552,6 @@ class GeminiLiveStreamManager(private val context: Context) {
     }
 
     private fun sendInitialGreetingTrigger(ws: WebSocket) {
-        _isGeminiSpeaking.value = true
         lastModelActivityMs = System.currentTimeMillis()
         val greetingPrompt = if (currentHasPriorHistory) {
             "The driver just reactivated hands-free voice mode during an ongoing conversation. Warmly acknowledge that you're back with them in one short, natural sentence (e.g. 'I'm back with you. Where were we?'), referencing the last topic if appropriate."
@@ -653,9 +652,9 @@ class GeminiLiveStreamManager(private val context: Context) {
                         continue
                     }
 
-                    // Suppress microphone transmission while Gemini is speaking to eliminate acoustic feedback and self-interruption
-                    if (_isGeminiSpeaking.value) {
-                        // Watchdog: if the "speaking" flag got stuck (missed turnComplete / cancelled tool call), release the mic
+                    // Suppress microphone transmission ONLY while Gemini is actively outputting audio via speaker to eliminate echo
+                    if (_isGeminiSpeaking.value && isPlayingActive) {
+                        // Watchdog: if the playback got stuck, release the mic
                         if (System.currentTimeMillis() - lastModelActivityMs > MODEL_ACTIVITY_WATCHDOG_MS) {
                             Log.w(TAG, "Speaking flag stuck with no model activity for ${MODEL_ACTIVITY_WATCHDOG_MS / 1000}s. Releasing microphone.")
                             _isGeminiSpeaking.value = false

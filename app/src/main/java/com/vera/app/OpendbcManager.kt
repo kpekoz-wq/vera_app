@@ -331,48 +331,12 @@ object OpendbcManager {
         map["toyota"] = VehicleDbcProfile(
             make = "Toyota",
             platformName = "Toyota / Lexus Hybrid & Global CAN (opendbc)",
-            filterCanIds = listOf("0AA", "024", "025", "245", "1C4", "0B4", "224", "228", "260", "127"),
+            filterCanIds = listOf("025", "0AA", "224", "245", "024"),
             messages = mapOf(
                 0x25 to CanMessageDef(
                     "025", 0x25, "STEER_ANGLE_SENSOR",
                     listOf(
                         CanSignalDef("Steering Angle", dbcBe(3), 12, Endianness.BIG_ENDIAN, 1.5, 0.0, -500.0, 500.0, "deg", signed = true)
-                    )
-                ),
-                0x24 to CanMessageDef(
-                    "024", 0x24, "KINEMATICS",
-                    listOf(
-                        CanSignalDef("Yaw Rate", 6, 10, Endianness.BIG_ENDIAN, 1.0, -512.0, -512.0, 512.0, "deg/s"),
-                        CanSignalDef("Lateral G", 38, 10, Endianness.BIG_ENDIAN, 0.01, -5.12, -5.0, 5.0, "g")
-                    )
-                ),
-                0x228 to CanMessageDef(
-                    "228", 0x228, "ACCELEROMETER",
-                    listOf(
-                        CanSignalDef("Longitudinal G", 1, 15, Endianness.BIG_ENDIAN, 0.001, 0.0, -2.5, 2.5, "g", signed = true)
-                    )
-                ),
-                0x260 to CanMessageDef(
-                    "260", 0x260, "STEER_TORQUE_SENSOR",
-                    listOf(
-                        CanSignalDef("Driver Torque", dbcBe(15), 16, Endianness.BIG_ENDIAN, 0.01, 0.0, -100.0, 100.0, "Nm", signed = true),
-                        CanSignalDef("EPS Torque", dbcBe(47), 16, Endianness.BIG_ENDIAN, 0.0066, 0.0, -200.0, 200.0, "Nm", signed = true)
-                    )
-                ),
-                0xAA to CanMessageDef(
-                    "0AA", 0xAA, "WHEEL_SPEEDS",
-                    listOf(
-                        // Raw 0x1A6F (6767) = 0.00 km/h (scale 0.01 km/h, offset -67.67 km/h -> in mph: scale 0.00621371, offset -42.0482)
-                        CanSignalDef("Wheel FR", dbcBe(7), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph"),
-                        CanSignalDef("Wheel FL", dbcBe(23), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph"),
-                        CanSignalDef("Wheel RR", dbcBe(39), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph"),
-                        CanSignalDef("Wheel RL", dbcBe(55), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph")
-                    )
-                ),
-                0xB4 to CanMessageDef(
-                    "0B4", 0xB4, "SPEED",
-                    listOf(
-                        CanSignalDef("Vehicle Speed (CAN)", dbcBe(47), 16, Endianness.BIG_ENDIAN, 0.00621371, 0.0, 0.0, 180.0, "mph")
                     )
                 ),
                 0x224 to CanMessageDef(
@@ -387,22 +351,20 @@ object OpendbcManager {
                         CanSignalDef("Accelerator", dbcBe(23), 8, Endianness.BIG_ENDIAN, 0.5, 0.0, 0.0, 100.0, "%")
                     )
                 ),
-                0x1C4 to CanMessageDef(
-                    "1C4", 0x1C4, "POWERTRAIN",
+                0x24 to CanMessageDef(
+                    "024", 0x24, "KINEMATICS",
                     listOf(
-                        CanSignalDef("Engine Speed (CAN)", dbcBe(7), 16, Endianness.BIG_ENDIAN, 1.0, 0.0, 0.0, 8000.0, "rpm")
+                        CanSignalDef("Yaw Rate", 6, 10, Endianness.BIG_ENDIAN, 1.0, -512.0, -512.0, 512.0, "deg/s")
                     )
                 ),
-                0x2E6 to CanMessageDef(
-                    "2E6", 0x2E6, "LEAD_INFO",
+                0xAA to CanMessageDef(
+                    "0AA", 0xAA, "WHEEL_SPEEDS",
                     listOf(
-                        CanSignalDef("Lead Distance", dbcBe(7), 13, Endianness.BIG_ENDIAN, 0.05, 0.0, 0.0, 250.0, "m")
-                    )
-                ),
-                0x127 to CanMessageDef(
-                    "127", 0x127, "GEAR_PACKET",
-                    listOf(
-                        CanSignalDef("Gear", 40, 4, Endianness.BIG_ENDIAN, 1.0, 0.0, 0.0, 10.0, "Gear")
+                        // Raw 0x1A6F (6767) = 0.00 km/h (scale 0.01 km/h, offset -67.67 km/h -> in mph: scale 0.00621371, offset -42.0482)
+                        CanSignalDef("Wheel FL", dbcBe(23), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph"),
+                        CanSignalDef("Wheel FR", dbcBe(7), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph"),
+                        CanSignalDef("Wheel RL", dbcBe(55), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph"),
+                        CanSignalDef("Wheel RR", dbcBe(39), 16, Endianness.BIG_ENDIAN, 0.00621371, -42.0482, 0.0, 180.0, "mph")
                     )
                 )
             )

@@ -26,7 +26,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -195,6 +197,14 @@ class GeminiAgentViewModel : ViewModel() {
         val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
         val trim = if (metrics.fuelTrim >= 0) "+${metrics.fuelTrim}%" else "${metrics.fuelTrim}%"
         // Only report values the car really sent. Missing ones are omitted (never invented).
+        val customPidItems = buildUnifiedCustomPidList(
+            mode22Streams = obdManager.mode22Streams.value,
+            obdbLoadedResult = obdManager.obdbLoadedResult.value,
+            obdbSignalResults = obdManager.obdbSignalResults.value,
+            unitSystem = unitSystem.value,
+            vehicleDetails = obdManager.vehicleDetails.value,
+            isMoving = metrics.speed > 2
+        )
         return buildMap {
             put("rpm", "${metrics.rpm} RPM")
             put("speed", spd)
@@ -202,6 +212,12 @@ class GeminiAgentViewModel : ViewModel() {
             put("fuel_trim", trim)
             if (volt != null) put("voltage", volt)
             if (trans != null) put("trans_temp", trans)
+            for ((k, sig) in obdManager.opendbcSignals.value) {
+                put("can_${k.lowercase().replace(" ", "_")}", sig.formattedValue)
+            }
+            for (item in customPidItems.filter { !it.isBooleanStatus }.take(20)) {
+                put(item.name, "${item.formattedValue} ${item.unit}".trim())
+            }
         }
     }
 
@@ -242,15 +258,16 @@ class GeminiAgentViewModel : ViewModel() {
     fun scanObdbSignals() {
         viewModelScope.launch {
             if (obdManager.connectionState.value !is BluetoothObdManager.ConnectionState.Connected) {
-                messages.add(ChatMessage("System", "Cannot scan OBDb parameters: OBD2 adapter is not connected."))
                 return@launch
             }
             _isScanningObdb.value = true
-            messages.add(ChatMessage("System", "Scanning vehicle-specific OBDb community parameters..."))
-            val results = obdManager.readObdbSignals()
-            val count = results.size
-            messages.add(ChatMessage("System", "OBDb Parameter Scan Complete: $count signals decoded."))
-            _isScanningObdb.value = false
+            try {
+                obdManager.readObdbSignals()
+            } catch (e: Exception) {
+                Log.e("GeminiAgentViewModel", "Error scanning OBDb signals", e)
+            } finally {
+                _isScanningObdb.value = false
+            }
         }
     }
 
@@ -382,7 +399,7 @@ class GeminiAgentViewModel : ViewModel() {
         messages.add(
             ChatMessage(
                 "System",
-                "🧠 Diagnostic Model Changed: ${model.displayName}\n${model.subtitle}"
+                "Diagnostic Model Changed: ${model.displayName}\n${model.subtitle}"
             )
         )
     }
@@ -900,7 +917,8 @@ class GeminiAgentViewModel : ViewModel() {
             odometerFormatted = odoStr,
             dtcs = dtcList,
             messages = messages.toList(),
-            recordedSamples = recordedCopy
+            recordedSamples = recordedCopy,
+            mode06Results = obdManager.mode06Results.value
         )
 
         // Offload disk I/O, heavy JSON serialization and loading all sessions to background thread
@@ -1092,7 +1110,7 @@ class GeminiAgentViewModel : ViewModel() {
         val session = sm.loadSession(sessionId) ?: return
         val samples = session.safeRecordedSamples
         if (samples.isEmpty()) {
-            messages.add(ChatMessage("System", "ℹ️ No flight telemetry data recorded for this session."))
+            messages.add(ChatMessage("System", "No flight telemetry data recorded for this session."))
             return
         }
 
@@ -1307,7 +1325,7 @@ class GeminiAgentViewModel : ViewModel() {
     fun startGeminiLiveSession() {
         if (VeraKillSwitch.isDeactivated.value) {
             val msg = VeraKillSwitch.deactivationMessage.value ?: "This test build of VERA has expired or been disabled."
-            messages.add(ChatMessage("Error", "⛔ $msg"))
+            messages.add(ChatMessage("Error", msg))
             stopGeminiLiveSession()
             return
         }
@@ -1627,7 +1645,12 @@ class GeminiAgentViewModel : ViewModel() {
 
         if (!isStreaming && streams.isEmpty() && opendbcSigs.isEmpty()) {
             val road = locationManager?.roadContext?.value
-            val roadText = if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating road..." && road.streetName != "Locating...") {
+            val roadText = if (road != null &&
+                (!road.isDemoSimulated || obdManager.isDemoMode) &&
+                road.streetName.isNotBlank() &&
+                road.streetName != "Locating road..." &&
+                road.streetName != "Locating..."
+            ) {
                 road.formattedTopography
             } else "Determining GPS road position..."
 
@@ -1662,11 +1685,23 @@ class GeminiAgentViewModel : ViewModel() {
             "RPM: ${metrics.rpm}, Speed: $spd, Coolant: $temp"
         }
 
-        val m22Text = if (m22Streams.isNotEmpty()) {
-            m22Streams.joinToString(", ") { p ->
-                val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(p.rawValue, p.pid, currentUnit, isVehicleMoving)
-                "${p.pid.name}: $fmtVal $fmtUnit"
-            }
+        val allCustomPids = buildUnifiedCustomPidList(
+            mode22Streams = m22Streams,
+            obdbLoadedResult = obdManager.obdbLoadedResult.value,
+            obdbSignalResults = obdManager.obdbSignalResults.value,
+            unitSystem = currentUnit,
+            vehicleDetails = vehicle,
+            isMoving = isVehicleMoving
+        )
+
+        val m22Text = if (allCustomPids.isNotEmpty()) {
+            val gauges = allCustomPids.filter { !it.isBooleanStatus }
+            val switches = allCustomPids.filter { it.isBooleanStatus }
+            val gaugeStr = gauges.joinToString(", ") { "${it.name} [${it.category.displayName}]: ${it.formattedValue} ${it.unit}".trim() }
+            val switchStr = if (switches.isNotEmpty()) {
+                " | Status Switches (${switches.size}): " + switches.take(25).joinToString(", ") { "${it.name}=${it.formattedValue}" }
+            } else ""
+            gaugeStr + switchStr
         } else "None polled yet"
 
         val canDynamicsText = if (opendbcSigs.isNotEmpty()) {
@@ -1680,7 +1715,9 @@ class GeminiAgentViewModel : ViewModel() {
             else String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371)
         } else "Not detected"
         val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
-        val m06Text = if (m06.isNotEmpty()) "${m06.size} monitors evaluated" else "Unscanned"
+        val m06Text = if (m06.isNotEmpty()) {
+            "${m06.size} monitors evaluated (" + m06.joinToString(", ") { "${it.name}: ${it.testValue.toInt()} ${it.unit} [${it.status}]" } + ")"
+        } else "Unscanned"
 
         val motionStateText = if (isVehicleMoving) {
             val spdText = if (isMetric) "${metrics.speed} km/h" else "$obdSpeedMph mph"
@@ -1689,7 +1726,12 @@ class GeminiAgentViewModel : ViewModel() {
             "STATIONARY / PARKED (0 mph - sitting in driveway or idling, NOT driving)"
         }
 
-        val roadText = if (road != null && road.streetName.isNotBlank() && road.streetName != "Locating road..." && road.streetName != "Locating...") {
+        val roadText = if (road != null &&
+            (!road.isDemoSimulated || obdManager.isDemoMode) &&
+            road.streetName.isNotBlank() &&
+            road.streetName != "Locating road..." &&
+            road.streetName != "Locating..."
+        ) {
             road.formattedTopography
         } else "Determining GPS road position & elevation..."
 
@@ -1702,9 +1744,9 @@ class GeminiAgentViewModel : ViewModel() {
             Road & Topography: $roadText
             OBD2 Connection: Connected & Actively Streaming ECU + CAN Bus Telemetry
             Active DTCs: $dtcText
-            Latest OBD2 Telemetry: $streamsText
+            Latest OBD2 Telemetry (Mode 01): $streamsText
             High-Speed CAN Bus Dynamics (opendbc - Steering, Wheels, Brake, Pedal): $canDynamicsText
-            Mode 22 Custom PIDs (Transmission Gear & Temps, Oil Pressure, Boost): $m22Text
+            Vehicle Custom PIDs & OBDb Signals (${allCustomPids.size} decoded): $m22Text
             Mode 06 Monitors: $m06Text
         """.trimIndent()
     }
@@ -1810,20 +1852,39 @@ class GeminiAgentViewModel : ViewModel() {
                             }
                             put("can_bus_dynamics_opendbc", canObj)
                         }
-                        val m22 = obdManager.mode22Streams.value
-                        if (m22.isNotEmpty()) {
-                            val roadSnap = locationManager?.roadContext?.value
-                            val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
+                        val roadSnap = locationManager?.roadContext?.value
+                        val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
+                        val allCustomPids = buildUnifiedCustomPidList(
+                            mode22Streams = obdManager.mode22Streams.value,
+                            obdbLoadedResult = obdManager.obdbLoadedResult.value,
+                            obdbSignalResults = obdManager.obdbSignalResults.value,
+                            unitSystem = currentUnit,
+                            vehicleDetails = obdManager.vehicleDetails.value,
+                            isMoving = isMoving
+                        )
+                        if (allCustomPids.isNotEmpty()) {
                             val m22Arr = JSONArray()
-                            for (p in m22) {
-                                val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(p.rawValue, p.pid, currentUnit, isMoving)
+                            for (item in allCustomPids) {
                                 m22Arr.put(JSONObject().apply {
-                                    put("name", p.pid.name)
-                                    put("category", p.pid.category)
-                                    put("value", "$fmtVal $fmtUnit".trim())
+                                    put("name", item.name)
+                                    put("category", item.category.displayName)
+                                    put("value", "${item.formattedValue} ${item.unit}".trim())
                                 })
                             }
-                            put("custom_mode22_pids", m22Arr)
+                            put("custom_mode22_and_obdb_pids", m22Arr)
+                        }
+                        val m06List = obdManager.mode06Results.value
+                        if (m06List.isNotEmpty()) {
+                            val m06Arr = JSONArray()
+                            for (m in m06List) {
+                                m06Arr.put(JSONObject().apply {
+                                    put("name", m.name)
+                                    put("category", m.category)
+                                    put("value", "${m.testValue.toInt()} ${m.unit}")
+                                    put("status", m.status.name)
+                                })
+                            }
+                            put("mode06_monitors", m06Arr)
                         }
                     }
                 }
@@ -1918,22 +1979,30 @@ class GeminiAgentViewModel : ViewModel() {
                         return JSONObject().apply {
                             put("connected", false)
                             put("status", "DISCONNECTED")
-                            put("error", "OBD2 adapter is not connected. Custom Mode 22 signals unavailable.")
+                            put("error", "OBD2 adapter is not connected. Custom Mode 22 & OBDb signals unavailable.")
                         }
                     }
-                    val m22 = obdManager.mode22Streams.value
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
+                    val allCustomPids = buildUnifiedCustomPidList(
+                        mode22Streams = obdManager.mode22Streams.value,
+                        obdbLoadedResult = obdManager.obdbLoadedResult.value,
+                        obdbSignalResults = obdManager.obdbSignalResults.value,
+                        unitSystem = currentUnit,
+                        vehicleDetails = obdManager.vehicleDetails.value,
+                        isMoving = obdManager.metrics.value.speed > 2
+                    )
                     JSONObject().apply {
                         put("connected", true)
                         put("driver_unit_system", if (isMetric) "METRIC (State temps in °C, pressures in kPa, distances in km)" else "SAE (State temps in °F, pressures in psi, distances in miles)")
+                        put("total_custom_pids_count", allCustomPids.size)
                         val arr = JSONArray()
-                        for (p in m22) {
-                            val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(p.rawValue, p.pid, currentUnit)
+                        for (item in allCustomPids) {
                             arr.put(JSONObject().apply {
-                                put("name", p.pid.name)
-                                put("category", p.pid.category)
-                                put("value", "$fmtVal $fmtUnit".trim())
+                                put("name", item.name)
+                                put("category", item.category.displayName)
+                                put("value", "${item.formattedValue} ${item.unit}".trim())
+                                put("is_switch", item.isBooleanStatus)
                             })
                         }
                         put("custom_pids", arr)
@@ -1971,6 +2040,22 @@ class GeminiAgentViewModel : ViewModel() {
                     sentinelManager.cancelAlerts(param)
                 }
                 "get_road_topography" -> {
+                    if (locationManager?.inDemoMode != true) {
+                        val current = locationManager?.roadContext?.value
+                        if (current == null || current.isDemoSimulated || current.streetName == "Locating road..." || current.streetName == "Locating...") {
+                            try {
+                                runBlocking {
+                                    withTimeoutOrNull(2500L) {
+                                        locationManager?.awaitFreshLocation()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w("GeminiAgentViewModel", "Location await timed out or failed: ${e.message}")
+                            }
+                        } else {
+                            locationManager?.forceRefreshLocation()
+                        }
+                    }
                     val road = locationManager?.roadContext?.value ?: RoadContext()
                     val obdSpeedMph = (obdManager.metrics.value.speed * 0.621371).toInt()
                     val isMoving = road.isMoving || obdSpeedMph >= 3
@@ -1978,6 +2063,9 @@ class GeminiAgentViewModel : ViewModel() {
                         put("status", "success")
                         put("street_name", road.streetName)
                         put("city", road.neighborhoodOrCity)
+                        put("full_address", road.fullAddress)
+                        put("latitude", road.latitude)
+                        put("longitude", road.longitude)
                         put("road_grade_percent", road.roadGradePercent)
                         put("incline_status", if (isMoving) road.inclineStatus.description else road.inclineStatus.stationaryDescription)
                         put("is_vehicle_moving", isMoving)
@@ -1992,6 +2080,9 @@ class GeminiAgentViewModel : ViewModel() {
                     }
                 }
                 "evaluate_topographical_performance" -> {
+                    if (locationManager?.inDemoMode != true) {
+                        locationManager?.forceRefreshLocation()
+                    }
                     val road = locationManager?.roadContext?.value ?: RoadContext()
                     val metrics = obdManager.metrics.value
                     val streams = obdManager.supportedStreams.value
@@ -2340,7 +2431,7 @@ class GeminiAgentViewModel : ViewModel() {
         _recordingSampleCount.value = 0
         _isRecording.value = true
 
-        messages.add(ChatMessage("System", "🔴 Live Data Recording Started. Telemetry data is being logged continuously..."))
+        messages.add(ChatMessage("System", "Live Data Recording Started. Telemetry data is being logged continuously..."))
 
         recordingJob = viewModelScope.launch(Dispatchers.Default) {
             while (_isRecording.value) {
@@ -2447,7 +2538,7 @@ class GeminiAgentViewModel : ViewModel() {
             messages.add(
                 ChatMessage(
                     sender = "VERA",
-                    text = "📸 Captured 5-minute black-box snapshot (${samplesCopy.size} data points over ${durationSec.toInt()}s) for: $reason.\nSaved to Downloads/$filename"
+                    text = "Captured 5-minute black-box snapshot (${samplesCopy.size} data points over ${durationSec.toInt()}s) for: $reason.\nSaved to Downloads/$filename"
                 )
             )
             autoSaveCurrentSession()
@@ -2462,18 +2553,18 @@ class GeminiAgentViewModel : ViewModel() {
     }
 
     fun onCsvSavedSuccessfully(result: RecordedCsvResult) {
-        val summary = "💾 Recorded Live Data Log Saved (${result.sampleCount} samples, ${String.format(java.util.Locale.US, "%.1f", result.durationSeconds)}s duration).\nCSV file generated and available for AI diagnostic analysis."
+        val summary = "Recorded Live Data Log Saved (${result.sampleCount} samples, ${String.format(java.util.Locale.US, "%.1f", result.durationSeconds)}s duration).\nCSV file generated and available for AI diagnostic analysis."
         messages.add(ChatMessage("System", summary))
     }
 
     fun onCsvAttachedForAnalysis(result: RecordedCsvResult) {
-        val summary = "💾 Recorded Live Data Log Attached (${result.sampleCount} samples, ${String.format(java.util.Locale.US, "%.1f", result.durationSeconds)}s duration).\nFile: ${result.defaultFilename}\n\nAsk VERA any question about this data log!"
+        val summary = "Recorded Live Data Log Attached (${result.sampleCount} samples, ${String.format(java.util.Locale.US, "%.1f", result.durationSeconds)}s duration).\nFile: ${result.defaultFilename}\n\nAsk VERA any question about this data log!"
         messages.add(ChatMessage("System", summary))
     }
 
     fun onDiscardRecordedData() {
         lastRecordedCsvResult = null
-        messages.add(ChatMessage("System", "🗑️ Live Data Recording Discarded."))
+        messages.add(ChatMessage("System", "Live Data Recording Discarded."))
     }
 
     private fun generateCsvData(
@@ -2606,12 +2697,35 @@ class GeminiAgentViewModel : ViewModel() {
             sb.append(row.joinToString(",")).append("\n")
         }
 
+        val m06 = obdManager.mode06Results.value
+        if (m06.isNotEmpty()) {
+            sb.append("\n# Mode 06 Component Monitor Results:\n")
+            for (item in m06) {
+                sb.append("# [${item.category}] ${item.name}: ${item.testValue} ${item.unit} (Min: ${item.minLimit ?: "--"}, Max: ${item.maxLimit ?: "--"}) -> ${item.status}\n")
+            }
+        }
+
         return sb.toString()
     }
 
     init {
         viewModelScope.launch {
+            var wasConnected = false
             obdManager.connectionState.collect { state ->
+                val isNowConnected = state is BluetoothObdManager.ConnectionState.Connected
+                if (wasConnected && !isNowConnected) {
+                    // Auto-sync logs whenever the connection drops, vehicle shuts off, or adapter is unplugged
+                    appContext?.let { ctx ->
+                        VeraDiagnosticTelemetrySync.syncSessionLogAsync(
+                            context = ctx,
+                            vehicleDetails = vehicleDetails.value,
+                            vehicleVin = vehicleVin.value,
+                            triggerReason = if (state is BluetoothObdManager.ConnectionState.Error) "connection_error" else "connection_drop"
+                        )
+                    }
+                }
+                wasConnected = isNowConnected
+
                 _connectionStatus.value = when (state) {
                     is BluetoothObdManager.ConnectionState.Disconnected -> {
                         resetVehicleDiagnostics()
@@ -2632,7 +2746,7 @@ class GeminiAgentViewModel : ViewModel() {
             obdManager.vehicleDetails.collect { details ->
                 if (!details.isNullOrBlank() && details != lastVehicleDetail) {
                     lastVehicleDetail = details
-                    messages.add(ChatMessage("System", "🚗 Vehicle Connected: $details"))
+                    messages.add(ChatMessage("System", "Vehicle Connected: $details"))
                 }
             }
         }
@@ -2662,29 +2776,14 @@ class GeminiAgentViewModel : ViewModel() {
                         val repoKey = "${result.repo}/${result.file}"
                         if (repoKey != lastLoadedRepo) {
                             lastLoadedRepo = repoKey
-                            messages.add(
-                                ChatMessage(
-                                    "System",
-                                    "🌐 OBDb Community Parameter Signalset Loaded: ${result.repo}/${result.file} (${result.commands.size} custom commands ready for Scan Mode 22)."
-                                )
-                            )
+                            Log.i("GeminiAgentViewModel", "OBDb Community Parameter Signalset Loaded: ${result.repo}/${result.file} (${result.commands.size} custom commands ready for Scan Mode 22).")
                         }
                     }
                     is ObdbRepository.LoadResult.NoData -> {
-                        messages.add(
-                            ChatMessage(
-                                "System",
-                                "ℹ️ No OBDb community parameter repository found for vehicle (tried: ${result.tried.joinToString(", ")})."
-                            )
-                        )
+                        Log.i("GeminiAgentViewModel", "No OBDb community parameter repository found for vehicle (tried: ${result.tried.joinToString(", ")}).")
                     }
                     is ObdbRepository.LoadResult.Unavailable -> {
-                        messages.add(
-                            ChatMessage(
-                                "System",
-                                "⚠️ OBDb Parameter Signalset Unavailable: ${result.reason}"
-                            )
-                        )
+                        Log.i("GeminiAgentViewModel", "OBDb Parameter Signalset Unavailable: ${result.reason}")
                     }
                     null -> {}
                 }
@@ -2923,6 +3022,7 @@ class GeminiAgentViewModel : ViewModel() {
                 } else {
                     locationManager?.setDemoMode(false)
                     locationManager?.startTracking()
+                    locationManager?.forceRefreshLocation()
                 }
             } else {
                 val errorMsg = result.exceptionOrNull()?.message ?: "Connection failed"
@@ -2934,10 +3034,23 @@ class GeminiAgentViewModel : ViewModel() {
 
     fun disconnectFromCar() {
         viewModelScope.launch {
+            val vDetails = vehicleDetails.value
+            val vVin = vehicleVin.value
             resetVehicleDiagnostics()
             locationManager?.setDemoMode(false)
+            locationManager?.forceRefreshLocation()
             obdManager.disconnect()
             messages.add(ChatMessage("System", "Disconnected from OBD2 adapter."))
+
+            // Silently upload session diagnostic log to cloud bucket for developer troubleshooting
+            appContext?.let { ctx ->
+                VeraDiagnosticTelemetrySync.syncSessionLogAsync(
+                    context = ctx,
+                    vehicleDetails = vDetails,
+                    vehicleVin = vVin,
+                    triggerReason = "manual_disconnect"
+                )
+            }
         }
     }
 
@@ -2968,21 +3081,19 @@ class GeminiAgentViewModel : ViewModel() {
     fun scanMode06Monitors() {
         viewModelScope.launch {
             if (obdManager.connectionState.value !is BluetoothObdManager.ConnectionState.Connected) {
-                messages.add(ChatMessage("System", "Cannot scan Mode 06: OBD2 adapter is not connected."))
                 return@launch
             }
             _isScanningMode06.value = true
-            messages.add(ChatMessage("System", "Scanning Full Mode 06 On-Board Diagnostic Component Monitors..."))
-            val m06Results = obdManager.scanAllMode06Monitors()
-
-            val summaryText = if (m06Results.isNotEmpty()) {
-                m06Results.joinToString("\n") { "• [${it.category}] ${it.name}: ${it.testValue.toInt()} ${it.unit} [${it.status}]" }
-            } else {
-                "No Mode 06 data retrieved."
+            try {
+                obdManager.scanAllMode06Monitors()
+                if (liveStreamManager?.isLiveSessionActive?.value == true) {
+                    liveStreamManager?.injectTelemetryContextUpdate(buildTelemetrySnapshotForLive())
+                }
+            } catch (e: Exception) {
+                Log.e("GeminiAgentViewModel", "Error scanning Mode 06 monitors", e)
+            } finally {
+                _isScanningMode06.value = false
             }
-
-            messages.add(ChatMessage("System", "Mode 06 Scan Complete (${m06Results.size} Monitors Evaluated):\n$summaryText"))
-            _isScanningMode06.value = false
         }
     }
 
@@ -2990,37 +3101,19 @@ class GeminiAgentViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 if (obdManager.connectionState.value !is BluetoothObdManager.ConnectionState.Connected && !obdManager.isDemoMode) {
-                    messages.add(ChatMessage("System", "Cannot scan Custom PIDs: OBD2 adapter is not connected."))
                     return@launch
                 }
                 _isScanningMode22.value = true
-                val details = obdManager.vehicleDetails.value ?: "Vehicle"
-                messages.add(ChatMessage("System", "Scanning Enhanced Custom PIDs & OBDb Signals for $details..."))
 
                 // Scan Mode 22 PIDs and OBDb Custom PIDs
-                val m22Results = obdManager.scanMode22Pids()
-                val obdbResults = obdManager.readObdbSignals()
+                obdManager.scanMode22Pids()
+                obdManager.readObdbSignals()
 
-                val currentUnit = unitSystem.value
-                val summaryList = mutableListOf<String>()
-                for (m22 in m22Results) {
-                    val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m22.rawValue, m22.pid, currentUnit)
-                    summaryList.add("• ${m22.pid.name}: $fmtVal $fmtUnit".trim())
+                if (liveStreamManager?.isLiveSessionActive?.value == true) {
+                    liveStreamManager?.injectTelemetryContextUpdate(buildTelemetrySnapshotForLive())
                 }
-                val loadedCmds = (obdbLoadedResult.value as? ObdbRepository.LoadResult.Loaded)?.commands ?: emptyList()
-                val allSignals = loadedCmds.flatMap { it.signals }.associateBy { it.id }
-                for ((sigId, valObj) in obdbResults) {
-                    val sig = allSignals[sigId]
-                    val sigName = sig?.name ?: sigId
-                    val (formattedVal, formattedUnit) = formatObdbValueWithUnit(valObj, sig, sigId, currentUnit)
-                    summaryList.add("• $sigName: $formattedVal $formattedUnit".trim())
-                }
-
-                val summary = if (summaryList.isNotEmpty()) summaryList.joinToString("\n") else "No Custom PID responses received from vehicle."
-                messages.add(ChatMessage("System", "Custom PIDs Scan Complete:\n$summary"))
             } catch (e: Exception) {
                 Log.e("GeminiAgentViewModel", "Error scanning Mode 22 parameters", e)
-                messages.add(ChatMessage("System", "Custom PIDs scan encountered an error: ${e.localizedMessage ?: e.message}"))
             } finally {
                 _isScanningMode22.value = false
             }
@@ -3049,7 +3142,7 @@ class GeminiAgentViewModel : ViewModel() {
 
         val attachmentCount = allAttachments.size
         val attachmentLabel = if (attachmentCount > 0) {
-            val names = allAttachments.joinToString(", ") { if (it.isImage) "📷 ${it.fileName}" else "📄 ${it.fileName}" }
+            val names = allAttachments.joinToString(", ") { it.fileName }
             "\n[Attached ($attachmentCount): $names]"
         } else ""
 
@@ -3065,7 +3158,7 @@ class GeminiAgentViewModel : ViewModel() {
             try {
                 if (VeraKillSwitch.isDeactivated.value) {
                     val msg = VeraKillSwitch.deactivationMessage.value ?: "This test build of VERA has expired or been disabled."
-                    messages.add(ChatMessage("Error", "⛔ $msg"))
+                    messages.add(ChatMessage("Error", msg))
                     return@launch
                 }
                 if (geminiApiKey.isBlank()) {
@@ -3125,18 +3218,25 @@ class GeminiAgentViewModel : ViewModel() {
                     }
 
                     val m06Summary = if (m06Data.isNotEmpty()) {
-                        m06Data.joinToString("\n") { "  • ${it.name}: ${it.testValue.toInt()} misfires (${it.status})" }
+                        m06Data.joinToString("\n") { "  • [${it.category}] ${it.name}: ${it.testValue.toInt()} ${it.unit} (${it.status})" }
                     } else {
                         "  • Mode 06 On-Board Monitors: Unscanned / Not queried yet"
                     }
 
-                    val m22Summary = if (m22Data.isNotEmpty()) {
-                        m22Data.joinToString("\n") { m ->
-                            val (fmtVal, fmtUnit) = formatMode22ValueWithUnit(m.rawValue, m.pid, currentUnit)
-                            "  • ${m.pid.name} (${m.pid.category}): $fmtVal $fmtUnit"
+                    val allCustomItems = buildUnifiedCustomPidList(
+                        mode22Streams = m22Data,
+                        obdbLoadedResult = obdManager.obdbLoadedResult.value,
+                        obdbSignalResults = obdManager.obdbSignalResults.value,
+                        unitSystem = currentUnit,
+                        vehicleDetails = obdManager.vehicleDetails.value,
+                        isMoving = obdManager.metrics.value.speed > 2
+                    )
+                    val m22Summary = if (allCustomItems.isNotEmpty()) {
+                        allCustomItems.joinToString("\n") { item ->
+                            "  • [${item.category.displayName}] ${item.name}: ${item.formattedValue} ${item.unit}".trimEnd()
                         }
                     } else {
-                        "  • Mode 22 Proprietary Parameters: Unscanned / Not queried yet"
+                        "  • Vehicle Custom PIDs (Mode 21/22 & OBDb): Unscanned / Not queried yet"
                     }
 
                     val opendbcData = opendbcSignals.value
