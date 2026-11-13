@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v4.5: Vehicle motion & driveway stationary drift shield (checks OBD2 wheel speed & phone accelerometer to distinguish parked on a driveway vs active hill climbing)"
+                releaseNotes = "VERA v2.8: Metric tile unit alignment and vertical line spacing fix across Live Streams and Advanced Dynamics; OBD serial zero-deadtime, pre-2018 CAN census adaptive discovery, and hardened ReadOnlyGuard."
                 artifactType = "APK"
             }
         }
