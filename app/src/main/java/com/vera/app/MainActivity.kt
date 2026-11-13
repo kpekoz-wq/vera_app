@@ -7266,36 +7266,41 @@ fun VeraMainScreen(
                             .padding(vertical = 2.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        items(streamTileChunks) { columnItems ->
+                        items(
+                            items = streamTileChunks,
+                            key = { chunk -> chunk.joinToString("-") { it.pid.pidHex } }
+                        ) { columnItems ->
                             Column(
                                 modifier = Modifier.width(102.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 columnItems.forEach { stream ->
-                                    val (formattedVal, formattedUnit) = formatValueWithUnit(stream.rawValue, stream.pid, unitSystem)
-                                    val pidHex = stream.pid.pidHex
-                                    val isSelected = selectedStreamPids.contains(pidHex)
-                                    SleekMetricTile(
-                                        label = stream.pid.name,
-                                        value = formattedVal,
-                                        unit = formattedUnit,
-                                        isSelected = isSelected,
-                                        onClick = {
-                                            if (!carouselListState.isScrollInProgress) {
-                                                selectedStreamForDetail = stream
-                                            }
-                                        },
-                                        onLongClick = {
-                                            if (selectedStreamPids.contains(pidHex)) {
-                                                selectedStreamPids.remove(pidHex)
-                                            } else {
-                                                selectedStreamPids.add(pidHex)
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(66.dp)
-                                    )
+                                    key(stream.pid.pidHex) {
+                                        val (formattedVal, formattedUnit) = formatValueWithUnit(stream.rawValue, stream.pid, unitSystem)
+                                        val pidHex = stream.pid.pidHex
+                                        val isSelected = selectedStreamPids.contains(pidHex)
+                                        SleekMetricTile(
+                                            label = stream.pid.name,
+                                            value = formattedVal,
+                                            unit = formattedUnit,
+                                            isSelected = isSelected,
+                                            onClick = {
+                                                if (!carouselListState.isScrollInProgress) {
+                                                    selectedStreamForDetail = stream
+                                                }
+                                            },
+                                            onLongClick = {
+                                                if (selectedStreamPids.contains(pidHex)) {
+                                                    selectedStreamPids.remove(pidHex)
+                                                } else {
+                                                    selectedStreamPids.add(pidHex)
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(66.dp)
+                                        )
+                                    }
                                 }
                                 if (columnItems.size < 2) {
                                     Spacer(modifier = Modifier.height(66.dp))

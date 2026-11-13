@@ -557,6 +557,11 @@ class BluetoothObdManager {
     private var workerJob: Job? = null
     private var pollingJob: Job? = null
     @Volatile var isPollingPaused = false
+    @Volatile private var isMultiPidBatchSupported: Boolean? = null
+    @Volatile private var isPassiveCanBlockedOnGateway = false
+    private var consecutiveEmptyCanSamples = 0
+    private val activeStreamCache = java.util.concurrent.ConcurrentHashMap<String, LiveStreamData>()
+    private var lastStreamUiEmitMs = 0L
 
     // Synchronization for synchronous AT command-response flow
     private val responseMutex = Mutex()
@@ -582,6 +587,13 @@ class BluetoothObdManager {
     private fun peekResponseBuffer(): String {
         return synchronized(responseBufferLock) {
             latestResponse.toString()
+        }
+    }
+
+    private fun hasPendingResponseInBuffer(): Boolean {
+        return synchronized(responseBufferLock) {
+            val idx = latestResponse.indexOf("7F")
+            idx != -1 && latestResponse.indexOf("78", idx) != -1
         }
     }
 
@@ -1049,8 +1061,12 @@ class BluetoothObdManager {
             }
         }
 
-        // Initialize StateFlow list of Supported Streams
-        _supportedStreams.value = discoveredPidDefinitions.map { LiveStreamData(pid = it) }
+        // Initialize StateFlow list of Supported Streams & Cache
+        activeStreamCache.clear()
+        for (pidDef in discoveredPidDefinitions) {
+            activeStreamCache[pidDef.pidHex.uppercase()] = LiveStreamData(pid = pidDef)
+        }
+        _supportedStreams.value = activeStreamCache.values.sortedBy { it.pid.pidHex }
         return discoveredPidDefinitions
     }
 
@@ -1869,6 +1885,13 @@ class BluetoothObdManager {
                 val finished = CanSniffReport(protocol, System.currentTimeMillis() - started, total, bufferFull, ids)
                 report = finished
                 _canSniffReport.value = finished
+                if (total == 0) {
+                    isPassiveCanBlockedOnGateway = true
+                    Log.i(TAG, "CAN sniff completed with 0 frames. Marking gateway as blocking passive broadcasts to OBD port.")
+                } else {
+                    isPassiveCanBlockedOnGateway = false
+                    consecutiveEmptyCanSamples = 0
+                }
                 logElmExchange("CAN SNIFF", finished.toDisplayText(40).replace("\n", " | "))
                 isPollingPaused = false
                 _isSniffingCan.value = false
@@ -1887,7 +1910,7 @@ class BluetoothObdManager {
      * without overflowing the adapter buffer.
      */
     private suspend fun sampleCanBroadcastInline(durationMs: Long = 350L) {
-        if (isDemoMode || _isSniffingCan.value || !_isHighSpeedCanCapable.value) return
+        if (isDemoMode || _isSniffingCan.value || !_isHighSpeedCanCapable.value || isPassiveCanBlockedOnGateway) return
         if (_connectionState.value !is ConnectionState.Connected) return
 
         val capturedFrames = mutableListOf<Pair<String, String>>()
@@ -1980,6 +2003,17 @@ class BluetoothObdManager {
             }
         }
 
+        if (capturedFrames.isEmpty()) {
+            consecutiveEmptyCanSamples++
+            if (consecutiveEmptyCanSamples >= 2) {
+                isPassiveCanBlockedOnGateway = true
+                Log.i(TAG, "Gateway detected blocking passive broadcast CAN frames on OBD port (2 consecutive 0-frame samples). Backing off inline sniffing to preserve 100% OBD bandwidth.")
+            }
+        } else {
+            consecutiveEmptyCanSamples = 0
+            isPassiveCanBlockedOnGateway = false
+        }
+
         if (decodedMap.isNotEmpty() && decodedMap != _opendbcSignals.value) {
             _opendbcSignals.value = LinkedHashMap(decodedMap)
         }
@@ -2013,8 +2047,7 @@ class BluetoothObdManager {
             val startTime = System.currentTimeMillis()
             while (!promptReceived) {
                 // SAE J1979 / ISO 15765-4: Extend timeout up to 5000ms if ECU sends 7F xx 78 (Response Pending)
-                val currentText = peekResponseBuffer()
-                if (currentText.contains("7F") && currentText.contains("78")) {
+                if (hasPendingResponseInBuffer()) {
                     maxTimeout = 5000L
                 }
                 if (System.currentTimeMillis() - startTime > maxTimeout) {
@@ -2105,6 +2138,49 @@ class BluetoothObdManager {
      * - Frames starting with `41` belong to Mode 01 (Live Sensor Telemetry Stream).
      * - Frames starting with `43`, `47`, `4A` belong to Mode 03/07/0A (DTC Fault Codes).
      */
+    private fun applyMode01Pid(pidHex: String, dataBytes: IntArray, pidDef: ObdPidDefinition?) {
+        val currentMetrics = _metrics.value
+        val updatedMetrics = when (pidHex) {
+            "04" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(engineLoad = (dataBytes[0] * 100) / 255) else currentMetrics
+            "05" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(coolantTemp = dataBytes[0] - 40) else currentMetrics
+            "06" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(fuelTrim = ((dataBytes[0] - 128) * 100) / 128) else currentMetrics
+            "0C" -> if (dataBytes.size >= 2) currentMetrics.copy(rpm = ((dataBytes[0] * 256) + dataBytes[1]) / 4) else currentMetrics
+            "0D" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(speed = dataBytes[0]) else currentMetrics
+            "0F" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(intakeAirTemp = dataBytes[0] - 40) else currentMetrics
+            "10" -> if (dataBytes.size >= 2) currentMetrics.copy(maf = ((dataBytes[0] * 256) + dataBytes[1]) / 100.0) else currentMetrics
+            "11" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(throttlePosition = (dataBytes[0] * 100) / 255) else currentMetrics
+            else -> currentMetrics
+        }
+        _metrics.value = updatedMetrics
+
+        val normalizedHex = pidHex.uppercase()
+        val existing = activeStreamCache[normalizedHex]
+        val def = existing?.pid ?: pidDef
+        if (def != null && dataBytes.size >= def.bytesRequired) {
+            val calculatedValue = def.parseValue?.invoke(dataBytes) ?: 0.0
+            val formatted = String.format(java.util.Locale.US, "%.1f %s", calculatedValue, def.unit)
+            val currentHistory = existing?.history ?: emptyList()
+            val updatedHistory = if (currentHistory.size >= 100) {
+                currentHistory.drop(1) + StreamSample(calculatedValue)
+            } else {
+                currentHistory + StreamSample(calculatedValue)
+            }
+            activeStreamCache[normalizedHex] = LiveStreamData(
+                pid = def,
+                formattedValue = formatted,
+                rawValue = calculatedValue,
+                history = updatedHistory,
+                lastUpdated = System.currentTimeMillis()
+            )
+
+            val now = System.currentTimeMillis()
+            if (now - lastStreamUiEmitMs >= 100L) { // Smooth 10 Hz UI StateFlow throttle
+                lastStreamUiEmitMs = now
+                _supportedStreams.value = activeStreamCache.values.sortedBy { it.pid.pidHex }
+            }
+        }
+    }
+
     private fun processResponse(fullResponse: String) {
         if (fullResponse.isBlank()) return
         if (canSniffActive) return // raw monitor-mode frames, not OBD responses
@@ -2122,41 +2198,33 @@ class BluetoothObdManager {
                         _isStreamingLiveData.value = true
                         Log.i(TAG, "First live Mode 01 telemetry frame received. isStreamingLiveData = true")
                     }
-                    val pidHex = String.format("%02X", payload[1])
-                    val dataBytes = payload.copyOfRange(2, payload.size)
 
-                    val currentMetrics = _metrics.value
-                    val updatedMetrics = when (pidHex) {
-                        "04" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(engineLoad = (dataBytes[0] * 100) / 255) else currentMetrics
-                        "05" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(coolantTemp = dataBytes[0] - 40) else currentMetrics
-                        "06" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(fuelTrim = ((dataBytes[0] - 128) * 100) / 128) else currentMetrics
-                        "0C" -> if (dataBytes.size >= 2) currentMetrics.copy(rpm = ((dataBytes[0] * 256) + dataBytes[1]) / 4) else currentMetrics
-                        "0D" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(speed = dataBytes[0]) else currentMetrics
-                        "0F" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(intakeAirTemp = dataBytes[0] - 40) else currentMetrics
-                        "10" -> if (dataBytes.size >= 2) currentMetrics.copy(maf = ((dataBytes[0] * 256) + dataBytes[1]) / 100.0) else currentMetrics
-                        "11" -> if (dataBytes.isNotEmpty()) currentMetrics.copy(throttlePosition = (dataBytes[0] * 100) / 255) else currentMetrics
-                        else -> currentMetrics
-                    }
-                    _metrics.value = updatedMetrics
+                    var offset = 1
+                    var pidsInPayload = 0
+                    while (offset < payload.size) {
+                        val pidByte = payload[offset]
+                        val pidHex = String.format("%02X", pidByte)
+                        val pidDef = ObdPidRegistry.KNOWN_PIDS[pidHex]
+                            ?: discoveredPidDefinitions.firstOrNull { it.pidHex.equals(pidHex, ignoreCase = true) }
 
-                    val currentStreams = _supportedStreams.value.toMutableList()
-                    val streamIdx = currentStreams.indexOfFirst { it.pid.pidHex == pidHex }
-                    if (streamIdx != -1) {
-                        val pidDef = currentStreams[streamIdx].pid
-                        if (dataBytes.size >= pidDef.bytesRequired) {
-                            val calculatedValue = pidDef.parseValue?.invoke(dataBytes) ?: 0.0
-                            val formatted = String.format(java.util.Locale.US, "%.1f %s", calculatedValue, pidDef.unit)
-                            val currentHistory = currentStreams[streamIdx].history
-                            val updatedHistory = (currentHistory + StreamSample(calculatedValue)).takeLast(500)
-                            currentStreams[streamIdx] = LiveStreamData(
-                                pid = pidDef,
-                                formattedValue = formatted,
-                                rawValue = calculatedValue,
-                                history = updatedHistory,
-                                lastUpdated = System.currentTimeMillis()
-                            )
-                            _supportedStreams.value = currentStreams
+                        val bytesReq = pidDef?.bytesRequired ?: (payload.size - (offset + 1))
+                        if (offset + 1 + bytesReq <= payload.size && bytesReq > 0) {
+                            val dataBytes = payload.copyOfRange(offset + 1, offset + 1 + bytesReq)
+                            applyMode01Pid(pidHex, dataBytes, pidDef)
+                            pidsInPayload++
+                            offset += 1 + bytesReq
+                        } else {
+                            val remainingBytes = payload.copyOfRange(offset + 1, payload.size)
+                            if (remainingBytes.isNotEmpty()) {
+                                applyMode01Pid(pidHex, remainingBytes, pidDef)
+                                pidsInPayload++
+                            }
+                            break
                         }
+                    }
+                    if (pidsInPayload > 1 && isMultiPidBatchSupported != true) {
+                        isMultiPidBatchSupported = true
+                        Log.i(TAG, "Multi-PID response decoded ($pidsInPayload PIDs in single frame). isMultiPidBatchSupported = true")
                     }
                 }
             }
@@ -2164,60 +2232,109 @@ class BluetoothObdManager {
     }
 
     /**
-     * High-performance prioritized PID polling loop.
-     * Splits PIDs into:
-     * - Priority PIDs: Speed (010D), RPM (010C), Throttle (0111) which change rapidly and demand high refresh rates.
-     * - Secondary PIDs: Coolant, trims, intake temp, MAF, baro, fuel level, which change slowly.
-     * On each cycle:
-     * - All Priority PIDs are queried immediately.
-     * - 1 or 2 Secondary PIDs are queried round-robin.
-     * This provides 5-8 Hz responsiveness for speedometer & tachometer, while preventing slow PIDs or timeouts
-     * from starving motion and speed detection!
+     * High-performance Tiered Multi-Rate PID polling loop with Multi-PID batch bundling.
+     * Tier 1 (Fast, every cycle ~10-25ms): Speed (0D), RPM (0C), Throttle (11) - bundled in single request if supported.
+     * Tier 2 (Medium, every 4 cycles ~100-200ms): Load (04), MAP (0B), Fuel Trims (06, 07), MAF (10), Timing (0E).
+     * Tier 3 (Slow, every 24 cycles ~1.5-2.5s): Coolant (05), IAT (0F), Ambient (46), Fuel Level (2F), Baro (33), Run Time (1F), Oil Temp (5C).
+     * Tier 4 (Extended, every 48 cycles ~3-5s): All other discovered PIDs (round-robin).
+     * High-Speed CAN Broadcast: Interleaved every 12 cycles when driving, 6 when parked.
      */
     private fun startPollingLoop() {
         pollingJob?.cancel()
         pollingJob = ioScope.launch {
             val allPids = if (discoveredPidDefinitions.isNotEmpty()) discoveredPidDefinitions else ObdPidRegistry.DEFAULT_PIDS
 
-            // Priority: Speed (0D), RPM (0C), Throttle (11)
-            val priorityHexes = setOf("0D", "0C", "11")
-            val priorityPids = allPids.filter { it.pidHex.uppercase() in priorityHexes }.ifEmpty {
-                listOfNotNull(ObdPidRegistry.KNOWN_PIDS["0D"], ObdPidRegistry.KNOWN_PIDS["0C"])
+            // Priority Tier 1: Speed (0D), RPM (0C), Throttle (11) - high dynamic range
+            val tier1Hexes = setOf("0D", "0C", "11")
+            val tier1Pids = allPids.filter { it.pidHex.uppercase() in tier1Hexes }.ifEmpty {
+                listOfNotNull(ObdPidRegistry.KNOWN_PIDS["0D"], ObdPidRegistry.KNOWN_PIDS["0C"], ObdPidRegistry.KNOWN_PIDS["11"])
             }
-            val secondaryPids = allPids.filter { it.pidHex.uppercase() !in priorityHexes }
 
-            var secondaryIdx = 0
+            // Medium Tier 2: Load (04), MAP (0B), Fuel Trims (06, 07), MAF (10), Timing (0E)
+            val tier2Hexes = setOf("04", "0B", "06", "07", "10", "0E")
+            val tier2Pids = allPids.filter { it.pidHex.uppercase() in tier2Hexes }
+
+            // Slow Tier 3: Coolant (05), IAT (0F), Ambient (46), Fuel Level (2F), Baro (33), Run Time (1F), Oil Temp (5C)
+            val tier3Hexes = setOf("05", "0F", "46", "2F", "33", "1F", "5C")
+            val tier3Pids = allPids.filter { it.pidHex.uppercase() in tier3Hexes }
+
+            // Extended Tier 4: All other discovered PIDs (round-robin)
+            val tier4Pids = allPids.filter {
+                val hex = it.pidHex.uppercase()
+                hex !in tier1Hexes && hex !in tier2Hexes && hex !in tier3Hexes
+            }
+
+            var tier2Idx = 0
+            var tier3Idx = 0
+            var tier4Idx = 0
             var cycleCount = 0
             var initialCanSampleDone = false
             var consecutiveEmptyResponses = 0
 
+            // Multi-PID probe: Check if vehicle CAN ECU supports ISO 15765-4 multi-PID requests (e.g. 010D0C11)
+            if (isMultiPidBatchSupported == null && !isDemoMode) {
+                try {
+                    val probeRx = sendAtCommand("010D0C11", 10)
+                    val cleaned = probeRx.replace(" ", "").uppercase()
+                    if (cleaned.contains("410D") && (cleaned.contains("0C") || cleaned.contains("11"))) {
+                        isMultiPidBatchSupported = true
+                        Log.i(TAG, "ECU verified supports Multi-PID batch requests! Enabling bundled 010D0C11.")
+                    } else {
+                        isMultiPidBatchSupported = false
+                        Log.i(TAG, "ECU does not support Multi-PID batch requests (response: $probeRx). Using single-PID polling.")
+                    }
+                } catch (e: Exception) {
+                    isMultiPidBatchSupported = false
+                    Log.w(TAG, "Multi-PID probe failed", e)
+                }
+            }
+
             while (isActive) {
                 try {
                     if (!isPollingPaused) {
-                        // 1. Fast-Path: Query High-Priority Speed & RPM
-                        for (pPid in priorityPids) {
-                            if (isPollingPaused || !isActive) break
-                            val rx = sendAtCommand(pPid.fullCommand, 10)
-                            if (rx.isBlank()) {
-                                consecutiveEmptyResponses++
-                            } else {
-                                consecutiveEmptyResponses = 0
+                        cycleCount++
+
+                        // 1. Tier 1 (Fast-Path, polled EVERY cycle): Speed, RPM, Throttle
+                        if (isMultiPidBatchSupported == true) {
+                            val rx = sendAtCommand("010D0C11", 10)
+                            if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
+                        } else {
+                            for (pPid in tier1Pids) {
+                                if (isPollingPaused || !isActive) break
+                                val rx = sendAtCommand(pPid.fullCommand, 10)
+                                if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
 
-                        // 2. Interleaved Round-Robin: Query 1 or 2 secondary slower-changing PIDs
-                        if (secondaryPids.isNotEmpty() && consecutiveEmptyResponses < 6) {
-                            val countToPoll = minOf(2, secondaryPids.size)
+                        // 2. Tier 2 (Medium, polled every 4 cycles ~100-200ms): Load, MAP, Trims, MAF, Timing
+                        if (cycleCount % 4 == 0 && tier2Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
+                            val countToPoll = minOf(2, tier2Pids.size)
                             for (i in 0 until countToPoll) {
                                 if (isPollingPaused || !isActive) break
-                                val secPid = secondaryPids[secondaryIdx % secondaryPids.size]
-                                secondaryIdx = (secondaryIdx + 1) % secondaryPids.size
-                                val rx = sendAtCommand(secPid.fullCommand, 10)
-                                if (rx.isBlank()) {
-                                    consecutiveEmptyResponses++
-                                } else {
-                                    consecutiveEmptyResponses = 0
-                                }
+                                val p = tier2Pids[tier2Idx % tier2Pids.size]
+                                tier2Idx = (tier2Idx + 1) % tier2Pids.size
+                                val rx = sendAtCommand(p.fullCommand, 10)
+                                if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
+                            }
+                        }
+
+                        // 3. Tier 3 (Slow, polled every 24 cycles ~1.5-2.5s): Coolant, IAT, Fuel Level, Baro, Temps
+                        if (cycleCount % 24 == 0 && tier3Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
+                            if (!isPollingPaused && isActive) {
+                                val p = tier3Pids[tier3Idx % tier3Pids.size]
+                                tier3Idx = (tier3Idx + 1) % tier3Pids.size
+                                val rx = sendAtCommand(p.fullCommand, 10)
+                                if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
+                            }
+                        }
+
+                        // 4. Tier 4 (Extended, polled every 48 cycles ~3-5s): All other discovered PIDs
+                        if (cycleCount % 48 == 0 && tier4Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
+                            if (!isPollingPaused && isActive) {
+                                val p = tier4Pids[tier4Idx % tier4Pids.size]
+                                tier4Idx = (tier4Idx + 1) % tier4Pids.size
+                                val rx = sendAtCommand(p.fullCommand, 10)
+                                if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
 
@@ -2227,16 +2344,14 @@ class BluetoothObdManager {
                             break
                         }
 
-                        // 3. High-Speed CAN Broadcast Sample: populate Advanced Vehicle Dynamics
-                        // Only sample CAN broadcasts when vehicle is stationary or when moving on a light duty cycle
-                        // (every 12 cycles instead of 6) so Mode 01 Speed & RPM NEVER stutter while driving!
-                        cycleCount++
+                        // 5. High-Speed CAN Broadcast Sample: populate Advanced Vehicle Dynamics
                         val canSampleInterval = if (_metrics.value.speed > 0) 12 else 6
                         if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % canSampleInterval == 0)) {
                             initialCanSampleDone = true
                             sampleCanBroadcastInline(180L)
                         }
                     }
+
                     // For USB wired connections (vLinker FS USB), delay 10ms for fast 20-30Hz loop.
                     // For wireless connections, delay 25ms to allow RF buffer drainage.
                     val loopDelay = if (isUsbConnection) 10L else 25L
@@ -2935,6 +3050,10 @@ class BluetoothObdManager {
             usbSerialPort = null
             usbDeviceConnection = null
             isUsbConnection = false
+            isMultiPidBatchSupported = null
+            isPassiveCanBlockedOnGateway = false
+            consecutiveEmptyCanSamples = 0
+            activeStreamCache.clear()
             _metrics.value = VehicleMetrics()
             _supportedStreams.value = emptyList()
             _mode06Results.value = emptyList()

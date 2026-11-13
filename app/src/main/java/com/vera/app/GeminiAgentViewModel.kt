@@ -1560,7 +1560,10 @@ class GeminiAgentViewModel : ViewModel() {
                - Vehicle telemetry changes dynamically while driving.
                - LIVE PROMPT SNAPSHOT & REAL-TIME TOOL REFRESH:
                  * You receive a live telemetry snapshot in your prompt, and live context updates are pushed to you automatically when the vehicle connects.
-                 * CRITICAL CONNECTION & LIVE DATA RULE: Whenever the driver asks whether you are connected, asks to check again, or asks for current live readings (steering angle, wheel speeds, RPM, speed, temperatures, fuel trims, battery voltage, or trouble codes), ALWAYS invoke `get_live_data` (or `get_vehicle_info`) if your initial snapshot showed Disconnected/Connecting or if the driver asks for the latest live numbers! Never assume you are still disconnected without calling `get_live_data` first!
+                 * CRITICAL CONNECTION & LIVE DATA RULE: Whenever the driver asks whether you are connected, asks to check again, or asks for current live readings (steering angle, wheel speeds, pedal, gear, RPM, speed, temperatures, fuel trims, battery voltage, or trouble codes):
+                   - If a value in your snapshot is missing, not yet measured, or shows 0/empty, DO NOT claim or assume it is 0! You MUST call `get_live_data` (or `get_vehicle_info`) first to fetch the fresh live readings before answering!
+                   - Never guess or report unmeasured dynamics as 0 without verifying via `get_live_data`.
+                   - If the driver asks for the latest live numbers, ALWAYS call `get_live_data` to ensure you give the exact real-time reading from this second!
                - TRANSMISSION COMMANDED GEAR & PARK POSITION:
                  * On Ford and GM automatic transmissions, Mode 22 PID 11B3 (Commanded Gear) measures the PCM hydraulic shift solenoid commanded circuit.
                  * When the vehicle is STATIONARY / PARKED (speed 0 mph), the PCM commands hydraulic state 2 as the baseline for the Park/Neutral interlock. If the driver is parked and asks what gear they are in, tell them the transmission is in Park (or Neutral) and explain that state 2 is the stationary hydraulic solenoid baseline, NOT forward 2nd gear!
@@ -1621,115 +1624,34 @@ class GeminiAgentViewModel : ViewModel() {
         val isMetric = currentUnit == UnitSystem.METRIC
 
         if (isConnecting) {
-            return """
-                OBD2 CONNECTION STATUS: CONNECTING / HANDSHAKING WITH ADAPTER
-                Vehicle: Handshaking with OBD2 adapter and querying VIN/PIDs...
-                DIRECTIVE: The OBD2 adapter is actively connecting right now (takes ~2-4 seconds). If the driver asks if you are connected or asks for live data, ALWAYS call the `get_live_data` tool first to check if the connection handshake has completed!
-            """.trimIndent()
+            return "[STATUS: CONNECTING | Vehicle: Handshaking with OBD2 adapter...]"
         }
 
         if (!isConnected) {
-            return """
-                OBD2 CONNECTION STATUS: DISCONNECTED (NOT CONNECTED TO VEHICLE)
-                Vehicle: None detected (Disconnected)
-                VIN: None (Disconnected)
-                Odometer: Unavailable (Disconnected)
-                Active DTCs: UNAVAILABLE - Disconnected from vehicle ECU
-                Live Telemetry: UNAVAILABLE - Disconnected from vehicle ECU
-                Mode 06 Monitors: UNAVAILABLE - Disconnected from vehicle ECU
-                
-                DIRECTIVE: At the moment this snapshot was taken, the OBD2 adapter was disconnected. However, the driver may connect at any moment during our conversation! Therefore, if the driver asks if you are connected, says they are connected, or asks for live vehicle data, you MUST call `get_live_data` to check the live connection state before saying you are disconnected.
-            """.trimIndent()
+            return "[STATUS: DISCONNECTED | Telemetry: Unavailable — Not connected to vehicle OBD2 port. If driver asks for live data, call get_live_data first.]"
         }
 
-        val vin = obdManager.vehicleVin.value ?: "Scanning/Pending"
+        val vin = obdManager.vehicleVin.value ?: "Scanning"
         val vehicle = obdManager.vehicleDetails.value ?: "Vehicle"
-        val isStreaming = obdManager.isStreamingLiveData.value
+        val metrics = obdManager.metrics.value
         val streams = obdManager.supportedStreams.value
         val opendbcSigs = obdManager.opendbcSignals.value
-
-        if (!isStreaming && streams.isEmpty() && opendbcSigs.isEmpty()) {
-            val road = locationManager?.roadContext?.value
-            val roadText = if (road != null &&
-                (!road.isDemoSimulated || obdManager.isDemoMode) &&
-                road.streetName.isNotBlank() &&
-                road.streetName != "Locating road..." &&
-                road.streetName != "Locating..."
-            ) {
-                road.formattedTopography
-            } else "Determining GPS road position..."
-
-            return """
-                Vehicle: $vehicle (VIN: $vin)
-                Road & Topography: $roadText
-                OBD2 Connection: Connected (Live Stream Initializing)
-                Live Telemetry: INITIALIZING - Polling loop has started; awaiting first live ECU sensor frames.
-                
-                DIRECTIVE: The OBD2 adapter is connected! If the driver asks for live speed, gear, steering angle, RPM, or temperatures right now, call `get_live_data` to fetch the latest readings.
-            """.trimIndent()
-        }
-
-        val metrics = obdManager.metrics.value
+        val odoKm = obdManager.vehicleOdometerKm.value
         val dtcs = troubleCodes.value
         val m06 = obdManager.mode06Results.value
         val m22Streams = obdManager.mode22Streams.value
-        val odoKm = obdManager.vehicleOdometerKm.value
 
         val road = locationManager?.roadContext?.value
         val obdSpeedMph = (metrics.speed * 0.621371).toInt()
         val isVehicleMoving = (road?.isMoving == true) || (obdSpeedMph >= 3)
-
-        val streamsText = if (streams.isNotEmpty()) {
-            streams.take(15).joinToString(", ") { s ->
-                val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
-                "${s.pid.name}: $fmtVal $fmtUnit"
-            }
-        } else {
-            val spd = if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"
-            val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
-            "RPM: ${metrics.rpm}, Speed: $spd, Coolant: $temp"
-        }
-
-        val allCustomPids = buildUnifiedCustomPidList(
-            mode22Streams = m22Streams,
-            obdbLoadedResult = obdManager.obdbLoadedResult.value,
-            obdbSignalResults = obdManager.obdbSignalResults.value,
-            unitSystem = currentUnit,
-            vehicleDetails = vehicle,
-            isMoving = isVehicleMoving
-        )
-
-        val m22Text = if (allCustomPids.isNotEmpty()) {
-            val gauges = allCustomPids.filter { !it.isBooleanStatus }
-            val switches = allCustomPids.filter { it.isBooleanStatus }
-            val gaugeStr = gauges.joinToString(", ") { "${it.name} [${it.category.displayName}]: ${it.formattedValue} ${it.unit}".trim() }
-            val switchStr = if (switches.isNotEmpty()) {
-                " | Status Switches (${switches.size}): " + switches.take(25).joinToString(", ") { "${it.name}=${it.formattedValue}" }
-            } else ""
-            gaugeStr + switchStr
-        } else "None polled yet"
-
-        val canDynamicsText = if (opendbcSigs.isNotEmpty()) {
-            opendbcSigs.values.joinToString(", ") { sig ->
-                "${sig.name}: ${sig.formattedValue}"
-            }
-        } else "Awaiting CAN broadcast sample"
+        val spdStr = if (isMetric) "${metrics.speed} km/h" else "$obdSpeedMph mph"
+        val motionText = if (isVehicleMoving) "Driving $spdStr" else "Parked 0 mph"
+        val unitLabel = if (isMetric) "METRIC" else "SAE"
 
         val odoText = if (odoKm != null && odoKm > 0) {
             if (isMetric) String.format(java.util.Locale.US, "%,.0f km", odoKm)
-            else String.format(java.util.Locale.US, "%,.0f miles", odoKm * 0.621371)
-        } else "Not detected"
-        val dtcText = if (dtcs.isEmpty()) "None (Clean)" else dtcs.joinToString(", ")
-        val m06Text = if (m06.isNotEmpty()) {
-            "${m06.size} monitors evaluated (" + m06.joinToString(", ") { "${it.name}: ${it.testValue.toInt()} ${it.unit} [${it.status}]" } + ")"
-        } else "Unscanned"
-
-        val motionStateText = if (isVehicleMoving) {
-            val spdText = if (isMetric) "${metrics.speed} km/h" else "$obdSpeedMph mph"
-            "DRIVING / IN MOTION ($spdText)"
-        } else {
-            "STATIONARY / PARKED (0 mph - sitting in driveway or idling, NOT driving)"
-        }
+            else String.format(java.util.Locale.US, "%,.0f mi", odoKm * 0.621371)
+        } else null
 
         val roadText = if (road != null &&
             (!road.isDemoSimulated || obdManager.isDemoMode) &&
@@ -1738,22 +1660,90 @@ class GeminiAgentViewModel : ViewModel() {
             road.streetName != "Locating..."
         ) {
             road.formattedTopography
-        } else "Determining GPS road position & elevation..."
+        } else null
 
-        return """
-            OBD2 CONNECTION STATUS: CONNECTED TO VEHICLE ($vehicle, VIN: $vin)
-            Vehicle: $vehicle (VIN: $vin)
-            Odometer: $odoText
-            Motion State: $motionStateText
-            Unit System Preference: ${if (isMetric) "METRIC (km/h, °C, kPa, km)" else "SAE (mph, °F, psi, miles)"}
-            Road & Topography: $roadText
-            OBD2 Connection: Connected & Actively Streaming ECU + CAN Bus Telemetry
-            Active DTCs: $dtcText
-            Latest OBD2 Telemetry (Mode 01): $streamsText
-            High-Speed CAN Bus Dynamics (opendbc - Steering, Wheels, Brake, Pedal): $canDynamicsText
-            Vehicle Custom PIDs & OBDb Signals (${allCustomPids.size} decoded): $m22Text
-            Mode 06 Monitors: $m06Text
-        """.trimIndent()
+        // 1. Vehicle header line
+        val vehHeader = buildString {
+            append("[VEHICLE: $vehicle | VIN: $vin")
+            if (odoText != null) append(" | Odo: $odoText")
+            append(" | $unitLabel | $motionText]")
+        }
+
+        // 2. Road context line
+        val roadLine = if (roadText != null) "[ROAD: $roadText]" else null
+
+        // 3. Compact ECU sensor readings
+        val ecuLine = if (streams.isNotEmpty()) {
+            val items = streams.take(16).map { s ->
+                val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
+                val shortName = s.pid.name
+                    .replace("Intake Air Temp", "IAT")
+                    .replace("Coolant Temp", "Coolant")
+                    .replace("Engine RPM", "RPM")
+                    .replace("Vehicle Speed", "Speed")
+                    .replace("Throttle Position", "Throttle")
+                    .replace("Engine Load", "Load")
+                    .replace("Short Term Fuel Trim Bank 1", "STFT1")
+                    .replace("Long Term Fuel Trim Bank 1", "LTFT1")
+                    .replace("Short Term Fuel Trim Bank 2", "STFT2")
+                    .replace("Long Term Fuel Trim Bank 2", "LTFT2")
+                    .replace("Intake MAP", "MAP")
+                    .replace("Timing Advance", "Timing")
+                    .replace("Fuel Rail Pressure", "FRP")
+                "$shortName:$fmtVal$fmtUnit"
+            }
+            "[ECU: ${items.joinToString(", ")}]"
+        } else {
+            val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
+            "[ECU: Speed:$spdStr, RPM:${metrics.rpm}, Coolant:$temp, Load:${metrics.engineLoad}%]"
+        }
+
+        // 4. CAN Bus dynamics (opendbc)
+        val canLine = if (opendbcSigs.isNotEmpty()) {
+            val canItems = opendbcSigs.values.take(8).map { sig ->
+                val shortName = sig.name
+                    .replace("Steering Angle", "Steer")
+                    .replace("Brake Pressure", "Brake")
+                    .replace("Gas Pedal", "Accel")
+                    .replace("Gear Position", "Gear")
+                "$shortName:${sig.formattedValue}"
+            }
+            "[CAN: ${canItems.joinToString(", ")}]"
+        } else null
+
+        // 5. Custom PIDs (Chrysler / Toyota / GM enhanced PIDs & OBDb)
+        val allCustomPids = buildUnifiedCustomPidList(
+            mode22Streams = m22Streams,
+            obdbLoadedResult = obdManager.obdbLoadedResult.value,
+            obdbSignalResults = obdManager.obdbSignalResults.value,
+            unitSystem = currentUnit,
+            vehicleDetails = vehicle,
+            isMoving = isVehicleMoving
+        )
+        val customLine = if (allCustomPids.isNotEmpty()) {
+            val customGauges = allCustomPids.filter { !it.isBooleanStatus }.take(8).map {
+                "${it.name.replace(" ", "")}:${it.formattedValue}${it.unit}".trim()
+            }
+            "[CUSTOM: ${customGauges.joinToString(", ")}]"
+        } else null
+
+        // 6. Health & DTCs
+        val healthLine = buildString {
+            append("[HEALTH: ")
+            if (dtcs.isEmpty()) {
+                append("Clean (0 DTCs)")
+            } else {
+                append("FAULTS (${dtcs.size} DTCs: ${dtcs.joinToString(",")})")
+            }
+            if (m06.isNotEmpty()) {
+                val passed = m06.count { it.status == Mode06Status.PASS }
+                val failed = m06.count { it.status == Mode06Status.FAIL }
+                append(" | Mode06: $passed Passed, $failed Failed")
+            }
+            append("]")
+        }
+
+        return listOfNotNull(vehHeader, roadLine, ecuLine, canLine, customLine, healthLine).joinToString("\n")
     }
 
     private fun executeLiveTool(name: String, callId: String, @Suppress("UNUSED_PARAMETER") args: JSONObject): JSONObject {
@@ -3234,78 +3224,16 @@ class GeminiAgentViewModel : ViewModel() {
                 } else ""
 
                 val contextualPrompt = if (isConnected) {
-                    val streams = obdManager.supportedStreams.value
-                    val vin = obdManager.vehicleVin.value ?: "Not Verified"
-                    val dtcs = obdManager.getTroubleCodes()
-                    val m06Data = obdManager.mode06Results.value
-                    val m22Data = obdManager.mode22Streams.value
-
-                    val currentUnit = unitSystem.value
-                    val isMetric = currentUnit == UnitSystem.METRIC
-                    val streamsSummary = if (streams.isNotEmpty()) {
-                        streams.joinToString("\n") { s ->
-                            val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
-                            "- ${s.pid.name} (${s.pid.description}): $fmtVal $fmtUnit"
-                        }
-                    } else {
-                        val metrics = obdManager.metrics.value
-                        val spd = if (isMetric) "${metrics.speed} km/h" else "${(metrics.speed * 0.621371).toInt()} mph"
-                        val temp = if (isMetric) "${metrics.coolantTemp}°C" else "${(metrics.coolantTemp * 1.8 + 32).toInt()}°F"
-                        "- Engine RPM: ${metrics.rpm} RPM\n- Coolant Temp: $temp\n- Vehicle Speed: $spd"
-                    }
-
-                    val m06Summary = if (m06Data.isNotEmpty()) {
-                        m06Data.joinToString("\n") { "  • [${it.category}] ${it.name}: ${it.testValue.toInt()} ${it.unit} (${it.status})" }
-                    } else {
-                        "  • Mode 06 On-Board Monitors: Unscanned / Not queried yet"
-                    }
-
-                    val allCustomItems = buildUnifiedCustomPidList(
-                        mode22Streams = m22Data,
-                        obdbLoadedResult = obdManager.obdbLoadedResult.value,
-                        obdbSignalResults = obdManager.obdbSignalResults.value,
-                        unitSystem = currentUnit,
-                        vehicleDetails = obdManager.vehicleDetails.value,
-                        isMoving = obdManager.metrics.value.speed > 2
-                    )
-                    val m22Summary = if (allCustomItems.isNotEmpty()) {
-                        allCustomItems.joinToString("\n") { item ->
-                            "  • [${item.category.displayName}] ${item.name}: ${item.formattedValue} ${item.unit}".trimEnd()
-                        }
-                    } else {
-                        "  • Vehicle Custom PIDs (Mode 21/22 & OBDb): Unscanned / Not queried yet"
-                    }
-
-                    val opendbcData = opendbcSignals.value
-                    val opendbcSummary = if (opendbcData.isNotEmpty()) {
-                        val prof = activeOpendbcProfile.value?.platformName ?: "Vehicle CAN"
-                        "  • opendbc Dynamic Chassis & Dynamics ($prof):\n" + opendbcData.values.joinToString("\n") { "    - ${it.name}: ${it.formattedValue}" }
-                    } else if (isHighSpeedCanCapable.value) {
-                        "  • opendbc: High-Speed CAN Ready (${adapterHardwareName.value})"
-                    } else {
-                        "  • opendbc: Standard OBD2 adapter (${adapterHardwareName.value})"
-                    }
-
-                    val currentMetrics = obdManager.metrics.value
-                    val obdSpd = (currentMetrics.speed * 0.621371).toInt()
-                    val isMoving = roadContext.value.isMoving || obdSpd >= 3
-                    val motionDesc = if (isMoving) "Driving ($obdSpd mph)" else "Stationary / Parked (0 mph, sitting in driveway or idling)"
+                    val telemetryDsl = buildTelemetrySnapshotForLive()
 
                     """
                         [Vehicle Telemetry Context - FOR INTERNAL DIAGNOSTIC REASONING ONLY]
-                        VIN: $vin
-                        Motion State: $motionDesc
-                        Active DTCs: ${if (dtcs.isEmpty()) "None" else dtcs.joinToString(", ")}
-                        Road Topography & Location: ${roadContext.value.formattedTopography}
-                        Telemetry Snapshot: $streamsSummary
-                        Mode 06 Monitors: $m06Summary
-                        Mode 22 PIDs: $m22Summary
-                        High-Speed CAN & opendbc Dynamics:
-                        $opendbcSummary
+                        $telemetryDsl
                         $elmTraceSection
                         $fileAttachmentContext
 
                         CRITICAL INSTRUCTION: Speak naturally in plain English like a real human mechanic riding shotgun. Do NOT recite raw sensor numbers, PIDs, temperatures, voltages, or test IDs out loud unless specifically requested.
+                        CRITICAL SENSOR & DYNAMICS ACCURACY: If the driver asks about specific vehicle dynamics (steering angle, wheel speeds, pedal, gear), temperatures, or health, never claim or assume a metric is 0 or unmeasured if it is simply not in the current snapshot; explain whether it is currently being polled or available from the vehicle's diagnostic streams.
                         CRITICAL SPEED & TOPOGRAPHY AWARENESS: Always check 'Motion State' before discussing hills, inclines, or driving conditions. If the vehicle is stationary (0 mph), the user is parked or sitting in their driveway. Do NOT assume or say they are actively driving, climbing, or descending a hill.
                         CORE MISSION & ANTI-SYCOPHANCY: Your highest objective is arriving at the unvarnished diagnostic truth and protecting the mechanical health of the vehicle. Do NOT be a "yes-man" or give reflexive affirmative answers. If the driver's hypothesis is contradicted by sensor data, or if an action is outside your capabilities, state the truth plainly and objectively.
                         BLUE-COLLAR MECHANIC PERSONA: Speak naturally in plain English like a seasoned, sharp blue-collar mechanic riding shotgun—warm, engaging, and occasionally witty, but relentlessly focused on finding the root cause without throwing expensive parts at a problem.
