@@ -6635,14 +6635,6 @@ fun VeraMainScreen(
             val availableHeight = this.maxHeight
             val density = LocalDensity.current
             val screenHeightPx = with(density) { availableHeight.toPx() }
-            val scrollY = mainScrollState.value.toFloat()
-
-            val chatHeaderTopOnScreen = chatCardTopY - scrollY
-            val inputBarTranslationY = if (inputBarHeightPx > 0f && chatCardTopY > 0f) {
-                (chatHeaderTopOnScreen - (screenHeightPx - inputBarHeightPx)).coerceAtLeast(0f)
-            } else {
-                0f
-            }
 
             Column(
                 modifier = Modifier
@@ -8083,44 +8075,12 @@ fun VeraMainScreen(
                     chatCardTopY = coordinates.positionInParent().y
                     chatCardHeight = coordinates.size.height.toFloat()
                 }
-                .drawWithContent {
-                    drawContent()
-                    val barHeight = if (inputBarHeightPx > 0f) inputBarHeightPx else 80.dp.toPx()
-                    val surfaceTop = screenHeightPx - barHeight + inputBarTranslationY
-                    val localSurfaceTop = surfaceTop - chatHeaderTopOnScreen
-                    val strokeWidthPx = 1.5.dp.toPx()
-                    val cornerRadiusPx = 18.dp.toPx()
-                    val left = strokeWidthPx / 2f
-                    val top = strokeWidthPx / 2f
-                    val right = size.width - strokeWidthPx / 2f
-                    // Extend 16dp under the input bar's top edge so there is no gap, but stop ~60dp above the bottom edge & bottom corners
-                    val bottom = (localSurfaceTop + 16.dp.toPx()).coerceIn(cornerRadiusPx, size.height)
-
-                    val path = Path().apply {
-                        moveTo(left, bottom)
-                        lineTo(left, top + cornerRadiusPx)
-                        arcTo(
-                            rect = Rect(left, top, left + cornerRadiusPx * 2f, top + cornerRadiusPx * 2f),
-                            startAngleDegrees = 180f,
-                            sweepAngleDegrees = 90f,
-                            forceMoveTo = false
-                        )
-                        lineTo(right - cornerRadiusPx, top)
-                        arcTo(
-                            rect = Rect(right - cornerRadiusPx * 2f, top, right, top + cornerRadiusPx * 2f),
-                            startAngleDegrees = 270f,
-                            sweepAngleDegrees = 90f,
-                            forceMoveTo = false
-                        )
-                        lineTo(right, bottom)
-                    }
-                    drawPath(
-                        path = path,
-                        color = chatBorderColor,
-                        style = Stroke(width = strokeWidthPx)
-                    )
-                },
-            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
+                .border(
+                    width = 1.5.dp,
+                    color = chatBorderColor,
+                    shape = RoundedCornerShape(18.dp)
+                ),
+            shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.elevatedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
             ),
@@ -8542,9 +8502,15 @@ fun VeraMainScreen(
             }
         }
     }
+
+    // Spacer so scrollable content clears the permanently pinned bottom input bar
+    val pinnedInputBarHeightDp = with(LocalDensity.current) {
+        if (inputBarHeightPx > 0f) inputBarHeightPx.toDp() else 68.dp
+    }
+    Spacer(modifier = Modifier.height(pinnedInputBarHeightDp + 16.dp))
 }
 
-    // 5. PINNED INPUT CONTAINER + BOTTOM CHAT OUTLINE FRAME
+    // 5. PERMANENTLY PINNED INPUT CONTAINER (Never leaves screen; elements scroll behind it)
     Surface(
         modifier = Modifier
             .align(Alignment.BottomCenter)
@@ -8552,15 +8518,12 @@ fun VeraMainScreen(
             .onGloballyPositioned { coordinates ->
                 inputBarHeightPx = coordinates.size.height.toFloat()
             }
-            .graphicsLayer {
-                translationY = inputBarTranslationY
-            }
             .border(
                 width = 1.5.dp,
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp, topStart = 8.dp, topEnd = 8.dp)
+                shape = RoundedCornerShape(18.dp)
             ),
-        shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp, topStart = 8.dp, topEnd = 8.dp),
+        shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
         tonalElevation = 8.dp
     ) {
