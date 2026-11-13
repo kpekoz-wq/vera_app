@@ -6633,11 +6633,9 @@ fun VeraMainScreen(
             val scrollY = mainScrollState.value.toFloat()
 
             val chatHeaderTopOnScreen = chatCardTopY - scrollY
-            val inputBarTranslationY = if (inputBarHeightPx > 0f && chatCardTopY > 0f) {
-                (chatHeaderTopOnScreen - (screenHeightPx - inputBarHeightPx)).coerceAtLeast(0f)
-            } else {
-                0f
-            }
+            // Keep the "Text Vera" input container permanently attached to the bottom of the screen,
+            // while preserving the dynamic drawer-like extension of the chat card's top & side borders as the user scrolls.
+            val inputBarTranslationY = 0f
 
             Column(
                 modifier = Modifier

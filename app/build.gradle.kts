@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.8: Metric tile unit alignment and vertical line spacing fix across Live Streams and Advanced Dynamics; OBD serial zero-deadtime, pre-2018 CAN census adaptive discovery, and hardened ReadOnlyGuard."
+                releaseNotes = "VERA v2.8.1: Pinned 'Text Vera' input container permanently attached to bottom of screen with dynamic drawer-like chat extension; metric tile unit alignment and vertical line spacing fix across Live Streams and Advanced Dynamics."
                 artifactType = "APK"
             }
         }
