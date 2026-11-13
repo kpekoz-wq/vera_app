@@ -577,6 +577,7 @@ class BluetoothObdManager {
     @Volatile var isPollingPaused = false
     @Volatile private var isMultiPidBatchSupported: Boolean? = null
     @Volatile private var isPassiveCanBlockedOnGateway = false
+    @Volatile private var profConfirmedOnBus = false
     private var consecutiveEmptyCanSamples = 0
     private val activeStreamCache = java.util.concurrent.ConcurrentHashMap<String, LiveStreamData>()
     private val streamRingBuffers = java.util.concurrent.ConcurrentHashMap<String, java.util.ArrayDeque<StreamSample>>()
@@ -587,11 +588,13 @@ class BluetoothObdManager {
     private val responseBufferLock = Any()
     private var latestResponse = StringBuilder()
     @Volatile private var promptReceived = false
+    @Volatile private var promptDeferred: CompletableDeferred<Unit>? = null
 
     private fun clearResponseBuffer() {
         synchronized(responseBufferLock) {
             latestResponse.setLength(0)
             promptReceived = false
+            promptDeferred = null
         }
     }
 
@@ -1906,8 +1909,12 @@ class BluetoothObdManager {
                 report = finished
                 _canSniffReport.value = finished
                 if (total == 0) {
-                    isPassiveCanBlockedOnGateway = true
-                    Log.i(TAG, "CAN sniff completed with 0 frames. Marking gateway as blocking passive broadcasts to OBD port.")
+                    if (!isVehiclePre2018(_vehicleVin.value ?: "", _vehicleDetails.value ?: "")) {
+                        isPassiveCanBlockedOnGateway = true
+                        Log.i(TAG, "CAN sniff completed with 0 frames. Marking gateway as blocking passive broadcasts to OBD port.")
+                    } else {
+                        Log.i(TAG, "CAN sniff completed with 0 frames on pre-2018 vehicle (${_vehicleDetails.value}) - not gateway blocked.")
+                    }
                 } else {
                     isPassiveCanBlockedOnGateway = false
                     consecutiveEmptyCanSamples = 0
@@ -1924,6 +1931,25 @@ class BluetoothObdManager {
     }
 
     /**
+     * Determines whether a vehicle is pre-2018. Pre-2018 vehicles do not have FCA Secure Gateway (SGW)
+     * modules blocking passive CAN access on the OBD-II port.
+     */
+    private fun isVehiclePre2018(vin: String, details: String): Boolean {
+        val yearMatch = Regex("""\b(19\d\d|20\d\d)\b""").find(details)
+        if (yearMatch != null) {
+            val yr = yearMatch.value.toIntOrNull()
+            if (yr != null && yr < 2018) return true
+        }
+        if (vin.length == 17) {
+            val myChar = vin[9].uppercaseChar()
+            if (myChar in 'A'..'H' || myChar in '1'..'9' || myChar == 'Y') {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
      * Performs a fast passive CAN broadcast sample (default 350ms) inside the polling loop
      * when connected via a high-speed CAN adapter, using STN hardware pass filters (`STM`) when
      * available so target `opendbc` signals (steering angle, wheel speeds, brake, pedal) stream
@@ -1933,11 +1959,15 @@ class BluetoothObdManager {
         if (isDemoMode || _isSniffingCan.value || !_isHighSpeedCanCapable.value || isPassiveCanBlockedOnGateway) return
         if (_connectionState.value !is ConnectionState.Connected) return
 
+        val vin = _vehicleVin.value ?: ""
+        val details = _vehicleDetails.value ?: ""
+        val isPre2018 = isVehiclePre2018(vin, details)
+
         val capturedFrames = mutableListOf<Pair<String, String>>()
         val observedIds = mutableSetOf<Int>()
         val decodedMap = LinkedHashMap(_opendbcSignals.value)
         var activeProfile = _activeOpendbcProfile.value
-            ?: OpendbcManager.findProfileForVehicle(_vehicleVin.value ?: "", _vehicleDetails.value ?: "")
+            ?: OpendbcManager.findProfileForVehicle(vin, details)
                 ?.also { _activeOpendbcProfile.value = it }
         var lastUiEmitMs = 0L
         var usedStnFilter = false
@@ -1954,8 +1984,8 @@ class BluetoothObdManager {
             }
             if (batchFrames.isNotEmpty()) {
                 val resolved = OpendbcManager.resolveBestProfile(
-                    vin = _vehicleVin.value ?: "",
-                    make = _vehicleDetails.value ?: "",
+                    vin = vin,
+                    make = details,
                     observedCanIds = observedIds
                 )
                 if (resolved != null && resolved.platformName != activeProfile?.platformName) {
@@ -1974,6 +2004,9 @@ class BluetoothObdManager {
                             decodedAny = true
                         }
                     }
+                    if (decodedAny) {
+                        profConfirmedOnBus = true
+                    }
                     val now = System.currentTimeMillis()
                     if (decodedAny && (forceEmit || now - lastUiEmitMs >= 100L)) {
                         lastUiEmitMs = now
@@ -1987,7 +2020,9 @@ class BluetoothObdManager {
             sendAtCommand("AT S1", 40)
             sendAtCommand("AT H1", 40)
             val prof = activeProfile
-            if (isStnAdapter && prof != null) {
+            // Only apply STN hardware pass filters if the profile has been confirmed with matching CAN frames on this bus!
+            // If unconfirmed, do an unfiltered ATMA census to discover actual CAN IDs on the bus without filtering them out.
+            if (isStnAdapter && prof != null && profConfirmedOnBus) {
                 usedStnFilter = configureStnFiltersForProfile(prof)
             }
             val monitorCmd = if (usedStnFilter) "STM\r" else "ATMA\r"
@@ -2024,10 +2059,19 @@ class BluetoothObdManager {
         }
 
         if (capturedFrames.isEmpty()) {
-            consecutiveEmptyCanSamples++
-            if (consecutiveEmptyCanSamples >= 2) {
-                isPassiveCanBlockedOnGateway = true
-                Log.i(TAG, "Gateway detected blocking passive broadcast CAN frames on OBD port (2 consecutive 0-frame samples). Backing off inline sniffing to preserve 100% OBD bandwidth.")
+            if (usedStnFilter) {
+                // The profile-specific STN filter yielded 0 frames — likely wrong profile / wrong platform generation!
+                Log.w(TAG, "STN pass filter for ${activeProfile?.platformName} returned 0 frames. Reverting profile to perform unfiltered ATMA census on next pass.")
+                profConfirmedOnBus = false
+                _activeOpendbcProfile.value = null
+            } else if (!isPre2018) {
+                consecutiveEmptyCanSamples++
+                if (consecutiveEmptyCanSamples >= 2) {
+                    isPassiveCanBlockedOnGateway = true
+                    Log.i(TAG, "Gateway detected blocking passive broadcast CAN frames on OBD port (2 consecutive 0-frame samples). Backing off inline sniffing to preserve 100% OBD bandwidth.")
+                }
+            } else {
+                Log.d(TAG, "Pre-2018 vehicle ($details, VIN: $vin) returned 0 broadcast frames on OBD pins - no gateway blocking applied.")
             }
         } else {
             consecutiveEmptyCanSamples = 0
@@ -2040,15 +2084,20 @@ class BluetoothObdManager {
     }
 
     /**
-     * Sends an AT command and waits for the prompt '>' response.
+     * Sends an AT command and waits for the prompt '>' response asynchronously with zero polling dead time.
      */
-    suspend fun sendAtCommand(command: String, delayMs: Long = 100): String {
+    suspend fun sendAtCommand(command: String, delayMs: Long = 0L): String {
         if (!ReadOnlyGuard.isAllowed(command)) {
             Log.w(TAG, "BLOCKED non-read command: [$command]")
             return "BLOCKED"
         }
         return responseMutex.withLock {
-            clearResponseBuffer()
+            val deferred = CompletableDeferred<Unit>()
+            synchronized(responseBufferLock) {
+                latestResponse.setLength(0)
+                promptReceived = false
+                promptDeferred = deferred
+            }
 
             val fullCommand = "$command\r"
             val bytes = fullCommand.toByteArray(Charsets.US_ASCII)
@@ -2063,23 +2112,33 @@ class BluetoothObdManager {
                 outputStream?.flush()
             }
 
-            var maxTimeout = COMMAND_TIMEOUT_MS
             val startTime = System.currentTimeMillis()
-            while (!promptReceived) {
-                // SAE J1979 / ISO 15765-4: Extend timeout up to 5000ms if ECU sends 7F xx 78 (Response Pending)
-                if (hasPendingResponseInBuffer()) {
-                    maxTimeout = 5000L
+            var maxTimeout = COMMAND_TIMEOUT_MS
+            try {
+                while (!promptReceived && (System.currentTimeMillis() - startTime) < maxTimeout) {
+                    val remaining = maxTimeout - (System.currentTimeMillis() - startTime)
+                    if (remaining <= 0) break
+                    withTimeoutOrNull(minOf(remaining, 200L)) {
+                        deferred.await()
+                    }
+                    if (promptReceived) break
+                    // SAE J1979 / ISO 15765-4: Extend timeout up to 5000ms if ECU sends 7F xx 78 (Response Pending)
+                    if (hasPendingResponseInBuffer()) {
+                        maxTimeout = 5000L
+                    }
                 }
-                if (System.currentTimeMillis() - startTime > maxTimeout) {
-                    Log.w(TAG, "Command timeout for: $command")
-                    break
-                }
-                delay(15)
+            } catch (_: Exception) {}
+
+            if (!promptReceived) {
+                Log.w(TAG, "Command timeout for: $command")
             }
+
             val result = peekResponseBuffer().trim()
             Log.d(TAG, "TX: [$command] -> RX: [$result]")
             logElmExchange(command, result)
-            delay(delayMs)
+            if (delayMs > 0) {
+                delay(delayMs)
+            }
             result
         }
     }
@@ -2117,6 +2176,7 @@ class BluetoothObdManager {
                                     lineBuilder.clear()
                                 }
                                 promptReceived = true
+                                promptDeferred?.complete(Unit)
                                 if (!canSniffActive) {
                                     val fullText = peekResponseBuffer()
                                     try {
@@ -2320,7 +2380,7 @@ class BluetoothObdManager {
             // Multi-PID probe: Check if vehicle CAN ECU supports ISO 15765-4 multi-PID requests (e.g. 010D0C11)
             if (isMultiPidBatchSupported == null && !isDemoMode) {
                 try {
-                    val probeRx = sendAtCommand("010D0C11", 10)
+                    val probeRx = sendAtCommand("010D0C11", 0)
                     val cleaned = probeRx.replace(" ", "").uppercase()
                     if (cleaned.contains("410D") && (cleaned.contains("0C") || cleaned.contains("11"))) {
                         isMultiPidBatchSupported = true
@@ -2342,12 +2402,12 @@ class BluetoothObdManager {
 
                         // 1. Tier 1 (Fast-Path, polled EVERY cycle): Speed, RPM, Throttle
                         if (isMultiPidBatchSupported == true) {
-                            val rx = sendAtCommand("010D0C11", 10)
+                            val rx = sendAtCommand("010D0C11", 0)
                             if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                         } else {
                             for (pPid in tier1Pids) {
                                 if (isPollingPaused || !isActive) break
-                                val rx = sendAtCommand(pPid.fullCommand, 10)
+                                val rx = sendAtCommand(pPid.fullCommand, 0)
                                 if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
@@ -2359,7 +2419,7 @@ class BluetoothObdManager {
                                 if (isPollingPaused || !isActive) break
                                 val p = tier2Pids[tier2Idx % tier2Pids.size]
                                 tier2Idx = (tier2Idx + 1) % tier2Pids.size
-                                val rx = sendAtCommand(p.fullCommand, 10)
+                                val rx = sendAtCommand(p.fullCommand, 0)
                                 if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
@@ -2369,7 +2429,7 @@ class BluetoothObdManager {
                             if (!isPollingPaused && isActive) {
                                 val p = tier3Pids[tier3Idx % tier3Pids.size]
                                 tier3Idx = (tier3Idx + 1) % tier3Pids.size
-                                val rx = sendAtCommand(p.fullCommand, 10)
+                                val rx = sendAtCommand(p.fullCommand, 0)
                                 if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
@@ -2379,7 +2439,7 @@ class BluetoothObdManager {
                             if (!isPollingPaused && isActive) {
                                 val p = tier4Pids[tier4Idx % tier4Pids.size]
                                 tier4Idx = (tier4Idx + 1) % tier4Pids.size
-                                val rx = sendAtCommand(p.fullCommand, 10)
+                                val rx = sendAtCommand(p.fullCommand, 0)
                                 if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
@@ -2389,7 +2449,7 @@ class BluetoothObdManager {
                             if (!isPollingPaused && isActive) {
                                 val p = tier5Pids[tier5Idx % tier5Pids.size]
                                 tier5Idx = (tier5Idx + 1) % tier5Pids.size
-                                val rx = sendAtCommand(p.fullCommand, 10)
+                                val rx = sendAtCommand(p.fullCommand, 0)
                                 if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
                         }
@@ -3129,6 +3189,8 @@ class BluetoothObdManager {
             isUsbConnection = false
             isMultiPidBatchSupported = null
             isPassiveCanBlockedOnGateway = false
+            profConfirmedOnBus = false
+            promptDeferred?.complete(Unit)
             consecutiveEmptyCanSamples = 0
             activeStreamCache.clear()
             streamRingBuffers.clear()
@@ -3309,7 +3371,16 @@ class BluetoothObdManager {
             // 1. Set baud rate to standard 115,200 (default vLinker FS speed)
             port.setParameters(115200, 8, com.hoho.android.usbserial.driver.UsbSerialPort.STOPBITS_1, com.hoho.android.usbserial.driver.UsbSerialPort.PARITY_NONE)
 
-            // 2. CRITICAL for FTDI / vLinker FS USB: Enable DTR & RTS signals to unblock FTDI FIFO buffer transmission!
+            // 2. CRITICAL for FTDI / vLinker FS USB: Lower FTDI latency timer from default 16ms to 2ms
+            // SIO_SET_LATENCY_TIMER_REQUEST (0x09): eliminates 14ms of USB packet buffering dead time on every frame
+            try {
+                connection.controlTransfer(0x40, 0x09, 2, 1, null, 0, 500)
+                Log.i(TAG, "FTDI latency timer configured to 2ms")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not set FTDI latency timer", e)
+            }
+
+            // 3. CRITICAL for FTDI / vLinker FS USB: Enable DTR & RTS signals to unblock FTDI FIFO buffer transmission!
             try {
                 port.dtr = true
                 port.rts = true

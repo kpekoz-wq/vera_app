@@ -1613,7 +1613,7 @@ class GeminiAgentViewModel : ViewModel() {
         """.trimIndent()
     }
 
-    private fun buildTelemetrySnapshotForLive(): String {
+    private fun buildTelemetrySnapshotForLive(isPeriodicRefresh: Boolean = false): String {
         val connState = obdManager.connectionState.value
         val isConnected = connState is BluetoothObdManager.ConnectionState.Connected || obdManager.isDemoMode
         val isConnecting = connState is BluetoothObdManager.ConnectionState.Connecting
@@ -1659,19 +1659,55 @@ class GeminiAgentViewModel : ViewModel() {
             road.formattedTopography
         } else null
 
-        // 1. Vehicle header line
-        val vehHeader = buildString {
-            append("[VEHICLE: $vehicle | VIN: $vin")
-            if (odoText != null) append(" | Odo: $odoText")
-            append(" | $unitLabel | $motionText]")
+        // 1. Vehicle header line (omits full static VIN/Vehicle name on 15s periodic refreshes to save tokens)
+        val vehHeader = if (isPeriodicRefresh) {
+            buildString {
+                append("[MOTION: $motionText | $unitLabel")
+                if (odoText != null) append(" | Odo: $odoText")
+                append("]")
+            }
+        } else {
+            buildString {
+                append("[VEHICLE: $vehicle | VIN: $vin")
+                if (odoText != null) append(" | Odo: $odoText")
+                append(" | $unitLabel | $motionText]")
+            }
         }
 
         // 2. Road context line
         val roadLine = if (roadText != null) "[ROAD: $roadText]" else null
 
-        // 3. Compact ECU sensor readings
-        val ecuLine = if (streams.isNotEmpty()) {
-            val items = streams.take(16).map { s ->
+        // 3. Compact ECU sensor readings (prioritized by vital significance so critical PIDs like Voltage & Oil Temp aren't dropped)
+        val priorityPids = listOf(
+            "0C", // Engine RPM
+            "0D", // Vehicle Speed
+            "05", // Coolant Temp
+            "42", // Control Module Voltage
+            "5C", // Engine Oil Temp
+            "06", // Short Term Fuel Trim Bank 1
+            "07", // Long Term Fuel Trim Bank 1
+            "04", // Engine Load
+            "11", // Throttle Position
+            "0B", // Intake MAP
+            "10", // MAF Air Flow Rate
+            "0F", // Intake Air Temp (IAT)
+            "0E", // Timing Advance
+            "2F", // Fuel Level Input
+            "08", // Short Term Fuel Trim Bank 2
+            "09", // Long Term Fuel Trim Bank 2
+            "33", // Barometric Pressure
+            "46", // Ambient Air Temp
+            "5E"  // Engine Fuel Rate
+        )
+        val sortedStreams = streams.sortedWith(
+            compareBy<LiveStreamData> { s ->
+                val idx = priorityPids.indexOf(s.pid.pidHex.uppercase())
+                if (idx >= 0) idx else 100
+            }.thenBy { it.pid.pidHex }
+        )
+
+        val ecuLine = if (sortedStreams.isNotEmpty()) {
+            val items = sortedStreams.take(16).map { s ->
                 val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
                 val shortName = s.pid.name
                     .replace("Intake Air Temp", "IAT")
@@ -1680,6 +1716,8 @@ class GeminiAgentViewModel : ViewModel() {
                     .replace("Vehicle Speed", "Speed")
                     .replace("Throttle Position", "Throttle")
                     .replace("Engine Load", "Load")
+                    .replace("Control Module Voltage", "Voltage")
+                    .replace("Engine Oil Temperature", "OilTemp")
                     .replace("Short Term Fuel Trim Bank 1", "STFT1")
                     .replace("Long Term Fuel Trim Bank 1", "LTFT1")
                     .replace("Short Term Fuel Trim Bank 2", "STFT2")
@@ -1687,6 +1725,7 @@ class GeminiAgentViewModel : ViewModel() {
                     .replace("Intake MAP", "MAP")
                     .replace("Timing Advance", "Timing")
                     .replace("Fuel Rail Pressure", "FRP")
+                    .replace("Ambient Air Temp", "Ambient")
                 "$shortName:$fmtVal$fmtUnit"
             }
             "[ECU: ${items.joinToString(", ")}]"
@@ -3329,7 +3368,7 @@ class GeminiAgentViewModel : ViewModel() {
                     val periodicRefreshDue = isConn && (now - lastCanPushMs >= 15_000L)
                     if (stateTransitioned || periodicRefreshDue) {
                         delay(250) // allow initial PIDs/VIN to settle
-                        val snapshot = buildTelemetrySnapshotForLive()
+                        val snapshot = buildTelemetrySnapshotForLive(isPeriodicRefresh = !stateTransitioned)
                         if (liveStreamManager?.injectTelemetryContextUpdate(snapshot) == true) {
                             lastPushedStateWasConnected = isConn
                             lastPushedStreaming = streaming
