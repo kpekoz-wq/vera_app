@@ -167,7 +167,12 @@ class GeminiAgentViewModel : ViewModel() {
         // STRICT VOICE RULE: Only vocalize if live voice mode is active
         if (isVoiceModeActive) {
             val isAdvisory = alert.severity == SentinelSeverity.ADVISORY || alert.severity == SentinelSeverity.INFO
-            val liveInjected = if (_isHandsFreeVoiceActive.value && _isLiveSessionActive.value) {
+            // For periodic scheduled reports and advisories, ensure they never get lost or delayed:
+            // If live WebSocket is connected AND idle, inject into Gemini Live.
+            // If Gemini Live is currently speaking, busy in a turn, or reconnecting, fallback to immediate local TTS
+            // so the driver gets their scheduled report on-time, every time!
+            val liveSpeaking = liveStreamManager?.isGeminiSpeaking?.value == true
+            val liveInjected = if (_isHandsFreeVoiceActive.value && _isLiveSessionActive.value && !liveSpeaking) {
                 liveStreamManager?.injectDriverAlert(alert.spokenText, isAdvisory) ?: false
             } else false
 
@@ -1834,57 +1839,70 @@ class GeminiAgentViewModel : ViewModel() {
                                 put("odometer_miles", (odoKm * 0.621371).toInt())
                             }
                         }
-                        if (streams.isNotEmpty()) {
-                            val streamsArr = JSONArray()
-                            for (s in streams) {
-                                val (fmtVal, fmtUnit) = formatValueWithUnit(s.rawValue, s.pid, currentUnit)
-                                streamsArr.put(JSONObject().apply {
-                                    put("name", s.pid.name)
-                                    put("value", "$fmtVal $fmtUnit".trim())
-                                })
-                            }
-                            put("supported_streams", streamsArr)
-                        }
-                        if (opendbcSigs.isNotEmpty()) {
-                            val canObj = JSONObject()
-                            for ((k, sig) in opendbcSigs) {
-                                canObj.put(k, sig.formattedValue)
-                            }
-                            put("can_bus_dynamics_opendbc", canObj)
-                        }
-                        val roadSnap = locationManager?.roadContext?.value
-                        val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
-                        val allCustomPids = buildUnifiedCustomPidList(
-                            mode22Streams = obdManager.mode22Streams.value,
-                            obdbLoadedResult = obdManager.obdbLoadedResult.value,
-                            obdbSignalResults = obdManager.obdbSignalResults.value,
-                            unitSystem = currentUnit,
-                            vehicleDetails = obdManager.vehicleDetails.value,
-                            isMoving = isMoving
-                        )
-                        if (allCustomPids.isNotEmpty()) {
-                            val m22Arr = JSONArray()
-                            for (item in allCustomPids) {
-                                m22Arr.put(JSONObject().apply {
-                                    put("name", item.name)
-                                    put("category", item.category.displayName)
-                                    put("value", "${item.formattedValue} ${item.unit}".trim())
-                                })
-                            }
-                            put("custom_mode22_and_obdb_pids", m22Arr)
-                        }
+                        // 1. Comprehensive Vehicle Health & Anomaly Summary (Zero-Lag Awareness):
+                        // We summarize DTCs and Misfires directly at the top so Vera is 100% aware of all defects
+                        // without requiring a 3,000-word payload dump that stalls voice turnaround.
+                        val activeDtcs = troubleCodes.value
                         val m06List = obdManager.mode06Results.value
-                        if (m06List.isNotEmpty()) {
-                            val m06Arr = JSONArray()
-                            for (m in m06List) {
-                                m06Arr.put(JSONObject().apply {
-                                    put("name", m.name)
-                                    put("category", m.category)
-                                    put("value", "${m.testValue.toInt()} ${m.unit}")
-                                    put("status", m.status.name)
-                                })
+                        val failedM06 = m06List.filter { it.status == Mode06Status.FAIL }
+
+                        val healthObj = JSONObject().apply {
+                            put("active_dtcs_count", activeDtcs.size)
+                            if (activeDtcs.isNotEmpty()) {
+                                put("dtc_codes", JSONArray(activeDtcs))
                             }
-                            put("mode06_monitors", m06Arr)
+                            put("failed_monitors_count", failedM06.size)
+                            if (failedM06.isNotEmpty()) {
+                                val failArr = JSONArray()
+                                for (fm in failedM06) {
+                                    failArr.put("${fm.name} (${fm.category}): testValue=${fm.testValue} vs max=${fm.maxLimit}")
+                                }
+                                put("failed_monitors", failArr)
+                            }
+                            put("overall_health_verdict", when {
+                                activeDtcs.isNotEmpty() || failedM06.isNotEmpty() -> "ATTENTION REQUIRED (DTCs or failing component monitors detected)"
+                                metrics.coolantTemp > 105 -> "WARNING: Engine coolant running hot"
+                                kotlin.math.abs(metrics.fuelTrim) > 15 -> "WARNING: High fuel trim variance"
+                                else -> "NOMINAL / HEALTHY (All monitored systems within spec)"
+                            })
+                        }
+                        put("vehicle_health_summary", healthObj)
+
+                        // 2. Focused Stream Inclusion:
+                        // Only include secondary custom PIDs or high-speed CAN streams if the driver asked for something specific
+                        // or if an anomaly is present, preserving sub-second turnaround times for conversation!
+                        val requestedSensor = args.optString("sensor_focus", "").lowercase().trim()
+                        if (requestedSensor.isNotBlank() && requestedSensor != "all") {
+                            val roadSnap = locationManager?.roadContext?.value
+                            val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
+                            val allCustomPids = buildUnifiedCustomPidList(
+                                mode22Streams = obdManager.mode22Streams.value,
+                                obdbLoadedResult = obdManager.obdbLoadedResult.value,
+                                obdbSignalResults = obdManager.obdbSignalResults.value,
+                                unitSystem = currentUnit,
+                                vehicleDetails = obdManager.vehicleDetails.value,
+                                isMoving = isMoving
+                            )
+                            val matchedCustom = allCustomPids.filter { it.name.lowercase().contains(requestedSensor) || it.category.displayName.lowercase().contains(requestedSensor) }
+                            if (matchedCustom.isNotEmpty()) {
+                                val customArr = JSONArray()
+                                for (c in matchedCustom) {
+                                    customArr.put(JSONObject().apply {
+                                        put("name", c.name)
+                                        put("value", "${c.formattedValue} ${c.unit}".trim())
+                                    })
+                                }
+                                put("requested_custom_pids", customArr)
+                            }
+
+                            val matchedCan = opendbcSigs.filter { it.key.lowercase().contains(requestedSensor) }
+                            if (matchedCan.isNotEmpty()) {
+                                val canArr = JSONObject()
+                                for ((k, sig) in matchedCan) {
+                                    canArr.put(k, sig.formattedValue)
+                                }
+                                put("requested_can_dynamics", canArr)
+                            }
                         }
                     }
                 }

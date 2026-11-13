@@ -2214,15 +2214,19 @@ class BluetoothObdManager {
                         }
 
                         // 3. High-Speed CAN Broadcast Sample: populate Advanced Vehicle Dynamics
-                        // automatically via STN hardware filter (or ATMA) every 6 cycles (~2.5s)
-                        // so Mode 01 gauges retain 85%+ of bus bandwidth.
+                        // Only sample CAN broadcasts when vehicle is stationary or when moving on a light duty cycle
+                        // (every 12 cycles instead of 6) so Mode 01 Speed & RPM NEVER stutter while driving!
                         cycleCount++
-                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % 6 == 0)) {
+                        val canSampleInterval = if (_metrics.value.speed > 0) 12 else 6
+                        if (_isHighSpeedCanCapable.value && !_isSniffingCan.value && (!initialCanSampleDone || cycleCount % canSampleInterval == 0)) {
                             initialCanSampleDone = true
-                            sampleCanBroadcastInline(250L)
+                            sampleCanBroadcastInline(180L)
                         }
                     }
-                    delay(30)
+                    // For USB wired connections (vLinker FS USB), delay 10ms for fast 20-30Hz loop.
+                    // For wireless connections, delay 25ms to allow RF buffer drainage.
+                    val loopDelay = if (isUsbConnection) 10L else 25L
+                    delay(loopDelay)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in polling loop", e)
                     break

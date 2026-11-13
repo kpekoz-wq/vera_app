@@ -395,18 +395,21 @@ class VeraLocationManager(
         val rawGpsSpeedMps = if (location.hasSpeed()) location.speed else 0f
         val gpsSpeedMph = (rawGpsSpeedMps * 2.23694).toDouble()
 
+        // High-sensitivity accelerometer forward motion hint:
+        // When a vehicle starts accelerating from a dead stop, the phone's accelerometer detects it in < 150ms.
+        val hasAccelKick = currentPhoneAccelMps2 > 0.85
+
         // Fused Speedometer:
-        // Prefer OBD2 wheel/transmission speed if available and positive.
-        // Fallback instantly to Phone GPS speedometer if OBD speed is zero or still initializing.
+        // Use OBD speed if positive and connected, otherwise instantly use phone GPS speedometer.
         val speedMph = if (obdConnected && obdSpeedKmh > 0) obdSpeedMph else gpsSpeedMph
         val speedKmh = if (obdConnected && obdSpeedKmh > 0) obdSpeedKmh.toDouble() else (rawGpsSpeedMps * 3.6).toDouble()
 
-        // Fused Motion Determination:
-        // Vehicle is MOVING if either:
-        // 1. OBD speedometer reports >= 2 km/h (~1.2 mph), OR
-        // 2. Phone GPS speedometer reports >= 2.5 mph.
-        // Never let an unpolled or lagging OBD reading hold the motion state at 0 mph while the car is moving.
-        val isMoving = (obdConnected && obdSpeedKmh >= 2) || (gpsSpeedMph >= 2.5)
+        // Instant Motion Detection:
+        // Vehicle is MOVING if ANY of the following occur:
+        // 1. OBD speedometer reports >= 1 km/h (~0.6 mph).
+        // 2. Phone GPS reports >= 1.2 mph (lowered from 2.5 mph for instant drive-off reaction).
+        // 3. Phone GPS reports speed with an acceleration kick.
+        val isMoving = (obdConnected && obdSpeedKmh >= 1) || (gpsSpeedMph >= 1.2) || (gpsSpeedMph >= 0.8 && hasAccelKick)
 
         val altMeters = if (location.hasAltitude()) location.altitude else 0.0
         val altFeet = altMeters * 3.28084
