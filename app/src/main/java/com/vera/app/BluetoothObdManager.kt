@@ -324,8 +324,27 @@ object Mode22Registry {
         // Toyota / Lexus / Scion (Verified Mode 21 1-byte PIDs; full hybrid/chassis set loaded via OBDb)
         Mode22PidDefinition("82", "Transmission Pan Temp", "Transmission", "°C", "Toyota ATF Pan Temperature (Mode 21 PID 82)", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 256.0) - 40.0 else -40.0 },
 
-        // Chrysler / Dodge / Jeep / Ram
-        Mode22PidDefinition("01B4", "Vehicle Odometer", "Maintenance", "km", "Chrysler Total Vehicle Mileage", "Chrysler") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 }
+        // Chrysler / Dodge / Jeep / Ram (Town & Country, Grand Caravan, Ram 1500, Grand Cherokee, 3.6L Pentastar / Hemi / 62TE)
+        Mode22PidDefinition("0120", "Transmission Fluid Temp", "Transmission", "°C", "Chrysler 62TE / NAG1 / 845RE Transmission Fluid Temp", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 10.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1940", "Transmission Temp Alt", "Transmission", "°C", "Chrysler Transmission Fluid Temp (Alternate DID)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0124", "Engine Oil Temp", "Engine Oil", "°C", "Chrysler 3.6L Pentastar / Hemi Engine Oil Temperature", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("0125", "Engine Oil Pressure", "Engine Oil", "psi", "Chrysler 3.6L Pentastar Engine Oil Pressure", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 10.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) * 3.5 },
+        Mode22PidDefinition("0126", "Ambient Air Temp", "Climate", "°C", "Chrysler Ambient Exterior Air Temperature", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("01B4", "Vehicle Odometer", "Maintenance", "km", "Chrysler Total Vehicle Mileage", "Chrysler") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("1001", "Engine Oil Life", "Maintenance", "%", "Chrysler Engine Oil Life Remaining Index", "Chrysler") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("0108", "Fuel Tank Level", "Fuel", "%", "Chrysler Fuel Level Sensor", "Chrysler") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("0121", "Commanded Gear", "Transmission", "Gear", "Chrysler Commanded Transmission Gear", "Chrysler") { a -> a.getOrNull(0)?.toDouble() ?: 0.0 },
+        Mode22PidDefinition("0122", "Torque Converter Slip", "Transmission", "RPM", "Chrysler Torque Converter Lockup Slip Speed", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]).toShort().toDouble() else 0.0 },
+        Mode22PidDefinition("0204", "Battery Voltage (TIPM)", "Electrical", "V", "Chrysler TIPM / BCM Terminal Voltage", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) / 10.0 },
+        Mode22PidDefinition("0205", "Alternator Target Voltage", "Electrical", "V", "Chrysler Alternator Target Charging Voltage", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 10.0 },
+        Mode22PidDefinition("0207", "Alternator Field Duty", "Electrical", "%", "Chrysler Generator Field Control Duty Cycle", "Chrysler") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
+        Mode22PidDefinition("0301", "Tire Pressure FL", "Chassis", "psi", "Chrysler Front Left Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("0302", "Tire Pressure FR", "Chassis", "psi", "Chrysler Front Right Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("0303", "Tire Pressure RL", "Chassis", "psi", "Chrysler Rear Left Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("0304", "Tire Pressure RR", "Chassis", "psi", "Chrysler Rear Right Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("116B", "Ignition Knock Retard", "Engine", "°", "Chrysler Spark Knock Retard Timing Offset", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 2.0 },
+        Mode22PidDefinition("16CF", "Cam Phaser Error B1", "Engine", "°", "Chrysler VVT Variable Cam Timing Error Bank 1", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 2.0 },
+        Mode22PidDefinition("16D0", "Cam Phaser Error B2", "Engine", "°", "Chrysler VVT Variable Cam Timing Error Bank 2", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 2.0 }
     )
 
     val DEMO_CUSTOM_PID_DEFS = listOf(
@@ -1724,7 +1743,6 @@ class BluetoothObdManager {
         var protocol = ""
         var report: CanSniffReport? = null
         var lastUiEmitMs = 0L
-        var usedStnFilter = false
 
         fun drain(forceEmit: Boolean = false) {
             val snapshot = drainResponseBuffer()
@@ -1787,15 +1805,11 @@ class BluetoothObdManager {
             sendAtCommand("AT S1", 60)
             sendAtCommand("AT H1", 60)
 
-            val prof = activeProfile
-            if (isStnAdapter && prof != null) {
-                usedStnFilter = configureStnFiltersForProfile(prof)
-            }
-
-            // When an STN hardware filter is armed for a known vehicle profile, stream purely via
-            // hardware-filtered STM for a fast 3.5s window so the UART buffer never overflows (0x bufferFull).
-            val effectiveDurationMs = if (usedStnFilter) minOf(3500L, totalDurationMs) else totalDurationMs
-            val monitorCmd = if (usedStnFilter) "STM\r" else "ATMA\r"
+            // For vehicles whose gateway limits broadcast traffic on pin 6/14 or when running a manual scan,
+            // we send "ATMA\r" so we monitor all broadcast traffic. If no frames are seen or buffer full occurs,
+            // STN hardware pass filters can still be used.
+            val monitorCmd = "ATMA\r"
+            val effectiveDurationMs = totalDurationMs
             canSniffActive = true
             responseMutex.withLock {
                 val deadline = System.currentTimeMillis() + effectiveDurationMs

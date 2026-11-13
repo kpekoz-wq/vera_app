@@ -516,9 +516,11 @@ class ObdbRepository(private val context: Context) {
                 out.add("Kia-Sorento")
             }
             mUpper.contains("JEEP") || mUpper.contains("DODGE") || mUpper.contains("RAM") || mUpper.contains("CHRYSLER") -> {
-                out.add("Jeep-Grand-Cherokee")
-                out.add("Chrysler-Pacifica")
+                out.add("Chrysler-Town-and-Country")
+                out.add("Chrysler-Town-Country")
                 out.add("Dodge-Grand-Caravan")
+                out.add("Chrysler-Pacifica")
+                out.add("Jeep-Grand-Cherokee")
                 out.add("Jeep-Wrangler")
                 out.add("Ram-1500")
             }

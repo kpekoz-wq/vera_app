@@ -388,11 +388,11 @@ class GeminiLiveStreamManager(private val context: Context) {
                 put("functionDeclarations", JSONArray().apply {
                     put(JSONObject().apply {
                         put("name", "get_live_data")
-                        put("description", "Returns current live vehicle engine telemetry snapshot from ECU (RPM, speed in mph/kmh, coolant temp in F/C, battery voltage, throttle, fuel trims, MAP/MAF, etc.). Invoke whenever driver asks about speed, engine status, temperatures, battery, or sensors.")
+                        put("description", "Returns current live vehicle telemetry, engine status, and high-speed CAN bus dynamics (RPM, speed in mph/kmh, coolant temp, battery voltage, throttle, fuel trims, MAP/MAF, steering angle, wheel speeds, brake pressure, yaw rate, transmission gear). Invoke whenever driver asks about speed, engine status, temperatures, battery, steering, or chassis dynamics.")
                         put("parameters", JSONObject().apply {
                             put("type", "OBJECT")
                             put("properties", JSONObject().apply {
-                                put("sensor_focus", stringParam("Specific sensor requested, e.g. 'coolant', 'rpm', 'speed', 'battery', 'all'"))
+                                put("sensor_focus", stringParam("Specific sensor requested, e.g. 'steering', 'coolant', 'rpm', 'speed', 'battery', 'all'"))
                             })
                         })
                     })

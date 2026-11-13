@@ -1868,21 +1868,40 @@ class GeminiAgentViewModel : ViewModel() {
                         }
                         put("vehicle_health_summary", healthObj)
 
-                        // 2. Focused Stream Inclusion:
-                        // Only include secondary custom PIDs or high-speed CAN streams if the driver asked for something specific
-                        // or if an anomaly is present, preserving sub-second turnaround times for conversation!
+                        // 2. High-Speed CAN Bus Dynamics (Steering Angle, Wheel Speeds, Brake Pressure, Yaw Rate, Transmission Gear)
+                        // ALWAYS include active CAN dynamics directly so Vera is immediately aware of steering, wheels, and brakes
+                        // without hallucinating or telling the user they are at 0!
+                        if (opendbcSigs.isNotEmpty()) {
+                            val canObj = JSONObject()
+                            for ((name, sig) in opendbcSigs) {
+                                canObj.put(name, sig.formattedValue)
+                            }
+                            put("can_dynamics", canObj)
+                        }
+
+                        // 3. Vehicle Custom PIDs (Transmission Temp, Oil Pressure, Head Temp, Voltage, etc.)
+                        val roadSnap = locationManager?.roadContext?.value
+                        val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
+                        val allCustomPids = buildUnifiedCustomPidList(
+                            mode22Streams = obdManager.mode22Streams.value,
+                            obdbLoadedResult = obdManager.obdbLoadedResult.value,
+                            obdbSignalResults = obdManager.obdbSignalResults.value,
+                            unitSystem = currentUnit,
+                            vehicleDetails = obdManager.vehicleDetails.value,
+                            isMoving = isMoving
+                        )
+                        val keyCustomPids = allCustomPids.filter { !it.isBooleanStatus && it.formattedValue != "--" && it.formattedValue.isNotBlank() }
+                        if (keyCustomPids.isNotEmpty()) {
+                            val customObj = JSONObject()
+                            for (c in keyCustomPids.take(12)) {
+                                customObj.put(c.name, "${c.formattedValue} ${c.unit}".trim())
+                            }
+                            put("custom_pids", customObj)
+                        }
+
+                        // 4. Targeted Sensor Search (if driver asked for a specific sensor)
                         val requestedSensor = args.optString("sensor_focus", "").lowercase().trim()
                         if (requestedSensor.isNotBlank() && requestedSensor != "all") {
-                            val roadSnap = locationManager?.roadContext?.value
-                            val isMoving = (roadSnap?.isMoving == true) || ((metrics.speed * 0.621371) >= 3)
-                            val allCustomPids = buildUnifiedCustomPidList(
-                                mode22Streams = obdManager.mode22Streams.value,
-                                obdbLoadedResult = obdManager.obdbLoadedResult.value,
-                                obdbSignalResults = obdManager.obdbSignalResults.value,
-                                unitSystem = currentUnit,
-                                vehicleDetails = obdManager.vehicleDetails.value,
-                                isMoving = isMoving
-                            )
                             val matchedCustom = allCustomPids.filter { it.name.lowercase().contains(requestedSensor) || it.category.displayName.lowercase().contains(requestedSensor) }
                             if (matchedCustom.isNotEmpty()) {
                                 val customArr = JSONArray()
