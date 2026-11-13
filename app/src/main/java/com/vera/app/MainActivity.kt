@@ -1440,9 +1440,8 @@ fun SleekMetricTile(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(vertical = 4.dp, horizontal = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
                     text = label,
@@ -1455,9 +1454,12 @@ fun SleekMetricTile(
                     color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                Spacer(modifier = Modifier.weight(1f))
+
                 Text(
                     text = value,
                     fontSize = 14.sp,
+                    lineHeight = 14.sp,
                     fontWeight = FontWeight.Black,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
@@ -1466,10 +1468,14 @@ fun SleekMetricTile(
                 Text(
                     text = if (unit.isNotBlank()) unit else " ",
                     fontSize = 9.sp,
+                    lineHeight = 10.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1
+                    maxLines = 1,
+                    modifier = Modifier.offset(y = (-2).dp)
                 )
+
+                Spacer(modifier = Modifier.weight(0.7f))
             }
 
             if (isSelected) {
