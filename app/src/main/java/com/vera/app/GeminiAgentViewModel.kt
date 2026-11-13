@@ -1393,10 +1393,6 @@ class GeminiAgentViewModel : ViewModel() {
                     currentUserTurnRaw.clear()
                     currentLiveTurnRaw.clear()
                     autoSaveCurrentSession()
-                    val lastUserMsg = messages.lastOrNull { it.sender == "User" }?.text
-                    if (!lastUserMsg.isNullOrBlank()) {
-                        checkAndExecuteLocalMonitoringIntent(lastUserMsg)
-                    }
                 }
             },
             onToolCall = { toolName, callId, args ->
@@ -1586,10 +1582,11 @@ class GeminiAgentViewModel : ViewModel() {
                - When delivering periodic sensor readings or gauge updates to the driver:
                  * Speak naturally and casually, like a seasoned mechanic sitting in the passenger seat watching the dashboard gauges (e.g. "Fuel trims are sitting at +2% right now", "Coolant's at 195", "Speed is 55").
                  * NEVER say "Periodic update:" or sound like an automated robot. Give the data in a natural conversational style.
-               - When the driver asks you to watch or alert them if a sensor crosses a threshold (e.g. "let me know if my RPMs go over 2000", "warn me if coolant temp crosses 220", "alert me if speed goes over 80"):
-                 * You MUST invoke the `set_telemetry_threshold_alert` tool with the parameter, comparison condition ('>', '<', '>=', '<='), and threshold_value.
+               - When the driver asks you to watch or alert them if a sensor crosses a threshold (e.g. "let me know if my RPMs go over 2000", "warn me if coolant temp crosses 220", "alert me if speed goes over 80", "let me know if fuel trims go past 3% or -3%"):
+                 * You MUST invoke the `set_telemetry_threshold_alert` tool with the parameter, comparison condition ('>', '<', '>=', '<=', or 'abs_gt'), and threshold_value.
+                 * CRITICAL FOR +/- BANDS (like "past 3% or -3%", "outside +/- 5%"): Set condition to 'abs_gt' and threshold_value to the positive limit (e.g. 3.0), which alerts on both positive lean spikes and negative rich spikes!
                  * Confirm briefly in one natural sentence that you are monitoring that threshold.
-               - When the driver asks to cancel or stop active timers, watchers, or alerts (e.g. "stop reporting", "cancel alerts", "stop watching"):
+               - When the driver asks to cancel or stop active timers, watchers, updates, or alerts (e.g. "cancel the update", "stop reporting", "cancel alerts", "stop watching"):
                  * You MUST invoke the `cancel_telemetry_alerts` tool.
             4. STRICT CAPABILITIES & HARD BOUNDARY ENFORCEMENT:
                - HONESTY OVER AGREEABLENESS:
@@ -2224,9 +2221,13 @@ class GeminiAgentViewModel : ViewModel() {
         if (lower.contains("stop monitor") || lower.contains("cancel monitor") ||
             lower.contains("stop watch") || lower.contains("cancel watch") ||
             lower.contains("stop checking") || lower.contains("stop reporting") ||
+            lower.contains("cancel report") || lower.contains("stop report") ||
+            lower.contains("cancel update") || lower.contains("stop update") ||
+            lower.contains("cancel alert") || lower.contains("stop alert") ||
+            lower.contains("cancel timer") || lower.contains("stop timer") ||
             lower == "stop" || lower == "cancel") {
             sentinelManager.cancelAlerts("all")
-            val msg = "I've stopped the recurring monitoring reports."
+            val msg = "I've stopped the recurring monitoring reports and active alerts."
             messages.add(ChatMessage("VERA", msg))
             autoSaveCurrentSession()
             if (isVoiceModeActive) {

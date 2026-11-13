@@ -121,12 +121,30 @@ class VeraSentinelManager(
         }
         val safeDuration = if (durationSeconds > 0) durationSeconds else (calcMaxCount * safeInterval)
 
-        val watcherId = "periodic_${parameter.lowercase().replace(" ", "_")}"
-        scheduledWatchers[watcherId]?.job?.cancel()
+        val paramNormalized = when {
+            parameter.contains("fuel", ignoreCase = true) || parameter.contains("trim", ignoreCase = true) -> "fuel_trim"
+            parameter.contains("rpm", ignoreCase = true) || parameter.contains("tach", ignoreCase = true) -> "rpm"
+            parameter.contains("speed", ignoreCase = true) || parameter.contains("mph", ignoreCase = true) || parameter.contains("kmh", ignoreCase = true) -> "speed"
+            parameter.contains("coolant", ignoreCase = true) || parameter.contains("temp", ignoreCase = true) -> "coolant"
+            parameter.contains("trans", ignoreCase = true) -> "trans_temp"
+            parameter.contains("volt", ignoreCase = true) || parameter.contains("battery", ignoreCase = true) -> "voltage"
+            else -> parameter.lowercase().trim().replace(" ", "_")
+        }
+        val watcherId = "periodic_$paramNormalized"
+
+        // Cancel and remove any existing active watcher for this parameter or category to prevent duplicates
+        val existingCollisions = scheduledWatchers.filter {
+            it.key == watcherId || it.value.parameter.contains(paramNormalized, ignoreCase = true) || paramNormalized.contains(it.value.parameter, ignoreCase = true)
+        }
+        for ((k, oldWatcher) in existingCollisions) {
+            oldWatcher.job?.cancel()
+            scheduledWatchers.remove(k)
+            Log.i(TAG, "Cancelled previous colliding watcher: $k before starting $watcherId")
+        }
 
         val watcher = ScheduledWatcher(
             id = watcherId,
-            parameter = parameter,
+            parameter = paramNormalized,
             intervalSeconds = safeInterval,
             durationSeconds = safeDuration,
             maxCount = calcMaxCount
@@ -483,23 +501,43 @@ class VeraSentinelManager(
         customMessage: String? = null,
         currentUnit: UnitSystem
     ): JSONObject {
-        val cleanParam = parameter.lowercase().trim()
-        val watcherId = "thresh_${cleanParam}_${condition}_${threshold.toInt()}"
+        val cleanParam = when {
+            parameter.contains("fuel", ignoreCase = true) || parameter.contains("trim", ignoreCase = true) -> "fuel_trim"
+            parameter.contains("rpm", ignoreCase = true) || parameter.contains("tach", ignoreCase = true) -> "rpm"
+            parameter.contains("speed", ignoreCase = true) -> "speed"
+            parameter.contains("coolant", ignoreCase = true) || parameter.contains("temp", ignoreCase = true) -> "coolant"
+            parameter.contains("volt", ignoreCase = true) -> "voltage"
+            parameter.contains("tire", ignoreCase = true) || parameter.contains("tpms", ignoreCase = true) -> "tire_pressure"
+            else -> parameter.lowercase().trim()
+        }
+
+        val cleanCondition = when {
+            condition.equals("abs_gt", ignoreCase = true) || condition.equals("outside", ignoreCase = true) || condition.equals("past", ignoreCase = true) -> "abs_gt"
+            cleanParam == "fuel_trim" && customMessage != null && (customMessage.contains("-") || customMessage.contains("past", ignoreCase = true) || customMessage.contains("outside", ignoreCase = true)) -> "abs_gt"
+            else -> condition.trim()
+        }
+
+        // Cancel any existing watcher for the same parameter to prevent duplicate/conflicting watchers
+        val existing = thresholdWatchers.filter { it.value.parameter == cleanParam }
+        existing.forEach { (k, _) -> thresholdWatchers.remove(k) }
+
+        val watcherId = "thresh_${cleanParam}_${cleanCondition}_${threshold.toInt()}"
 
         // Calculate hysteresis to prevent repetitive bounce
         val hysteresis = when {
-            cleanParam.contains("rpm") -> 150.0
-            cleanParam.contains("coolant") || cleanParam.contains("temp") -> 5.0
-            cleanParam.contains("speed") -> 3.0
-            cleanParam.contains("fuel") || cleanParam.contains("trim") -> 3.0
-            cleanParam.contains("volt") -> 0.3
-            else -> threshold * 0.05
+            cleanParam.contains("rpm") -> 100.0
+            cleanParam.contains("coolant") || cleanParam.contains("temp") -> 3.0
+            cleanParam.contains("speed") -> 2.0
+            cleanParam.contains("fuel") || cleanParam.contains("trim") -> 0.5 // 0.5% hysteresis for trims allows reliable re-arming
+            cleanParam.contains("volt") -> 0.2
+            cleanParam.contains("tire") || cleanParam.contains("tpms") -> 2.0
+            else -> kotlin.math.abs(threshold) * 0.05
         }
 
         val watcher = ThresholdWatcher(
             id = watcherId,
             parameter = cleanParam,
-            condition = condition,
+            condition = cleanCondition,
             threshold = threshold,
             customMessage = customMessage,
             hysteresis = hysteresis,
@@ -507,42 +545,80 @@ class VeraSentinelManager(
         )
 
         thresholdWatchers[watcherId] = watcher
-        Log.i(TAG, "Set threshold alert: $cleanParam $condition $threshold (hysteresis=$hysteresis)")
+        Log.i(TAG, "Set threshold alert: $cleanParam $cleanCondition $threshold (hysteresis=$hysteresis)")
 
+        val conditionHuman = if (cleanCondition == "abs_gt") "past +/-" else cleanCondition
         return JSONObject().apply {
             put("status", "ACTIVE")
-            put("parameter", parameter)
-            put("condition", condition)
+            put("parameter", cleanParam)
+            put("condition", cleanCondition)
             put("threshold", threshold)
-            put("message", "Watching for $parameter $condition $threshold. I will alert you the moment this threshold is crossed.")
+            put("message", "Watching for $cleanParam $conditionHuman $threshold. I will alert you the moment this threshold is crossed.")
         }
     }
 
     fun cancelAlerts(parameter: String? = null): JSONObject {
-        val target = parameter?.lowercase()?.trim() ?: "all"
+        val rawTarget = parameter?.lowercase()?.trim() ?: "all"
         var cancelledCount = 0
 
-        if (target == "all" || target.isBlank()) {
-            cancelledCount += scheduledWatchers.size + thresholdWatchers.size
-            cancelAllWatchers()
+        val isGlobal = rawTarget.isBlank() || rawTarget == "all" ||
+                rawTarget.contains("everything") || rawTarget.contains("all")
+
+        val isUpdateOrReport = rawTarget.contains("update") || rawTarget.contains("report")
+        val isThresholdOrAlert = rawTarget.contains("threshold") || rawTarget.contains("limit") || rawTarget.contains("alert")
+
+        val cleanParam = when {
+            rawTarget.contains("fuel") || rawTarget.contains("trim") -> "fuel_trim"
+            rawTarget.contains("rpm") || rawTarget.contains("tach") -> "rpm"
+            rawTarget.contains("speed") -> "speed"
+            rawTarget.contains("coolant") || rawTarget.contains("temp") -> "coolant"
+            rawTarget.contains("volt") -> "voltage"
+            else -> ""
+        }
+
+        if (isGlobal || (isUpdateOrReport && cleanParam.isEmpty() && !isThresholdOrAlert)) {
+            // Driver requested global cancel or cancelling all updates/reports
+            if (isGlobal) {
+                cancelledCount += scheduledWatchers.size + thresholdWatchers.size
+                cancelAllWatchers()
+            } else {
+                scheduledWatchers.forEach { (_, w) -> w.job?.cancel() }
+                cancelledCount += scheduledWatchers.size
+                scheduledWatchers.clear()
+            }
         } else {
-            val scheduledToRemove = scheduledWatchers.filter { it.key.contains(target) || it.value.parameter.contains(target, ignoreCase = true) }
+            val scheduledToRemove = scheduledWatchers.filter { (k, w) ->
+                (cleanParam.isNotEmpty() && (k.contains(cleanParam) || w.parameter.contains(cleanParam))) ||
+                k.contains(rawTarget) || w.parameter.contains(rawTarget) ||
+                isUpdateOrReport
+            }
             scheduledToRemove.forEach { (k, w) ->
                 w.job?.cancel()
                 scheduledWatchers.remove(k)
                 cancelledCount++
             }
-            val threshToRemove = thresholdWatchers.filter { it.key.contains(target) || it.value.parameter.contains(target, ignoreCase = true) }
+
+            val threshToRemove = thresholdWatchers.filter { (k, w) ->
+                (cleanParam.isNotEmpty() && (k.contains(cleanParam) || w.parameter.contains(cleanParam))) ||
+                k.contains(rawTarget) || w.parameter.contains(rawTarget) ||
+                (isThresholdOrAlert && cleanParam.isEmpty())
+            }
             threshToRemove.forEach { (k, _) ->
                 thresholdWatchers.remove(k)
                 cancelledCount++
+            }
+
+            // Fallback: If nothing was matched but the user asked to cancel/stop, clear everything to avoid stranded loops
+            if (cancelledCount == 0 && (rawTarget.contains("stop") || rawTarget.contains("cancel"))) {
+                cancelledCount += scheduledWatchers.size + thresholdWatchers.size
+                cancelAllWatchers()
             }
         }
 
         return JSONObject().apply {
             put("status", "CANCELLED")
             put("cancelled_count", cancelledCount)
-            put("message", if (cancelledCount > 0) "Cancelled $cancelledCount active alerts for $target." else "No active alerts were found matching $target.")
+            put("message", if (cancelledCount > 0) "Cancelled $cancelledCount active alerts or reports." else "No active alerts were found matching $rawTarget.")
         }
     }
 
@@ -587,6 +663,9 @@ class VeraSentinelManager(
         val coolantF = (metrics.coolantTemp * 1.8 + 32).toInt()
         val coolantC = metrics.coolantTemp
         val fuelTrim = metrics.fuelTrim
+        val fuelTrimExact = streams.find { it.pid.pidHex == "06" }?.rawValue
+            ?: streams.find { it.pid.name.contains("Fuel Trim", ignoreCase = true) }?.rawValue
+            ?: fuelTrim.toDouble()
 
         // Only trust a voltage that has really arrived from the ECU recently and is physically plausible.
         // (Streams are created with rawValue = 0.0 before the first sample, which used to look like "0 V".)
@@ -907,9 +986,40 @@ class VeraSentinelManager(
             }
         }
 
+        // ── RULE 14: TPMS TIRE PRESSURE MONITORING & CHASSIS WARNINGS (MODE 22) ──
+        val tpmsStreams = mode22Streams.filter { it.pid.category.equals("Chassis", ignoreCase = true) || it.pid.name.contains("Tire Pressure", ignoreCase = true) }
+        for (tpms in tpmsStreams) {
+            val psi = tpms.rawValue
+            // Passenger car tire pressures range from 30 to 42 PSI. If a tire is detected between 1 and 28.5 PSI:
+            if (psi in 1.0..28.5) {
+                val alertKey = "tpms_low_${tpms.pid.pidHex}"
+                if (canFireAlert(alertKey, 300_000L)) { // Alert once every 5 minutes per low tire
+                    val tireName = when {
+                        tpms.pid.name.contains("FL", ignoreCase = true) -> "Front Left"
+                        tpms.pid.name.contains("FR", ignoreCase = true) -> "Front Right"
+                        tpms.pid.name.contains("RL", ignoreCase = true) -> "Rear Left"
+                        tpms.pid.name.contains("RR", ignoreCase = true) -> "Rear Right"
+                        else -> tpms.pid.name
+                    }
+                    val psiFormatted = String.format(java.util.Locale.US, "%.0f PSI", psi)
+                    postAlert(
+                        SentinelAlert(
+                            severity = SentinelSeverity.WARNING,
+                            title = "Low Tire Pressure: $tireName",
+                            message = "$tireName tire is reading $psiFormatted, which is below the recommended pressure threshold.",
+                            spokenText = "Tire Pressure Warning: Your $tireName tire is low at $psiFormatted. Check tire pressure soon.",
+                            parameter = "TPMS_LOW_PRESSURE",
+                            valueFormatted = psiFormatted
+                        )
+                    )
+                }
+            }
+        }
+
         // ── RULE 13: EVALUATE USER CUSTOM THRESHOLD WATCHERS ──
+        val minTirePsi = tpmsStreams.map { it.rawValue }.filter { it > 1.0 }.minOrNull() ?: Double.NaN
         for ((_, watcher) in thresholdWatchers) {
-            evaluateSingleThresholdWatcher(watcher, rpm, speedMph, coolantF, fuelTrim, voltageStream, isMetric)
+            evaluateSingleThresholdWatcher(watcher, rpm, speedMph, coolantF, fuelTrimExact, voltageStream, minTirePsi, isMetric)
         }
     }
 
@@ -918,30 +1028,41 @@ class VeraSentinelManager(
         rpm: Int,
         speedMph: Int,
         coolantF: Int,
-        fuelTrim: Int,
+        fuelTrim: Double,
         voltage: Double,
+        minTirePsi: Double,
         isMetric: Boolean
     ) {
         val currentValue: Double = when {
             watcher.parameter.contains("rpm") -> rpm.toDouble()
             watcher.parameter.contains("speed") -> if (isMetric) (speedMph * 1.60934) else speedMph.toDouble()
             watcher.parameter.contains("coolant") || watcher.parameter.contains("temp") -> if (isMetric) ((coolantF - 32) / 1.8) else coolantF.toDouble()
-            watcher.parameter.contains("fuel") || watcher.parameter.contains("trim") -> fuelTrim.toDouble()
+            watcher.parameter.contains("fuel") || watcher.parameter.contains("trim") -> fuelTrim
             watcher.parameter.contains("volt") -> voltage
+            watcher.parameter.contains("tire") || watcher.parameter.contains("tpms") -> minTirePsi
             else -> return
         }
 
-        val isCrossed = when (watcher.condition) {
+        val cleanCond = watcher.condition.lowercase().trim()
+        val isCrossed = when (cleanCond) {
             ">" -> currentValue > watcher.threshold
             ">=" -> currentValue >= watcher.threshold
             "<" -> currentValue < watcher.threshold
             "<=" -> currentValue <= watcher.threshold
+            "abs_gt", "outside", "past" -> kotlin.math.abs(currentValue) > kotlin.math.abs(watcher.threshold)
             else -> currentValue > watcher.threshold
         }
 
+        val now = System.currentTimeMillis()
+
         if (watcher.isArmed && isCrossed) {
+            // Prevent burst triggers within 6 seconds
+            if (now - watcher.lastTriggered < 6_000L) {
+                return
+            }
+
             watcher.isArmed = false
-            watcher.lastTriggered = System.currentTimeMillis()
+            watcher.lastTriggered = now
 
             val unitLabel = when {
                 watcher.parameter.contains("rpm") -> "RPM"
@@ -949,12 +1070,34 @@ class VeraSentinelManager(
                 watcher.parameter.contains("coolant") -> if (isMetric) "°C" else "°F"
                 watcher.parameter.contains("fuel") -> "%"
                 watcher.parameter.contains("volt") -> "V"
+                watcher.parameter.contains("tire") || watcher.parameter.contains("tpms") -> "PSI"
                 else -> ""
             }
 
-            val fmtVal = String.format(java.util.Locale.US, "%,.0f %s", currentValue, unitLabel).trim()
-            val msg = watcher.customMessage ?: "${watcher.parameter.uppercase()} reached $fmtVal (threshold ${watcher.threshold.toInt()} $unitLabel)"
-            val spoken = watcher.customMessage ?: "Threshold alert: ${watcher.parameter} reached $fmtVal."
+            val fmtVal = when {
+                watcher.parameter.contains("fuel") || watcher.parameter.contains("trim") ->
+                    String.format(java.util.Locale.US, "%+.1f%%", currentValue)
+                watcher.parameter.contains("volt") ->
+                    String.format(java.util.Locale.US, "%.1f V", currentValue)
+                else ->
+                    String.format(java.util.Locale.US, "%,.0f %s", currentValue, unitLabel).trim()
+            }
+
+            val (msg, spoken) = if (watcher.customMessage != null) {
+                watcher.customMessage to watcher.customMessage
+            } else {
+                when {
+                    watcher.parameter.contains("fuel") || watcher.parameter.contains("trim") -> {
+                        val direction = if (currentValue >= 0) "lean" else "rich"
+                        val text = "Fuel trim excursion: reading $fmtVal ($direction), crossing your ${watcher.threshold.toInt()}% threshold."
+                        text to text
+                    }
+                    else -> {
+                        val text = "Threshold alert: ${watcher.parameter} reached $fmtVal."
+                        "${watcher.parameter.uppercase()} reached $fmtVal (threshold ${watcher.threshold.toInt()} $unitLabel)" to text
+                    }
+                }
+            }
 
             postAlert(
                 SentinelAlert(
@@ -968,14 +1111,15 @@ class VeraSentinelManager(
             )
         } else if (!watcher.isArmed) {
             // Re-arm when value drops back past the hysteresis gap
-            val isReArmed = when (watcher.condition) {
+            val isReArmed = when (cleanCond) {
                 ">", ">=" -> currentValue < (watcher.threshold - watcher.hysteresis)
                 "<", "<=" -> currentValue > (watcher.threshold + watcher.hysteresis)
+                "abs_gt", "outside", "past" -> kotlin.math.abs(currentValue) < (kotlin.math.abs(watcher.threshold) - watcher.hysteresis)
                 else -> currentValue < (watcher.threshold - watcher.hysteresis)
             }
             if (isReArmed) {
                 watcher.isArmed = true
-                Log.d(TAG, "Re-armed threshold watcher for ${watcher.parameter} (val=$currentValue)")
+                Log.d(TAG, "Re-armed threshold watcher for ${watcher.parameter} (val=$currentValue, thresh=${watcher.threshold}, hyst=${watcher.hysteresis})")
             }
         }
     }

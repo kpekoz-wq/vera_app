@@ -234,7 +234,12 @@ object ObdDtcRegistry {
         "P0441" to "EVAP Control System Incorrect Purge Flow",
         "P0442" to "EVAP Control System Leak Detected (Small Leak)",
         "P0455" to "EVAP Control System Leak Detected (Gross Leak)",
-        "P0500" to "Vehicle Speed Sensor Malfunction"
+        "P0500" to "Vehicle Speed Sensor Malfunction",
+        "C1501" to "Tire Pressure Sensor 1 (FL) Internal / Pressure Low",
+        "C1502" to "Tire Pressure Sensor 2 (FR) Internal / Pressure Low",
+        "C1503" to "Tire Pressure Sensor 3 (RR) Internal / Pressure Low",
+        "C1504" to "Tire Pressure Sensor 4 (RL) Internal / Pressure Low",
+        "C151D" to "Tire Pressure Sensor Location / Threshold Exceeded"
     )
 
     fun getDescription(code: String): String {
@@ -245,6 +250,7 @@ object ObdDtcRegistry {
             code.startsWith("P02") -> "Fuel Injector Circuit Fault"
             code.startsWith("P05") -> "Idle Speed or Speed Sensor Fault"
             code.startsWith("P07") -> "Transmission Control System Fault"
+            code.startsWith("C15") || code.contains("150") || code.contains("151") -> "Tire Pressure Monitoring System (TPMS) Warning"
             code.startsWith("C") -> "Chassis / ABS / Brake System Fault"
             code.startsWith("B") -> "Body Control Module Fault"
             code.startsWith("U") -> "CAN Bus / Network Communication Fault"
@@ -312,6 +318,10 @@ object Mode22Registry {
         Mode22PidDefinition("DD01", "Vehicle Odometer", "Maintenance", "km", "Ford Total Vehicle Odometer (IPC / BCM)", "Ford") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 10.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
         Mode22PidDefinition("042F", "Battery State of Charge", "Electrical", "%", "Ford 12V Battery State of Charge (BMS)", "Ford") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("042C", "Battery Voltage (BCM)", "Electrical", "V", "Ford Battery Terminal Voltage (BCM)", "Ford") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else 0.0 },
+        Mode22PidDefinition("2813", "Tire Pressure FL", "Chassis", "psi", "Ford Front Left Tire Pressure (TPMS)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
+        Mode22PidDefinition("2814", "Tire Pressure FR", "Chassis", "psi", "Ford Front Right Tire Pressure (TPMS)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
+        Mode22PidDefinition("2815", "Tire Pressure RR", "Chassis", "psi", "Ford Rear Right Tire Pressure (TPMS)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
+        Mode22PidDefinition("2816", "Tire Pressure RL", "Chassis", "psi", "Ford Rear Left Tire Pressure (TPMS)", "Ford") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
 
         // GM / Chevrolet / GMC / Buick / Cadillac (Verified Mode 22 fallbacks)
         Mode22PidDefinition("1940", "Transmission Temp", "Transmission", "°C", "GM Transmission Fluid Temp (4L60E/4L80E)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
@@ -320,9 +330,17 @@ object Mode22Registry {
         Mode22PidDefinition("1150", "Engine Oil Pressure", "Engine Oil", "kPa", "GM Engine Oil Pressure", "GM") { a -> (a.getOrNull(0) ?: 0) * 4.0 },
         Mode22PidDefinition("115A", "Engine Oil Life", "Maintenance", "%", "GM Oil Life Remaining Percentage", "GM") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
         Mode22PidDefinition("115C", "Vehicle Odometer", "Maintenance", "km", "GM Total Distance Odometer", "GM") { a -> if (a.size >= 4) ((a[0].toLong() shl 24) or (a[1].toLong() shl 16) or (a[2].toLong() shl 8) or a[3].toLong()).toDouble() / 64.0 else if (a.size >= 3) ((a[0].toLong() shl 16) or (a[1].toLong() shl 8) or a[2].toLong()).toDouble() else 0.0 },
+        Mode22PidDefinition("1951", "Tire Pressure FL", "Chassis", "psi", "GM Front Left Tire Pressure (TPMS)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("1952", "Tire Pressure FR", "Chassis", "psi", "GM Front Right Tire Pressure (TPMS)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("1953", "Tire Pressure RR", "Chassis", "psi", "GM Rear Right Tire Pressure (TPMS)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("1954", "Tire Pressure RL", "Chassis", "psi", "GM Rear Left Tire Pressure (TPMS)", "GM") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
 
         // Toyota / Lexus / Scion (Verified Mode 21 1-byte PIDs; full hybrid/chassis set loaded via OBDb)
         Mode22PidDefinition("82", "Transmission Pan Temp", "Transmission", "°C", "Toyota ATF Pan Temperature (Mode 21 PID 82)", "Toyota", servicePrefix = "21") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 256.0) - 40.0 else -40.0 },
+        Mode22PidDefinition("219C", "Tire Pressure FL", "Chassis", "psi", "Toyota Front Left Tire Pressure (TPMS)", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
+        Mode22PidDefinition("219D", "Tire Pressure FR", "Chassis", "psi", "Toyota Front Right Tire Pressure (TPMS)", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
+        Mode22PidDefinition("219E", "Tire Pressure RL", "Chassis", "psi", "Toyota Rear Left Tire Pressure (TPMS)", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
+        Mode22PidDefinition("219F", "Tire Pressure RR", "Chassis", "psi", "Toyota Rear Right Tire Pressure (TPMS)", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
 
         // Chrysler / Dodge / Jeep / Ram (Town & Country, Grand Caravan, Ram 1500, Grand Cherokee, 3.6L Pentastar / Hemi / 62TE)
         Mode22PidDefinition("0120", "Transmission Fluid Temp", "Transmission", "°C", "Chrysler 62TE / NAG1 / 845RE Transmission Fluid Temp", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 10.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
@@ -561,6 +579,7 @@ class BluetoothObdManager {
     @Volatile private var isPassiveCanBlockedOnGateway = false
     private var consecutiveEmptyCanSamples = 0
     private val activeStreamCache = java.util.concurrent.ConcurrentHashMap<String, LiveStreamData>()
+    private val streamRingBuffers = java.util.concurrent.ConcurrentHashMap<String, java.util.ArrayDeque<StreamSample>>()
     private var lastStreamUiEmitMs = 0L
 
     // Synchronization for synchronous AT command-response flow
@@ -1063,6 +1082,7 @@ class BluetoothObdManager {
 
         // Initialize StateFlow list of Supported Streams & Cache
         activeStreamCache.clear()
+        streamRingBuffers.clear()
         for (pidDef in discoveredPidDefinitions) {
             activeStreamCache[pidDef.pidHex.uppercase()] = LiveStreamData(pid = pidDef)
         }
@@ -2159,24 +2179,43 @@ class BluetoothObdManager {
         if (def != null && dataBytes.size >= def.bytesRequired) {
             val calculatedValue = def.parseValue?.invoke(dataBytes) ?: 0.0
             val formatted = String.format(java.util.Locale.US, "%.1f %s", calculatedValue, def.unit)
-            val currentHistory = existing?.history ?: emptyList()
-            val updatedHistory = if (currentHistory.size >= 100) {
-                currentHistory.drop(1) + StreamSample(calculatedValue)
-            } else {
-                currentHistory + StreamSample(calculatedValue)
-            }
-            activeStreamCache[normalizedHex] = LiveStreamData(
-                pid = def,
-                formattedValue = formatted,
-                rawValue = calculatedValue,
-                history = updatedHistory,
-                lastUpdated = System.currentTimeMillis()
-            )
-
             val now = System.currentTimeMillis()
+
+            // O(1) allocation-free circular ring buffer push
+            val ring = streamRingBuffers.getOrPut(normalizedHex) { java.util.ArrayDeque(100) }
+            synchronized(ring) {
+                if (ring.size >= 100) {
+                    ring.removeFirst()
+                }
+                ring.addLast(StreamSample(calculatedValue))
+            }
+
             if (now - lastStreamUiEmitMs >= 100L) { // Smooth 10 Hz UI StateFlow throttle
                 lastStreamUiEmitMs = now
+                // Snapshot ring buffers into history lists ONLY when emitting to Compose UI StateFlow
+                for ((hex, stream) in activeStreamCache) {
+                    val buf = streamRingBuffers[hex]
+                    if (buf != null) {
+                        val snapshot = synchronized(buf) { buf.toList() }
+                        activeStreamCache[hex] = stream.copy(history = snapshot)
+                    }
+                }
+                val currentRingSnapshot = synchronized(ring) { ring.toList() }
+                activeStreamCache[normalizedHex] = LiveStreamData(
+                    pid = def,
+                    formattedValue = formatted,
+                    rawValue = calculatedValue,
+                    history = currentRingSnapshot,
+                    lastUpdated = now
+                )
                 _supportedStreams.value = activeStreamCache.values.sortedBy { it.pid.pidHex }
+            } else {
+                // High-speed serial path: update raw & formatted values with ZERO list copy / GC allocations
+                activeStreamCache[normalizedHex] = (existing ?: LiveStreamData(pid = def)).copy(
+                    formattedValue = formatted,
+                    rawValue = calculatedValue,
+                    lastUpdated = now
+                )
             }
         }
     }
@@ -2254,19 +2293,26 @@ class BluetoothObdManager {
             val tier2Hexes = setOf("04", "0B", "06", "07", "10", "0E")
             val tier2Pids = allPids.filter { it.pidHex.uppercase() in tier2Hexes }
 
-            // Slow Tier 3: Coolant (05), IAT (0F), Ambient (46), Fuel Level (2F), Baro (33), Run Time (1F), Oil Temp (5C)
-            val tier3Hexes = setOf("05", "0F", "46", "2F", "33", "1F", "5C")
+            // Thermal Dynamics Tier 3 (polled every 12 cycles ~0.8-1.5s): Coolant (05), IAT (0F), Oil Temp (5C)
+            // Focused on thermal dynamics for Sentinel hill-climbing, thermal runaway, and downhill thermostat checks
+            val tier3Hexes = setOf("05", "0F", "5C")
             val tier3Pids = allPids.filter { it.pidHex.uppercase() in tier3Hexes }
 
-            // Extended Tier 4: All other discovered PIDs (round-robin)
+            // Ultra-Slow Static Environmental Tier 5 (polled every 96 cycles ~10-15s): Fuel Level (2F), Baro (33), Ambient (46), Run Time (1F)
+            // These change very slowly over a drive, so polling them infrequently saves serial bandwidth and OBD query effort!
+            val tier5Hexes = setOf("2F", "33", "46", "1F")
+            val tier5Pids = allPids.filter { it.pidHex.uppercase() in tier5Hexes }
+
+            // Extended Tier 4: All other discovered dynamic PIDs (round-robin)
             val tier4Pids = allPids.filter {
                 val hex = it.pidHex.uppercase()
-                hex !in tier1Hexes && hex !in tier2Hexes && hex !in tier3Hexes
+                hex !in tier1Hexes && hex !in tier2Hexes && hex !in tier3Hexes && hex !in tier5Hexes
             }
 
             var tier2Idx = 0
             var tier3Idx = 0
             var tier4Idx = 0
+            var tier5Idx = 0
             var cycleCount = 0
             var initialCanSampleDone = false
             var consecutiveEmptyResponses = 0
@@ -2318,8 +2364,8 @@ class BluetoothObdManager {
                             }
                         }
 
-                        // 3. Tier 3 (Slow, polled every 24 cycles ~1.5-2.5s): Coolant, IAT, Fuel Level, Baro, Temps
-                        if (cycleCount % 24 == 0 && tier3Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
+                        // 3. Tier 3 (Thermal Dynamics, polled every 12 cycles ~0.8-1.5s): Coolant, IAT, Oil Temp
+                        if (cycleCount % 12 == 0 && tier3Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
                             if (!isPollingPaused && isActive) {
                                 val p = tier3Pids[tier3Idx % tier3Pids.size]
                                 tier3Idx = (tier3Idx + 1) % tier3Pids.size
@@ -2328,11 +2374,21 @@ class BluetoothObdManager {
                             }
                         }
 
-                        // 4. Tier 4 (Extended, polled every 48 cycles ~3-5s): All other discovered PIDs
+                        // 4. Tier 4 (Extended, polled every 48 cycles ~3-5s): All other discovered dynamic PIDs
                         if (cycleCount % 48 == 0 && tier4Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
                             if (!isPollingPaused && isActive) {
                                 val p = tier4Pids[tier4Idx % tier4Pids.size]
                                 tier4Idx = (tier4Idx + 1) % tier4Pids.size
+                                val rx = sendAtCommand(p.fullCommand, 10)
+                                if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
+                            }
+                        }
+
+                        // 5. Tier 5 (Static / Environmental, polled every 96 cycles ~10-15s): Fuel Level, Baro, Ambient, Run Time
+                        if (cycleCount % 96 == 0 && tier5Pids.isNotEmpty() && consecutiveEmptyResponses < 6) {
+                            if (!isPollingPaused && isActive) {
+                                val p = tier5Pids[tier5Idx % tier5Pids.size]
+                                tier5Idx = (tier5Idx + 1) % tier5Pids.size
                                 val rx = sendAtCommand(p.fullCommand, 10)
                                 if (rx.isBlank()) consecutiveEmptyResponses++ else consecutiveEmptyResponses = 0
                             }
@@ -2655,6 +2711,26 @@ class BluetoothObdManager {
             val misfireList = scanMode06Misfires()
             allDtcList.addAll(misfireList)
 
+            // 5. Scan Chassis & TPMS Modules across makes (Headers 7B0, 720, 726, 7A0, 750, 7E4)
+            val make = _vehicleDetails.value ?: ""
+            val chassisHeaders = when {
+                make.contains("Chrysler", ignoreCase = true) || make.contains("Dodge", ignoreCase = true) ||
+                make.contains("Jeep", ignoreCase = true) || make.contains("Ram", ignoreCase = true) -> listOf("7B0", "720")
+                make.contains("Ford", ignoreCase = true) || make.contains("Lincoln", ignoreCase = true) -> listOf("726", "720")
+                make.contains("GM", ignoreCase = true) || make.contains("Chevrolet", ignoreCase = true) ||
+                make.contains("GMC", ignoreCase = true) || make.contains("Cadillac", ignoreCase = true) -> listOf("7A0", "720")
+                make.contains("Toyota", ignoreCase = true) || make.contains("Lexus", ignoreCase = true) -> listOf("750", "720")
+                else -> listOf("7E4", "720") // Universal standard Chassis/ABS/Gateway physical addresses
+            }
+            for (chassisHdr in chassisHeaders) {
+                sendAtCommand("AT SH $chassisHdr", 60)
+                val respChassis03 = sendAtCommand("03", 350)
+                allDtcList.addAll(parseDtcModeResponse(respChassis03, "43", "Stored / Active"))
+                val respChassis07 = sendAtCommand("07", 350)
+                allDtcList.addAll(parseDtcModeResponse(respChassis07, "47", "Pending"))
+            }
+            restoreStandardObdMode()
+
             val uniqueDtcs = allDtcList.distinctBy { "${it.code}_${it.category}_${it.description}" }
             _metrics.value = _metrics.value.copy(dtcs = uniqueDtcs.map { it.code })
             uniqueDtcs
@@ -2857,6 +2933,7 @@ class BluetoothObdManager {
                             listOf("7E0")
                         }
                     }
+                    "Chassis" -> listOf("7B0", "720", "7E4", "7E0") // Route TPMS / Chassis queries to TPM / WIN / BCM modules
                     else -> listOf("7E0") // Engine, Engine Oil, Boost, Fuel, Emissions, Climate are on PCM (7E0)
                 }
 
@@ -3054,6 +3131,7 @@ class BluetoothObdManager {
             isPassiveCanBlockedOnGateway = false
             consecutiveEmptyCanSamples = 0
             activeStreamCache.clear()
+            streamRingBuffers.clear()
             _metrics.value = VehicleMetrics()
             _supportedStreams.value = emptyList()
             _mode06Results.value = emptyList()

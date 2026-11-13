@@ -5463,20 +5463,9 @@ fun VeraMainScreen(
         }
     }
 
-    LaunchedEffect(messagesCount, lastMessageText) {
-        if (messagesCount > 0) {
-            // Always auto-scroll chat list to the bottom anchor so the latest entry (User or VERA)
-            // pushes older messages upward and out of sight off the top of the chat window,
-            // positioning the latest entry clearly and completely above the bottom text entry field.
-            val targetIndex = viewModel.messages.size // bottom anchor item
-            if (messagesCount != prevMessageCount) {
-                prevMessageCount = messagesCount
-                chatListState.animateScrollToItem(targetIndex)
-            } else {
-                chatListState.scrollToItem(targetIndex)
-            }
-        }
-    }
+    // Running Chat Log: Do NOT force-scroll down to the chat window when new entries or alerts arrive.
+    // The chat remains a peaceful running log that the driver can inspect at their own pace without
+    // dragging the screen or pulling live gauges and telemetry cards off-screen.
 
     // Auto-twirl expansion: when Mode 06 or Mode 22 data arrives, automatically expand panels
     // Automatically collapse and clear panels when disconnected or data is reset

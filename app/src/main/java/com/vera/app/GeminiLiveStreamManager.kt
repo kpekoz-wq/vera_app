@@ -452,13 +452,13 @@ class GeminiLiveStreamManager(private val context: Context) {
                     })
                     put(JSONObject().apply {
                         put("name", "set_telemetry_threshold_alert")
-                        put("description", "Sets a real-time threshold alert on a vehicle telemetry parameter (e.g. alert if RPM > 2000, or alert if coolant temp > 220). Invoke when driver asks to be notified or alerted when a reading reaches or exceeds a value.")
+                        put("description", "Sets a real-time threshold alert on a vehicle telemetry parameter (e.g. alert if RPM > 2000, coolant > 220, or fuel trims past +/-3%). Invoke when driver asks to be notified or alerted when a reading reaches, exceeds, or deviates outside a threshold.")
                         put("parameters", JSONObject().apply {
                             put("type", "OBJECT")
                             put("properties", JSONObject().apply {
                                 put("parameter", stringParam("Telemetry parameter to monitor, e.g. 'rpm', 'speed', 'coolant_temp', 'engine_load', 'fuel_trim', 'battery_voltage'"))
-                                put("condition", stringParam("Comparison operator: '>', '<', '>=', '<='"))
-                                put("threshold_value", numberParam("Numeric threshold value (e.g. 2000 for RPM, 220 for coolant temp, 75 for speed)"))
+                                put("condition", stringParam("Comparison operator: '>', '<', '>=', '<=', or 'abs_gt' (CRITICAL: When driver asks for a +/- band like 'past 3% or -3%' or 'outside 5%', ALWAYS set condition to 'abs_gt' and threshold_value to the positive number)"))
+                                put("threshold_value", numberParam("Numeric threshold value (e.g. 2000 for RPM, 220 for coolant temp, 3.0 for fuel trim, 75 for speed)"))
                                 put("custom_message", stringParam("Optional custom alert message or context"))
                             })
                             put("required", JSONArray().apply { put("parameter"); put("condition"); put("threshold_value") })
@@ -466,11 +466,11 @@ class GeminiLiveStreamManager(private val context: Context) {
                     })
                     put(JSONObject().apply {
                         put("name", "cancel_telemetry_alerts")
-                        put("description", "Cancels active periodic telemetry reports or custom threshold alerts. Invoke when driver says 'stop reporting', 'cancel alert', or 'stop watching'.")
+                        put("description", "Cancels active periodic telemetry reports, updates, or custom threshold alerts. Invoke when driver says 'cancel the update', 'stop reporting', 'cancel alert', or 'stop watching'.")
                         put("parameters", JSONObject().apply {
                             put("type", "OBJECT")
                             put("properties", JSONObject().apply {
-                                put("parameter", stringParam("Optional parameter name to cancel (e.g. 'fuel_trim', 'rpm'), or 'all' to cancel all active watchers"))
+                                put("parameter", stringParam("Optional parameter or target name to cancel (e.g. 'update', 'fuel_trim', 'rpm'), or 'all' to cancel all active watchers"))
                             })
                         })
                     })
