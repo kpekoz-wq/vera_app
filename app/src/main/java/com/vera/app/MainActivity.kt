@@ -829,7 +829,8 @@ data class CustomPidItem(
     val isBooleanStatus: Boolean,
     val rawPidId: String,
     val healthStatus: PidHealthStatus = PidHealthStatus.NORMAL,
-    val normalRangeLabel: String? = null
+    val normalRangeLabel: String? = null,
+    val verificationStatus: PidVerificationStatus = PidVerificationStatus.VERIFIED
 )
 
 /**
@@ -1115,17 +1116,18 @@ fun buildUnifiedCustomPidList(
                     isBooleanStatus = false,
                     rawPidId = rawPidId,
                     healthStatus = health,
-                    normalRangeLabel = specLabel
+                    normalRangeLabel = specLabel,
+                    verificationStatus = stream.verificationStatus
                 )
             )
         }
     }
 
     // 2. OBDb Community Signalset Parameters
-    val allSignals = loaded?.commands?.flatMap { it.signals }?.associateBy { it.id } ?: emptyMap()
+    val allSignals = loaded?.commands?.flatMap { cmd -> cmd.signals.map { sig -> sig.id to (sig to cmd) } }?.toMap() ?: emptyMap()
     for ((sigId, valObj) in obdbSignalResults) {
         if (valObj == null) continue
-        val sig = allSignals[sigId]
+        val (sig, cmd) = allSignals[sigId] ?: Pair(null, null)
         val (fmtVal, fmtUnit) = formatObdbValueWithUnit(valObj, sig, sigId, unitSystem)
         if (fmtVal == "--" || fmtVal.isBlank() || fmtVal.equals("null", ignoreCase = true)) continue
 
@@ -1162,6 +1164,12 @@ fun buildUnifiedCustomPidList(
 
         val displayUnit = if (fmtUnit == "STATUS") "" else fmtUnit
         val (health, specLabel) = evaluateCustomPidHealth(cleanName, sigId, fmtVal, displayUnit, category)
+        val isCmdDbg = cmd?.isDbg == true || cmd?.dbgFilter != null
+        val obdbVerification = if (isCmdDbg) {
+            PidVerificationStatus.CANDIDATE
+        } else {
+            PidVerificationStatus.CORROBORATED
+        }
         if (seenNames.add(cleanName.lowercase())) {
             result.add(
                 CustomPidItem(
@@ -1173,7 +1181,8 @@ fun buildUnifiedCustomPidList(
                     isBooleanStatus = isBool,
                     rawPidId = sigId,
                     healthStatus = health,
-                    normalRangeLabel = specLabel
+                    normalRangeLabel = specLabel,
+                    verificationStatus = obdbVerification
                 )
             )
         }
@@ -3644,6 +3653,21 @@ fun FullScreenCustomPidPickerView(
                                                     color = MaterialTheme.colorScheme.onSurface,
                                                     modifier = Modifier.weight(1f, fill = false)
                                                 )
+                                                if (item.verificationStatus == PidVerificationStatus.CANDIDATE) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Surface(
+                                                        shape = RoundedCornerShape(5.dp),
+                                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                                    ) {
+                                                        Text(
+                                                            text = "UNVERIFIED (?)",
+                                                            fontSize = 8.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
                                                 if (item.healthStatus != PidHealthStatus.NORMAL) {
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     val badgeBg = if (item.healthStatus == PidHealthStatus.OUT_OF_RANGE) Color(0xFFB71C1C) else Color(0xFFE65100)
@@ -8023,8 +8047,9 @@ fun VeraMainScreen(
                                                     )
                                                 }
                                                 Spacer(modifier = Modifier.width(4.dp))
+                                                val displayName = if (item.verificationStatus == PidVerificationStatus.CANDIDATE) "${item.name} (?)" else item.name
                                                 Text(
-                                                    text = item.name,
+                                                    text = displayName,
                                                     fontSize = 9.sp,
                                                     fontWeight = FontWeight.Bold,
                                                     maxLines = 1,
@@ -8040,10 +8065,11 @@ fun VeraMainScreen(
                                                 color = valueTextColor
                                             )
                                             Text(
-                                                text = when (item.healthStatus) {
-                                                    PidHealthStatus.OUT_OF_RANGE -> "${item.unit} • ALERT".trim(' ', '•')
-                                                    PidHealthStatus.MARGINAL -> "${item.unit} • WARN".trim(' ', '•')
-                                                    PidHealthStatus.NORMAL -> item.unit.ifBlank { item.category.displayName.substringBefore(" ") }
+                                                text = when {
+                                                    item.verificationStatus == PidVerificationStatus.CANDIDATE -> "${item.unit} • (?)".trim(' ', '•')
+                                                    item.healthStatus == PidHealthStatus.OUT_OF_RANGE -> "${item.unit} • ALERT".trim(' ', '•')
+                                                    item.healthStatus == PidHealthStatus.MARGINAL -> "${item.unit} • WARN".trim(' ', '•')
+                                                    else -> item.unit.ifBlank { item.category.displayName.substringBefore(" ") }
                                                 },
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.ExtraBold,

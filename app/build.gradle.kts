@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "5.2"
+        versionCode = 33
+        versionName = "5.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.9: Autonomous Mode 22 & OBDb custom PID voice scanning; one-shot movement/speed alert triggers with local robotic voice suppression during active Live sessions; real-time GPS road & highway telemetry streaming; AudioRecord stream recovery."
+                releaseNotes = "VERA v3.0: PID verification ladder & thermodynamic cross-checks; Chrysler 62TE/NAG1 TCM transmission fluid temp fix (TCM 7E1, removal of 240°F engine DID 0120); Chrysler TPMS Wireless Control Module (header 7DA) UDS support; candidate (?) unverified PID UI indicators and Sentinel false alarm suppression."
                 artifactType = "APK"
             }
         }

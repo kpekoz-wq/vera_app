@@ -296,12 +296,113 @@ data class Mode22PidDefinition(
     @Transient val parseValue: ((IntArray) -> Double)? = null
 )
 
+/**
+ * Verification ladder for proprietary Mode 21/22 and OBDb community PIDs.
+ * Prevents bogus or mismatched DIDs (e.g. Chrysler 240°F transmission temp) from triggering
+ * false alarms or reaching the LLM as verified facts.
+ */
+enum class PidVerificationStatus(val label: String, val isTrusted: Boolean) {
+    VERIFIED("Verified", true),           // Confirmed OEM match or verified thermodynamic cross-check
+    CORROBORATED("Corroborated", true),   // Multi-frame consistent and within expected physics bounds
+    CANDIDATE("Unverified", false),       // Unconfirmed candidate DID; requires caution / (?) badge in UI
+    IMPLAUSIBLE("Implausible", false)     // Physically or thermodynamically impossible; rejected
+}
+
 data class Mode22StreamData(
     val pid: Mode22PidDefinition,
     val formattedValue: String = "--",
     val rawValue: Double = 0.0,
-    val lastUpdated: Long = System.currentTimeMillis()
+    val lastUpdated: Long = System.currentTimeMillis(),
+    val verificationStatus: PidVerificationStatus = PidVerificationStatus.VERIFIED
 )
+
+/**
+ * Cross-checks an enhanced PID against physical laws and thermodynamic reference sensors.
+ * Prevents mismatched calibrations (such as engine throttle parameters falsely interpreted as 240°F ATF)
+ * from triggering alarms or being narrated by Vera.
+ */
+fun verifyMode22Physics(
+    stream: Mode22StreamData,
+    coolantTempC: Double?,
+    ambientTempC: Double?,
+    rpm: Int = 0
+): PidVerificationStatus {
+    val name = stream.pid.name.lowercase()
+    val unit = stream.pid.unit
+    val raw = stream.rawValue
+
+    // 1. Transmission Temperature: Physical laws & thermodynamic cross-checks
+    if (name.contains("transmission") && (name.contains("temp") || unit == "°C" || unit == "°F")) {
+        val tempC = if (unit == "°C") raw else (raw - 32.0) / 1.8
+        // Hard physical sensor bounds: ATF is never below -40°C or above 180°C (356°F)
+        if (tempC < -40.0 || tempC > 180.0) return PidVerificationStatus.IMPLAUSIBLE
+
+        // Thermodynamic cross-check against Engine Coolant
+        if (coolantTempC != null && coolantTempC > -35.0) {
+            // Cold engine start: If engine coolant is cold (< 50°C / 122°F), transmission fluid cannot physically exceed coolant + 35°C or be > 75°C (167°F)
+            // (Catches the Chrysler 240°F bug where raw engine data was falsely parsed as ATF!)
+            if (coolantTempC < 50.0 && tempC > 75.0) {
+                return PidVerificationStatus.IMPLAUSIBLE
+            }
+            // Hot engine: If engine coolant is > 75°C, cold-soaked ATF (< -5°C) is physically impossible
+            if (coolantTempC >= 75.0 && tempC < -5.0) {
+                return PidVerificationStatus.IMPLAUSIBLE
+            }
+            if (Math.abs(tempC - coolantTempC) < 45.0) {
+                return PidVerificationStatus.VERIFIED
+            }
+            return PidVerificationStatus.CORROBORATED
+        }
+
+        // Cross-check against Ambient / Intake Temp if coolant is not yet available
+        if (ambientTempC != null && ambientTempC > -35.0) {
+            if (ambientTempC < 15.0 && tempC > 90.0) {
+                return PidVerificationStatus.IMPLAUSIBLE
+            }
+        }
+        return PidVerificationStatus.CANDIDATE
+    }
+
+    // 2. Engine Oil Temperature: Tracks coolant closely
+    if (name.contains("oil temp") && (unit == "°C" || unit == "°F")) {
+        val tempC = if (unit == "°C") raw else (raw - 32.0) / 1.8
+        if (tempC < -40.0 || tempC > 180.0) return PidVerificationStatus.IMPLAUSIBLE
+        if (coolantTempC != null && coolantTempC > -35.0) {
+            if (coolantTempC < 50.0 && tempC > 80.0) return PidVerificationStatus.IMPLAUSIBLE
+            if (Math.abs(tempC - coolantTempC) < 40.0) return PidVerificationStatus.VERIFIED
+            return PidVerificationStatus.CORROBORATED
+        }
+        return PidVerificationStatus.CANDIDATE
+    }
+
+    // 3. Engine Oil Pressure: 0 psi when engine is stopped; 10-100 psi running
+    if (name.contains("oil pressure")) {
+        val psi = if (unit == "kPa") raw * 0.145038 else raw
+        if (psi < 0.0 || psi > 160.0) return PidVerificationStatus.IMPLAUSIBLE
+        if (rpm < 100 && psi > 20.0) return PidVerificationStatus.IMPLAUSIBLE
+        if (rpm > 500 && psi in 10.0..100.0) return PidVerificationStatus.VERIFIED
+        return PidVerificationStatus.CORROBORATED
+    }
+
+    // 4. 12V Battery / Alternator Voltage: 9-16V
+    if (name.contains("battery") && name.contains("volt")) {
+        if (raw < 6.0 || raw > 18.0) return PidVerificationStatus.IMPLAUSIBLE
+        if (raw in 11.5..15.5) return PidVerificationStatus.VERIFIED
+        return PidVerificationStatus.CORROBORATED
+    }
+
+    // 5. Tire Pressures: 15-60 psi typical
+    if (name.contains("tire") || name.contains("pressure")) {
+        val psi = if (unit == "bar") raw * 14.5038 else if (unit == "kPa") raw * 0.145038 else raw
+        if (psi < 0.0 || psi > 120.0) return PidVerificationStatus.IMPLAUSIBLE
+        if (psi in 20.0..55.0) return PidVerificationStatus.VERIFIED
+        if (psi == 0.0) return PidVerificationStatus.CANDIDATE // Wheel sensor sleeping while parked
+        return PidVerificationStatus.CORROBORATED
+    }
+
+    return PidVerificationStatus.VERIFIED
+}
+
 
 
 object Mode22Registry {
@@ -343,8 +444,12 @@ object Mode22Registry {
         Mode22PidDefinition("219F", "Tire Pressure RR", "Chassis", "psi", "Toyota Rear Right Tire Pressure (TPMS)", "Toyota", servicePrefix = "21") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.145038 },
 
         // Chrysler / Dodge / Jeep / Ram (Town & Country, Grand Caravan, Ram 1500, Grand Cherokee, 3.6L Pentastar / Hemi / 62TE)
-        Mode22PidDefinition("0120", "Transmission Fluid Temp", "Transmission", "°C", "Chrysler 62TE / NAG1 / 845RE Transmission Fluid Temp", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 10.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
-        Mode22PidDefinition("1940", "Transmission Temp Alt", "Transmission", "°C", "Chrysler Transmission Fluid Temp (Alternate DID)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        // NOTE: On Chrysler, TCM is header 7E1. Service 21 PID 01 is genuine TCM transmission temp.
+        // Mode 22 PID 0120 is an engine throttle parameter on PCM 7E0 that falsely registered as 240°F and has been removed.
+        Mode22PidDefinition("01", "Transmission Fluid Temp", "Transmission", "°C", "Chrysler 62TE / NAG1 / 845RE Transmission Fluid Temp (TCM Mode 21 PID 01)", "Chrysler", servicePrefix = "21") { a -> if (a.size >= 2) (((a[0] * 256) + a[1]) / 64.0) - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1A87", "Transmission Temp (UDS)", "Transmission", "°C", "Chrysler UDS Transmission Fluid Temp (DID 1A87)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("2172", "Transmission Temp Alt", "Transmission", "°C", "Chrysler Transmission Fluid Temp (DID 2172)", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 10.0 - 40.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
+        Mode22PidDefinition("1940", "Transmission Temp Pan", "Transmission", "°C", "Chrysler Transmission Fluid Temp (DID 1940)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("0124", "Engine Oil Temp", "Engine Oil", "°C", "Chrysler 3.6L Pentastar / Hemi Engine Oil Temperature", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
         Mode22PidDefinition("0125", "Engine Oil Pressure", "Engine Oil", "psi", "Chrysler 3.6L Pentastar Engine Oil Pressure", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 10.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) * 3.5 },
         Mode22PidDefinition("0126", "Ambient Air Temp", "Climate", "°C", "Chrysler Ambient Exterior Air Temperature", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) - 40.0 },
@@ -356,10 +461,16 @@ object Mode22Registry {
         Mode22PidDefinition("0204", "Battery Voltage (TIPM)", "Electrical", "V", "Chrysler TIPM / BCM Terminal Voltage", "Chrysler") { a -> if (a.size >= 2) ((a[0] * 256) + a[1]) / 100.0 else (a.getOrNull(0)?.toDouble() ?: 0.0) / 10.0 },
         Mode22PidDefinition("0205", "Alternator Target Voltage", "Electrical", "V", "Chrysler Alternator Target Charging Voltage", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 10.0 },
         Mode22PidDefinition("0207", "Alternator Field Duty", "Electrical", "%", "Chrysler Generator Field Control Duty Cycle", "Chrysler") { a -> ((a.getOrNull(0) ?: 0) * 100) / 255.0 },
-        Mode22PidDefinition("0301", "Tire Pressure FL", "Chassis", "psi", "Chrysler Front Left Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
-        Mode22PidDefinition("0302", "Tire Pressure FR", "Chassis", "psi", "Chrysler Front Right Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
-        Mode22PidDefinition("0303", "Tire Pressure RL", "Chassis", "psi", "Chrysler Rear Left Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
-        Mode22PidDefinition("0304", "Tire Pressure RR", "Chassis", "psi", "Chrysler Rear Right Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        // Chrysler TPMS UDS DIDs (Wireless Control Module / RF Hub header 7DA)
+        Mode22PidDefinition("A020", "Tire Pressure FL", "Chassis", "psi", "Chrysler Front Left Tire Pressure (TPMS UDS A020)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("A021", "Tire Pressure FR", "Chassis", "psi", "Chrysler Front Right Tire Pressure (TPMS UDS A021)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("A022", "Tire Pressure RR", "Chassis", "psi", "Chrysler Rear Right Tire Pressure (TPMS UDS A022)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("A023", "Tire Pressure RL", "Chassis", "psi", "Chrysler Rear Left Tire Pressure (TPMS UDS A023)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        // Alternate legacy TPMS PIDs
+        Mode22PidDefinition("0301", "Tire Pressure FL (Alt)", "Chassis", "psi", "Chrysler Front Left Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("0302", "Tire Pressure FR (Alt)", "Chassis", "psi", "Chrysler Front Right Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("0303", "Tire Pressure RL (Alt)", "Chassis", "psi", "Chrysler Rear Left Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
+        Mode22PidDefinition("0304", "Tire Pressure RR (Alt)", "Chassis", "psi", "Chrysler Rear Right Tire Pressure (TPMS)", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) * 0.3625 },
         Mode22PidDefinition("116B", "Ignition Knock Retard", "Engine", "°", "Chrysler Spark Knock Retard Timing Offset", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 2.0 },
         Mode22PidDefinition("16CF", "Cam Phaser Error B1", "Engine", "°", "Chrysler VVT Variable Cam Timing Error Bank 1", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 2.0 },
         Mode22PidDefinition("16D0", "Cam Phaser Error B2", "Engine", "°", "Chrysler VVT Variable Cam Timing Error Bank 2", "Chrysler") { a -> (a.getOrNull(0)?.toDouble() ?: 0.0) / 2.0 }
@@ -2924,7 +3035,7 @@ class BluetoothObdManager {
 
     /**
      * Queries enhanced/proprietary Mode 22 PIDs based on the vehicle manufacturer decoded from VIN/details.
-     * Configures physical CAN headers (e.g. AT SH 7E0 for Ford PCM) to route queries directly to the Engine Control Module.
+     * Configures physical CAN headers (e.g. AT SH 7E0 for Ford PCM, 7E1 for Chrysler TCM, 7DA for Chrysler TPMS).
      */
     suspend fun scanMode22Pids(): List<Mode22StreamData> {
         if (isDemoMode) {
@@ -2975,10 +3086,13 @@ class BluetoothObdManager {
                 targetPids
             }
 
+            val isChryslerVehicle = _vehicleVin.value?.let { v -> v.startsWith("1C") || v.startsWith("2C") || v.startsWith("3C") } ?: false
+                || make.contains("Chrysler", true) || make.contains("Dodge", true) || make.contains("Jeep", true) || make.contains("Ram", true)
+
             for (pidDef in sortedPids) {
                 // Route queries specifically to the relevant electronic control module
                 val targetHeaders: List<String> = when (pidDef.category) {
-                    "Transmission" -> listOf("7E0", "7E1")
+                    "Transmission" -> if (isChryslerVehicle) listOf("7E1", "7E2", "7E0") else listOf("7E0", "7E1")
                     "Maintenance" -> {
                         if (pidDef.pidHex.equals("404C", ignoreCase = true) || pidDef.pidHex.equals("DD01", ignoreCase = true)) {
                             listOf("720", "7E0")
@@ -2993,7 +3107,7 @@ class BluetoothObdManager {
                             listOf("7E0")
                         }
                     }
-                    "Chassis" -> listOf("7B0", "720", "7E4", "7E0") // Route TPMS / Chassis queries to TPM / WIN / BCM modules
+                    "Chassis" -> if (isChryslerVehicle) listOf("7DA", "7B0", "720", "7E4", "7E0") else listOf("7B0", "720", "7E4", "7DA", "7E0") // 7DA is Chrysler Wireless Control Module (WCM/TPM/WIN)
                     else -> listOf("7E0") // Engine, Engine Oil, Boost, Fuel, Emissions, Climate are on PCM (7E0)
                 }
 
@@ -3066,12 +3180,26 @@ class BluetoothObdManager {
                                     }
 
                                     if (!isBogus) {
+                                        val candidateStream = Mode22StreamData(pid = pidDef, rawValue = rawVal)
+                                        val verification = verifyMode22Physics(
+                                            stream = candidateStream,
+                                            coolantTempC = _metrics.value.coolantTemp.toDouble().takeIf { it > -30.0 },
+                                            ambientTempC = _metrics.value.intakeAirTemp.toDouble().takeIf { it > -30.0 },
+                                            rpm = _metrics.value.rpm
+                                        )
+
+                                        if (verification == PidVerificationStatus.IMPLAUSIBLE) {
+                                            Log.w(TAG, "Mode 22 scan: REJECTED implausible reading for ${pidDef.name} (${pidDef.pidHex}): $rawVal ${pidDef.unit} (coolant=${_metrics.value.coolantTemp}°C)")
+                                            continue
+                                        }
+
                                         val formatted = String.format(java.util.Locale.US, "%.1f %s", rawVal, pidDef.unit)
                                         results.add(
                                             Mode22StreamData(
                                                 pid = pidDef,
                                                 formattedValue = formatted,
-                                                rawValue = rawVal
+                                                rawValue = rawVal,
+                                                verificationStatus = verification
                                             )
                                         )
                                         cachedSupportedMode22Pids.add(pidDef.pidHex)
@@ -3079,7 +3207,7 @@ class BluetoothObdManager {
                                             _vehicleOdometerKm.value = rawVal
                                             Log.i(TAG, "Mode 22 scan updated vehicle odometer: $rawVal km (${(rawVal * 0.621371).toInt()} miles)")
                                         }
-                                        Log.i(TAG, "Mode 22 RX [Header $header]: ${pidDef.name} = $formatted")
+                                        Log.i(TAG, "Mode 22 RX [Header $header, Status ${verification.label}]: ${pidDef.name} = $formatted")
                                         foundValid = true
                                         break
                                     }

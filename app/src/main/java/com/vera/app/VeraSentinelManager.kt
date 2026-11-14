@@ -692,7 +692,11 @@ class VeraSentinelManager(
         val intakeAirStream = streams.find { it.pid.pidHex == "0F" }?.rawValue ?: metrics.intakeAirTemp.toDouble()
         val intakeF = (intakeAirStream * 1.8 + 32).toInt()
 
-        val transStream = mode22Streams.find { it.pid.name.contains("Transmission", ignoreCase = true) }
+        val transStream = mode22Streams.find {
+            (it.pid.category.equals("Transmission", ignoreCase = true) || it.pid.name.contains("Transmission", ignoreCase = true)) &&
+            (it.pid.name.contains("Temp", ignoreCase = true) || it.pid.name.contains("TFT", ignoreCase = true) || it.pid.name.contains("ATF", ignoreCase = true) || it.pid.unit == "°C" || it.pid.unit == "°F") &&
+            !it.pid.name.contains("Gear", ignoreCase = true) && !it.pid.name.contains("Slip", ignoreCase = true) && !it.pid.name.contains("Pressure", ignoreCase = true)
+        }
         val transTempF: Int? = transStream?.let {
             if (it.pid.unit == "°C") (it.rawValue * 1.8 + 32).toInt() else it.rawValue.toInt()
         }
@@ -890,7 +894,11 @@ class VeraSentinelManager(
         }
 
         // ── RULE 9: TRANSMISSION FLUID OVERHEATING (MODE 22) ──
-        if (transTempF != null && transTempF >= 225) {
+        // Only trigger if:
+        // 1. PID is trusted (verified/corroborated, not an unverified candidate or implausible reading)
+        // 2. Thermodynamically plausible relative to engine coolant (cannot be >225°F if engine coolant is cold <130°F)
+        val isTransPhysicallyPlausible = (coolantC >= 55.0) || (transTempF != null && coolantF > 0 && transTempF < (coolantF + 50))
+        if (transStream != null && transStream.verificationStatus.isTrusted && isTransPhysicallyPlausible && transTempF != null && transTempF >= 225) {
             if (canFireAlert("trans_temp_hot", 90_000L)) {
                 val transFormatted = if (isMetric) "${((transTempF - 32) / 1.8).toInt()}°C" else "$transTempF°F"
                 postAlert(

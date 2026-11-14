@@ -1550,6 +1550,14 @@ class GeminiAgentViewModel : ViewModel() {
             - The first 30 seconds after connecting, the adapter is still probing protocols and the stream is warming up. Do not diagnose anything from that window.
             - Different cars answer different PIDs. If a value is not in your telemetry snapshot, say it isn't available from this car. NEVER invent or assume a value.
             - Enhanced (Mode 21/22) manufacturer PIDs are model-specific. If one looks implausible (negative oil temperature on a warm day), say the reading looks unreliable instead of diagnosing from it.
+            - UNVERIFIED CUSTOM PIDS (?) & VERIFICATION LADDER:
+              * Telemetry in your snapshot marked with (?) represents an unverified candidate PID (e.g. "TransTemp(?):240°F").
+              * If an unverified PID shows an abnormal or alarming value (such as transmission fluid temp showing 240°F while engine coolant is cold, or extreme spikes), DO NOT diagnose overheating or mechanical failure! Explain calmly that the transmission temperature PID calibration is experimental or unverified for this specific ECU/model year, and note that engine coolant is normal.
+              * Never trigger false alarms or panic the driver over unverified candidate PIDs.
+            - TIRE PRESSURES (TPMS) & MOTION REQUIREMENT:
+              * On Chrysler/Dodge/Jeep, Toyota, GM, and Ford vehicles, TPMS wheel sensors contain centrifugal roll switches and enter sleep mode when stationary to conserve battery life.
+              * While parked or idling, TPMS readings may show 0 psi, '--', or not report. Sensors broadcast live pressures only after driving above 15-20 mph for 1 to 2 minutes.
+              * If the driver asks about tire pressures while parked or right after starting, explain that the wheel sensors are asleep and will broadcast once rolling down the road. Also note that some base trims only have an instrument cluster warning lamp rather than individual wheel PSI broadcasting.
             - If the dashboard shows no warning lights and the car drives normally, trust that over one odd OBD value. A one-off glitch that has cleared is not worth bringing up again.
 
             CRITICAL DRIVING & VOICE RULES:
@@ -1770,7 +1778,8 @@ class GeminiAgentViewModel : ViewModel() {
         )
         val customLine = if (allCustomPids.isNotEmpty()) {
             val customGauges = allCustomPids.filter { !it.isBooleanStatus }.take(8).map {
-                "${it.name.replace(" ", "")}:${it.formattedValue}${it.unit}".trim()
+                val candidateTag = if (it.verificationStatus == PidVerificationStatus.CANDIDATE) "(?)" else ""
+                "${it.name.replace(" ", "")}$candidateTag:${it.formattedValue}${it.unit}".trim()
             }
             "[CUSTOM: ${customGauges.joinToString(", ")}]"
         } else null
@@ -1932,7 +1941,8 @@ class GeminiAgentViewModel : ViewModel() {
                         if (keyCustomPids.isNotEmpty()) {
                             val customObj = JSONObject()
                             for (c in keyCustomPids.take(12)) {
-                                customObj.put(c.name, "${c.formattedValue} ${c.unit}".trim())
+                                val valWithStatus = if (c.verificationStatus == PidVerificationStatus.CANDIDATE) "${c.formattedValue} ${c.unit} (Unverified Calibration)" else "${c.formattedValue} ${c.unit}".trim()
+                                customObj.put(c.name, valWithStatus)
                             }
                             put("custom_pids", customObj)
                         }
@@ -1947,6 +1957,8 @@ class GeminiAgentViewModel : ViewModel() {
                                     customArr.put(JSONObject().apply {
                                         put("name", c.name)
                                         put("value", "${c.formattedValue} ${c.unit}".trim())
+                                        put("verified", c.verificationStatus.isTrusted)
+                                        put("status", c.verificationStatus.label)
                                     })
                                 }
                                 put("requested_custom_pids", customArr)
