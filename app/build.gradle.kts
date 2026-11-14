@@ -20,8 +20,8 @@ extensions.configure<ApplicationExtension> {
         applicationId = "com.vera.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "5.1"
+        versionCode = 32
+        versionName = "5.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,7 +58,7 @@ extensions.configure<ApplicationExtension> {
                 appId = "1:200348372358:android:ed39b182e2c68cde57b007"
                 testers = "kpekoz@gmail.com"
                 groups = "beta-testers-vera"
-                releaseNotes = "VERA v2.8.1: Pinned 'Text Vera' input container permanently attached to bottom of screen with dynamic drawer-like chat extension; metric tile unit alignment and vertical line spacing fix across Live Streams and Advanced Dynamics."
+                releaseNotes = "VERA v2.9: Autonomous Mode 22 & OBDb custom PID voice scanning; one-shot movement/speed alert triggers with local robotic voice suppression during active Live sessions; real-time GPS road & highway telemetry streaming; AudioRecord stream recovery."
                 artifactType = "APK"
             }
         }
