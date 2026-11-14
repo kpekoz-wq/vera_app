@@ -33,6 +33,7 @@ data class ThresholdWatcher(
     val condition: String,        // ">", "<", ">=", "<="
     val threshold: Double,
     val customMessage: String? = null,
+    val isOneShot: Boolean = false,
     var isArmed: Boolean = true,
     val hysteresis: Double = 0.0,
     var lastTriggered: Long = 0L
@@ -499,7 +500,8 @@ class VeraSentinelManager(
         condition: String,
         threshold: Double,
         customMessage: String? = null,
-        currentUnit: UnitSystem
+        currentUnit: UnitSystem,
+        isOneShot: Boolean? = null
     ): JSONObject {
         val cleanParam = when {
             parameter.contains("fuel", ignoreCase = true) || parameter.contains("trim", ignoreCase = true) -> "fuel_trim"
@@ -516,6 +518,15 @@ class VeraSentinelManager(
             cleanParam == "fuel_trim" && customMessage != null && (customMessage.contains("-") || customMessage.contains("past", ignoreCase = true) || customMessage.contains("outside", ignoreCase = true)) -> "abs_gt"
             else -> condition.trim()
         }
+
+        // Detect if this is inherently a one-shot notification (e.g. "let me know when you see me moving")
+        val isSpeedMovementWatch = cleanParam == "speed" && (threshold <= 5.0 || condition == ">" || condition == ">=")
+        val isExplicitOneShot = isOneShot ?: (isSpeedMovementWatch || (customMessage != null && (
+            customMessage.contains("moving", ignoreCase = true) ||
+            customMessage.contains("started", ignoreCase = true) ||
+            customMessage.contains("once", ignoreCase = true) ||
+            customMessage.contains("let me know when", ignoreCase = true)
+        )))
 
         // Cancel any existing watcher for the same parameter to prevent duplicate/conflicting watchers
         val existing = thresholdWatchers.filter { it.value.parameter == cleanParam }
@@ -540,12 +551,13 @@ class VeraSentinelManager(
             condition = cleanCondition,
             threshold = threshold,
             customMessage = customMessage,
+            isOneShot = isExplicitOneShot,
             hysteresis = hysteresis,
             isArmed = true
         )
 
         thresholdWatchers[watcherId] = watcher
-        Log.i(TAG, "Set threshold alert: $cleanParam $cleanCondition $threshold (hysteresis=$hysteresis)")
+        Log.i(TAG, "Set threshold alert: $cleanParam $cleanCondition $threshold (isOneShot=$isExplicitOneShot, hysteresis=$hysteresis)")
 
         val conditionHuman = if (cleanCondition == "abs_gt") "past +/-" else cleanCondition
         return JSONObject().apply {
@@ -1109,8 +1121,13 @@ class VeraSentinelManager(
                     valueFormatted = fmtVal
                 )
             )
-        } else if (!watcher.isArmed) {
-            // Re-arm when value drops back past the hysteresis gap
+
+            if (watcher.isOneShot) {
+                thresholdWatchers.remove(watcher.id)
+                Log.i(TAG, "One-shot threshold alert fired and removed: ${watcher.id}")
+            }
+        } else if (!watcher.isArmed && !watcher.isOneShot) {
+            // Re-arm when value drops back past the hysteresis gap (only for recurring watchers, never one-shots)
             val isReArmed = when (cleanCond) {
                 ">", ">=" -> currentValue < (watcher.threshold - watcher.hysteresis)
                 "<", "<=" -> currentValue > (watcher.threshold + watcher.hysteresis)

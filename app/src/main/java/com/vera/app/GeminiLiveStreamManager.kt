@@ -382,6 +382,12 @@ class GeminiLiveStreamManager(private val context: Context) {
                 put("description", desc)
             }
         }
+        val booleanParam = { desc: String ->
+            JSONObject().apply {
+                put("type", "BOOLEAN")
+                put("description", desc)
+            }
+        }
 
         val toolsArray = JSONArray().apply {
             put(JSONObject().apply {
@@ -437,6 +443,10 @@ class GeminiLiveStreamManager(private val context: Context) {
                         })
                     })
                     put(JSONObject().apply {
+                        put("name", "scan_custom_pids")
+                        put("description", "Scans the vehicle for enhanced OEM custom PIDs (Mode 22) and community OBDb parameters (cylinder head temp, transmission temp/gear, oil pressure, throttle angles). Invoke when the driver asks to scan for PIDs, check custom/enhanced PIDs, or run a Mode 22 scan.")
+                    })
+                    put(JSONObject().apply {
                         put("name", "schedule_periodic_telemetry_report")
                         put("description", "Schedules a repeating periodic telemetry voice report at a specified interval (e.g. read fuel trims every 20 seconds for 1 minute). Invoke whenever driver asks to check or read a sensor repeatedly or on an interval.")
                         put("parameters", JSONObject().apply {
@@ -452,14 +462,15 @@ class GeminiLiveStreamManager(private val context: Context) {
                     })
                     put(JSONObject().apply {
                         put("name", "set_telemetry_threshold_alert")
-                        put("description", "Sets a real-time threshold alert on a vehicle telemetry parameter (e.g. alert if RPM > 2000, coolant > 220, or fuel trims past +/-3%). Invoke when driver asks to be notified or alerted when a reading reaches, exceeds, or deviates outside a threshold.")
+                        put("description", "Sets a real-time threshold alert on a vehicle telemetry parameter (e.g. alert if RPM > 2000, coolant > 220, fuel trims past +/-3%, or tell me when I start moving). Invoke when driver asks to be notified or alerted when a reading reaches, exceeds, or deviates outside a threshold.")
                         put("parameters", JSONObject().apply {
                             put("type", "OBJECT")
                             put("properties", JSONObject().apply {
                                 put("parameter", stringParam("Telemetry parameter to monitor, e.g. 'rpm', 'speed', 'coolant_temp', 'engine_load', 'fuel_trim', 'battery_voltage'"))
                                 put("condition", stringParam("Comparison operator: '>', '<', '>=', '<=', or 'abs_gt' (CRITICAL: When driver asks for a +/- band like 'past 3% or -3%' or 'outside 5%', ALWAYS set condition to 'abs_gt' and threshold_value to the positive number)"))
-                                put("threshold_value", numberParam("Numeric threshold value (e.g. 2000 for RPM, 220 for coolant temp, 3.0 for fuel trim, 75 for speed)"))
-                                put("custom_message", stringParam("Optional custom alert message or context"))
+                                put("threshold_value", numberParam("Numeric threshold value (e.g. 2000 for RPM, 220 for coolant temp, 3.0 for fuel trim, 75 for speed, 1.0 for moving)"))
+                                put("custom_message", stringParam("Optional custom alert message or context, e.g. 'Vehicle moving'"))
+                                put("one_shot", booleanParam("Set to true if this is a one-time check or notification (e.g. 'let me know when I start moving', 'tell me when coolant reaches 200'). True by default for speed/moving checks."))
                             })
                             put("required", JSONArray().apply { put("parameter"); put("condition"); put("threshold_value") })
                         })
@@ -637,6 +648,8 @@ class GeminiLiveStreamManager(private val context: Context) {
             val accumStream = ByteArrayOutputStream()
             var speechEnergyHoldUntil = 0L
 
+            var consecutiveReadErrors = 0
+
             while (_isLiveSessionActive.value) {
                 val record = audioRecord
                 if (record == null || record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -646,6 +659,7 @@ class GeminiLiveStreamManager(private val context: Context) {
 
                 val readBytes = record.read(readBuffer, 0, readBuffer.size)
                 if (readBytes > 0) {
+                    consecutiveReadErrors = 0
                     // Never stream audio before the server has acknowledged our setup frame
                     if (!setupCompleted) {
                         accumStream.reset()
@@ -704,10 +718,74 @@ class GeminiLiveStreamManager(private val context: Context) {
                         ws.send(audioChunkObj.toString())
                     }
                 } else if (readBytes < 0) {
-                    delay(30)
+                    consecutiveReadErrors++
+                    Log.w(TAG, "AudioRecord read error: $readBytes (consecutive: $consecutiveReadErrors)")
+                    if (readBytes == AudioRecord.ERROR_INVALID_OPERATION ||
+                        readBytes == AudioRecord.ERROR_DEAD_OBJECT ||
+                        consecutiveReadErrors >= 10
+                    ) {
+                        Log.w(TAG, "AudioRecord hardware died or invalid. Recreating AudioRecord...")
+                        delay(200)
+                        reinitAudioRecord()
+                        consecutiveReadErrors = 0
+                    } else {
+                        delay(30)
+                    }
                 }
             }
             _isUserSpeaking.value = false
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun reinitAudioRecord() {
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+        } catch (_: Exception) {}
+        audioRecord = null
+        val minBufSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE_IN,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        val recordBufSize = maxOf(minBufSize * 4, 16000)
+        try {
+            val candidate = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE_IN,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                recordBufSize
+            )
+            if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+                audioRecord = candidate
+                audioRecord?.startRecording()
+                Log.i(TAG, "AudioRecord successfully re-initialized with VOICE_RECOGNITION.")
+                return
+            } else {
+                candidate.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed reinit with VOICE_RECOGNITION, falling back to MIC", e)
+        }
+        try {
+            val candidate = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE_IN,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                recordBufSize
+            )
+            if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+                audioRecord = candidate
+                audioRecord?.startRecording()
+                Log.i(TAG, "AudioRecord successfully re-initialized with MIC.")
+            } else {
+                candidate.release()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed reinit with MIC", e)
         }
     }
 
@@ -795,6 +873,11 @@ class GeminiLiveStreamManager(private val context: Context) {
                 }
                 delay(250) // Acoustic settling delay
             }
+            try {
+                track?.pause()
+            } catch (_: Exception) {}
+            isPlayingActive = false
+            totalFramesWritten = 0L
             _isGeminiSpeaking.value = false
         }
     }

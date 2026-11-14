@@ -167,16 +167,21 @@ class GeminiAgentViewModel : ViewModel() {
         // STRICT VOICE RULE: Only vocalize if live voice mode is active
         if (isVoiceModeActive) {
             val isAdvisory = alert.severity == SentinelSeverity.ADVISORY || alert.severity == SentinelSeverity.INFO
-            // For periodic scheduled reports and advisories, ensure they never get lost or delayed:
-            // If live WebSocket is connected AND idle, inject into Gemini Live.
-            // If Gemini Live is currently speaking, busy in a turn, or reconnecting, fallback to immediate local TTS
-            // so the driver gets their scheduled report on-time, every time!
             val liveSpeaking = liveStreamManager?.isGeminiSpeaking?.value == true
-            val liveInjected = if (_isHandsFreeVoiceActive.value && _isLiveSessionActive.value && !liveSpeaking) {
+            val isLiveActive = _isHandsFreeVoiceActive.value && _isLiveSessionActive.value
+
+            val liveInjected = if (isLiveActive && !liveSpeaking) {
                 liveStreamManager?.injectDriverAlert(alert.spokenText, isAdvisory) ?: false
             } else false
 
-            if (!liveInjected) {
+            // CRITICAL: NEVER speak advisory or threshold alerts using robotic local TTS while hands-free voice is active!
+            // When Gemini Live is active, the conversational AI is the sole voice for advisories.
+            // Fallback robotic TTS is strictly reserved for when hands-free mode is off or for CRITICAL safety emergencies.
+            val shouldSpeakLocalTts = !liveInjected && (
+                !isLiveActive || alert.severity == SentinelSeverity.CRITICAL
+            )
+
+            if (shouldSpeakLocalTts) {
                 speak(alert.spokenText) {
                     // Alert finished speaking: If hands-free voice mode is active, open 15-second follow-up window!
                     if (_isHandsFreeVoiceActive.value) {
@@ -1566,6 +1571,9 @@ class GeminiAgentViewModel : ViewModel() {
                - INITIALIZING STREAM & NO HALLUCINATION DIRECTIVE:
                  * When OBD2 is connected but the live stream is INITIALIZING (first frames still arriving from ECU):
                  * If asked for live speed, gear, RPM, or temperatures right at connection time, state clearly: "I just connected to your OBD adapter and am establishing the live data stream with your vehicle; give me just a few moments to get the first readings." Never guess, fabricate, or hallucinate sensor values!
+               - SCANNING CUSTOM & ENHANCED PIDs:
+                 * When the driver asks you to scan for PIDs, check custom or enhanced PIDs, or run a Mode 22 scan (e.g. "can you scan for the PIDs?", "scan mode 22", "scan custom PIDs"):
+                 * You MUST invoke the `scan_custom_pids` tool! Do NOT assume or state the vehicle does not broadcast custom PIDs until you have actively executed `scan_custom_pids` to query the vehicle's modules!
                - BLACK-BOX FLIGHT RECORDER & MOMENT SNAPSHOTS:
                  * When the driver asks you to save data, record this moment, snapshot an incident, or log a spike (e.g. "Vera, save that data", "record the last 5 minutes", "log that knock", "save a snapshot of that spike"):
                  * You MUST invoke the `save_flight_recorder_snapshot` tool with a brief description or reason.
@@ -1585,6 +1593,7 @@ class GeminiAgentViewModel : ViewModel() {
                - When the driver asks you to watch or alert them if a sensor crosses a threshold (e.g. "let me know if my RPMs go over 2000", "warn me if coolant temp crosses 220", "alert me if speed goes over 80", "let me know if fuel trims go past 3% or -3%"):
                  * You MUST invoke the `set_telemetry_threshold_alert` tool with the parameter, comparison condition ('>', '<', '>=', '<=', or 'abs_gt'), and threshold_value.
                  * CRITICAL FOR +/- BANDS (like "past 3% or -3%", "outside +/- 5%"): Set condition to 'abs_gt' and threshold_value to the positive limit (e.g. 3.0), which alerts on both positive lean spikes and negative rich spikes!
+                 * ONE-SHOT MOVEMENT CHECKS: When the driver asks "let me know when you see me moving", "tell me when I start rolling", or asks for a one-time alert when a condition occurs, set `one_shot: true` on `set_telemetry_threshold_alert`. Once you announce that the vehicle is moving or the threshold is crossed, that alert is completed and will not re-arm at stop signs.
                  * Confirm briefly in one natural sentence that you are monitoring that threshold.
                - When the driver asks to cancel or stop active timers, watchers, updates, or alerts (e.g. "cancel the update", "stop reporting", "cancel alerts", "stop watching"):
                  * You MUST invoke the `cancel_telemetry_alerts` tool.
@@ -1607,7 +1616,10 @@ class GeminiAgentViewModel : ViewModel() {
                  * High combustion chamber pressure stresses spark plugs and ignition coils—watch for cylinder misfires.
                - When ACTIVELY DRIVING on a downhill descent (speed > 4 mph):
                  * Engine braking engages and deceleration fuel cut-off (DFCO) activates.
-               - If the driver asks where they are, what street they are on, what their elevation is, or whether they are on an incline, answer accurately using your live road context or the `get_road_topography` tool, explicitly stating whether the car is parked or in motion.
+               - REAL-TIME LOCATION & STREET NAME QUERY RULE:
+                 * Whenever the driver asks where they are, what street or road they are currently on, what road they are on now, what their elevation is, or whether they are on an incline:
+                 * You MUST ALWAYS invoke the `get_road_topography` tool to obtain the fresh, verified real-time GPS road name and geography directly from the device's navigation sensors, rather than relying on prior or stale context!
+                 * Answer accurately stating the exact road name, city/area, and whether the vehicle is driving or stationary.
             6. SAFETY FIRST:
                - The driver is operating a vehicle. Never give instructions that require them to look away from the road or manipulate parts while driving.
         """.trimIndent()
@@ -2045,6 +2057,20 @@ class GeminiAgentViewModel : ViewModel() {
                             put("error", "OBD2 adapter is not connected. Custom Mode 22 & OBDb signals unavailable.")
                         }
                     }
+                    // Auto-scan if custom PIDs list has not been scanned yet
+                    if (obdManager.mode22Streams.value.isEmpty() && obdManager.obdbSignalResults.value.isEmpty()) {
+                        try {
+                            _isScanningMode22.value = true
+                            runBlocking(Dispatchers.IO) {
+                                obdManager.scanMode22Pids()
+                                obdManager.readObdbSignals()
+                            }
+                        } catch (e: Exception) {
+                            Log.w("GeminiAgentViewModel", "Auto-scan custom PIDs error: ${e.message}")
+                        } finally {
+                            _isScanningMode22.value = false
+                        }
+                    }
                     val currentUnit = unitSystem.value
                     val isMetric = currentUnit == UnitSystem.METRIC
                     val allCustomPids = buildUnifiedCustomPidList(
@@ -2059,6 +2085,52 @@ class GeminiAgentViewModel : ViewModel() {
                         put("connected", true)
                         put("driver_unit_system", if (isMetric) "METRIC (State temps in °C, pressures in kPa, distances in km)" else "SAE (State temps in °F, pressures in psi, distances in miles)")
                         put("total_custom_pids_count", allCustomPids.size)
+                        val arr = JSONArray()
+                        for (item in allCustomPids) {
+                            arr.put(JSONObject().apply {
+                                put("name", item.name)
+                                put("category", item.category.displayName)
+                                put("value", "${item.formattedValue} ${item.unit}".trim())
+                                put("is_switch", item.isBooleanStatus)
+                            })
+                        }
+                        put("custom_pids", arr)
+                    }
+                }
+                "scan_custom_pids" -> {
+                    if (!isConn) {
+                        return JSONObject().apply {
+                            put("connected", false)
+                            put("status", "DISCONNECTED")
+                            put("error", "OBD2 adapter is not connected. Custom Mode 22 & OBDb signals cannot be scanned.")
+                        }
+                    }
+                    try {
+                        _isScanningMode22.value = true
+                        runBlocking(Dispatchers.IO) {
+                            obdManager.scanMode22Pids()
+                            obdManager.readObdbSignals()
+                        }
+                    } catch (e: Exception) {
+                        Log.w("GeminiAgentViewModel", "Error scanning custom PIDs: ${e.message}")
+                    } finally {
+                        _isScanningMode22.value = false
+                    }
+                    val currentUnit = unitSystem.value
+                    val isMetric = currentUnit == UnitSystem.METRIC
+                    val allCustomPids = buildUnifiedCustomPidList(
+                        mode22Streams = obdManager.mode22Streams.value,
+                        obdbLoadedResult = obdManager.obdbLoadedResult.value,
+                        obdbSignalResults = obdManager.obdbSignalResults.value,
+                        unitSystem = currentUnit,
+                        vehicleDetails = obdManager.vehicleDetails.value,
+                        isMoving = obdManager.metrics.value.speed > 2
+                    )
+                    JSONObject().apply {
+                        put("status", "SUCCESS")
+                        put("connected", true)
+                        put("total_custom_pids_discovered", allCustomPids.size)
+                        put("driver_unit_system", if (isMetric) "METRIC (State temps in °C, pressures in kPa)" else "SAE (State temps in °F, pressures in psi)")
                         val arr = JSONArray()
                         for (item in allCustomPids) {
                             arr.put(JSONObject().apply {
@@ -2090,12 +2162,14 @@ class GeminiAgentViewModel : ViewModel() {
                     val condition = args.optString("condition", ">")
                     val threshold = args.optDouble("threshold_value", 2000.0)
                     val customMsg = if (args.has("custom_message")) args.getString("custom_message") else null
+                    val oneShot = if (args.has("one_shot")) args.getBoolean("one_shot") else null
                     sentinelManager.setThresholdAlert(
                         parameter = param,
                         condition = condition,
                         threshold = threshold,
                         customMessage = customMsg,
-                        currentUnit = unitSystem.value
+                        currentUnit = unitSystem.value,
+                        isOneShot = oneShot
                     )
                 }
                 "cancel_telemetry_alerts" -> {
@@ -2104,20 +2178,7 @@ class GeminiAgentViewModel : ViewModel() {
                 }
                 "get_road_topography" -> {
                     if (locationManager?.inDemoMode != true) {
-                        val current = locationManager?.roadContext?.value
-                        if (current == null || current.isDemoSimulated || current.streetName == "Locating road..." || current.streetName == "Locating...") {
-                            try {
-                                runBlocking {
-                                    withTimeoutOrNull(2500L) {
-                                        locationManager?.awaitFreshLocation()
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.w("GeminiAgentViewModel", "Location await timed out or failed: ${e.message}")
-                            }
-                        } else {
-                            locationManager?.forceRefreshLocation()
-                        }
+                        locationManager?.forceRefreshLocation()
                     }
                     val road = locationManager?.roadContext?.value ?: RoadContext()
                     val obdSpeedMph = (obdManager.metrics.value.speed * 0.621371).toInt()
@@ -3381,6 +3442,37 @@ class GeminiAgentViewModel : ViewModel() {
                     lastPushedStreaming = false
                     lastPushedVin = null
                     lastCanPushMs = 0L
+                }
+            }
+        }
+
+        // 2b. Continuous Live Road & Telemetry Context Updates for Gemini Live
+        // Actively detects road/street transitions (e.g. driving onto a new street or highway)
+        // and periodically refreshes speed & elevation so Vera always knows the driver's exact road!
+        viewModelScope.launch {
+            var lastInjectedStreet = ""
+            var lastInjectedRoadMs = 0L
+
+            while (isActive) {
+                delay(2000L) // Poll every 2s
+                if (liveStreamManager?.isLiveSessionActive?.value == true) {
+                    val road = locationManager?.roadContext?.value
+                    val currentStreet = road?.streetName.orEmpty()
+                    val now = System.currentTimeMillis()
+
+                    val streetChanged = currentStreet.isNotBlank() &&
+                            currentStreet != "Locating road..." &&
+                            currentStreet != "Locating..." &&
+                            currentStreet != lastInjectedStreet
+
+                    val periodicDue = (now - lastInjectedRoadMs >= 15_000L)
+
+                    if (streetChanged || periodicDue) {
+                        lastInjectedStreet = currentStreet
+                        lastInjectedRoadMs = now
+                        val snapshot = buildTelemetrySnapshotForLive(isPeriodicRefresh = !streetChanged)
+                        liveStreamManager?.injectTelemetryContextUpdate(snapshot)
+                    }
                 }
             }
         }
